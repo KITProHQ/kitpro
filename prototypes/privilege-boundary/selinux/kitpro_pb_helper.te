@@ -1,0 +1,47 @@
+policy_module(kitpro_pb_helper, 0.1.0)
+
+type kitpro_pb_helper_t;
+type kitpro_pb_helper_exec_t;
+init_daemon_domain(kitpro_pb_helper_t, kitpro_pb_helper_exec_t)
+allow init_t kitpro_pb_helper_t:process transition;
+allow init_t kitpro_pb_helper_exec_t:file { execute getattr map open read };
+type_transition init_t kitpro_pb_helper_exec_t:process kitpro_pb_helper_t;
+
+type kitpro_pb_state_t;
+files_type(kitpro_pb_state_t)
+
+type kitpro_pb_runtime_t;
+files_type(kitpro_pb_runtime_t)
+
+type kitpro_pb_storage_t;
+files_type(kitpro_pb_storage_t)
+
+manage_dirs_pattern(kitpro_pb_helper_t, kitpro_pb_state_t, kitpro_pb_state_t)
+manage_files_pattern(kitpro_pb_helper_t, kitpro_pb_state_t, kitpro_pb_state_t)
+manage_lnk_files_pattern(kitpro_pb_helper_t, kitpro_pb_state_t, kitpro_pb_state_t)
+
+manage_dirs_pattern(kitpro_pb_helper_t, kitpro_pb_storage_t, kitpro_pb_storage_t)
+manage_files_pattern(kitpro_pb_helper_t, kitpro_pb_storage_t, kitpro_pb_storage_t)
+
+allow kitpro_pb_helper_t kitpro_pb_runtime_t:dir { getattr search };
+allow kitpro_pb_helper_t kitpro_pb_runtime_t:sock_file { getattr read write };
+allow kitpro_pb_helper_t self:unix_stream_socket { accept bind connect create getattr getopt listen read setopt shutdown write };
+
+# The test socket unit creates and removes the socket below this labeled
+# runtime directory. Keep this permission limited to the disposable type.
+allow init_t kitpro_pb_runtime_t:dir { add_name create getattr open read remove_name search setattr write };
+allow init_t kitpro_pb_runtime_t:sock_file { create getattr setattr unlink write };
+
+docker_stream_connect(kitpro_pb_helper_t)
+
+kernel_read_system_state(kitpro_pb_helper_t)
+dev_read_urand(kitpro_pb_helper_t)
+files_read_etc_files(kitpro_pb_helper_t)
+auth_use_nsswitch(kitpro_pb_helper_t)
+files_search_var_lib(kitpro_pb_helper_t)
+files_read_usr_files(kitpro_pb_helper_t)
+libs_use_ld_so(kitpro_pb_helper_t)
+libs_read_lib_files(kitpro_pb_helper_t)
+miscfiles_read_localization(kitpro_pb_helper_t)
+
+allow kitpro_pb_helper_t kitpro_pb_helper_exec_t:file { execute execute_no_trans map open read getattr };

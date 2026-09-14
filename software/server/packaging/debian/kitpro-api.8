@@ -1,0 +1,21 @@
+.TH KITPRO-API 8 "September 2026" "KITPro Server" "System Administration"
+.SH NAME
+kitpro-api \- authenticated local KITPro Server control plane
+.SH SYNOPSIS
+.B kitpro-api
+.br
+.B kitpro-api --version
+.SH DESCRIPTION
+.B kitpro-api
+serves the loopback-only KITPro dashboard and communicates with the privileged
+helper over its Unix socket. It is normally started by systemd as the
+unprivileged kitpro-api account.
+.SH FILES
+.TP
+.I /etc/default/kitpro-server
+Package configuration.
+.TP
+.I /var/lib/kitpro-api/control.db
+Control-plane SQLite database.
+.SH SEE ALSO
+.BR kitpro-helper (8)

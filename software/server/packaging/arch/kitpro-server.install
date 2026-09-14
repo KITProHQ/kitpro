@@ -1,0 +1,100 @@
+#!/bin/bash
+
+check_prerequisites() {
+    if ! systemctl is-active --quiet docker.service; then
+        printf 'kitpro-server: a compatible, active Docker Engine is required\n' >&2
+        return 1
+    fi
+    if [[ ! -S /run/docker.sock && ! -S /var/run/docker.sock ]]; then
+        printf 'kitpro-server: Docker Engine socket is unavailable\n' >&2
+        return 1
+    fi
+    if ! aa-enabled >/dev/null 2>&1; then
+        printf 'kitpro-server: AppArmor must be enabled in the kernel before installation\n' >&2
+        return 1
+    fi
+}
+
+prepare_upgrade_state() {
+    local target_version=$1
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+    if [[ -r /etc/conf.d/kitpro-server ]]; then
+        # shellcheck disable=SC1091
+        source /etc/conf.d/kitpro-server
+    fi
+    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
+    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
+    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}"
+    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}"
+    if [[ -f "$KITPRO_CONTROL_DB" ]]; then
+        runuser -u kitpro-api -- /usr/bin/kitpro-api --prepare-upgrade "$target_version"
+    fi
+    if [[ -f "$KITPRO_HELPER_DB" ]]; then
+        /usr/libexec/kitpro-helper --prepare-upgrade "$target_version"
+    fi
+}
+
+configure_package() {
+    if [[ ! -e /etc/conf.d/kitpro-server ]]; then
+        if [[ -f /etc/conf.d/kitpro-server.pacsave ]]; then
+            install -Dm0644 /etc/conf.d/kitpro-server.pacsave /etc/conf.d/kitpro-server
+            rm -f /etc/conf.d/kitpro-server.pacsave
+        else
+            install -Dm0644 /usr/share/kitpro-server/kitpro-server.conf /etc/conf.d/kitpro-server
+        fi
+    fi
+    systemd-sysusers /usr/lib/sysusers.d/kitpro-server.conf
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
+    apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-helper
+    apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-helper
+    if ! aa-status --enabled; then
+        printf 'kitpro-server: AppArmor is not enabled\n' >&2
+        return 1
+    fi
+    if [[ -r /etc/conf.d/kitpro-server ]]; then
+        # shellcheck disable=SC1091
+        source /etc/conf.d/kitpro-server
+    fi
+    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
+    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
+    runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
+    /usr/libexec/kitpro-helper --migrate-only
+    systemctl daemon-reload
+    systemctl enable --now kitpro-helper.socket kitpro-api.service
+}
+
+pre_install() {
+    check_prerequisites
+}
+
+post_install() {
+    configure_package
+}
+
+pre_upgrade() {
+    local new_version=$1 old_version=$2
+    check_prerequisites
+    if (( $(vercmp "$old_version" "$new_version") > 0 )); then
+        printf 'kitpro-server: downgrade from %s to %s is unsupported\n' "$old_version" "$new_version" >&2
+        return 1
+    fi
+    prepare_upgrade_state "$new_version"
+}
+
+post_upgrade() {
+    configure_package
+}
+
+pre_remove() {
+    systemctl disable --now kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+    apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-helper 2>/dev/null || true
+}
+
+post_remove() {
+    systemctl daemon-reload
+    systemd-tmpfiles --remove /usr/lib/tmpfiles.d/kitpro.conf 2>/dev/null || true
+    rmdir /run/kitpro 2>/dev/null || true
+    # Persistent application data, control/helper databases, backups, logs,
+    # and the service identity are deliberately retained. Arch has no separate
+    # purge transaction; data deletion remains a future explicit operation.
+}

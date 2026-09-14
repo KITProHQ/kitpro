@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+case ${1:-} in
+    remove|deconfigure)
+        deb-systemd-invoke stop kitpro-api.service kitpro-helper.service kitpro-helper.socket >/dev/null 2>&1 || true
+        deb-systemd-helper disable kitpro-api.service kitpro-helper.socket >/dev/null 2>&1 || true
+        apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-helper 2>/dev/null || true
+        ;;
+    upgrade)
+        deb-systemd-invoke stop kitpro-api.service kitpro-helper.service kitpro-helper.socket >/dev/null 2>&1 || true
+        ;;
+esac
+
+exit 0

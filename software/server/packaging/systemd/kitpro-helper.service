@@ -1,0 +1,36 @@
+[Unit]
+Description=KITPro Server privileged helper
+Documentation=man:kitpro-helper(8)
+Requires=kitpro-helper.socket
+After=docker.service
+
+[Service]
+Type=simple
+AppArmorProfile=/usr/libexec/kitpro-helper
+ExecStart=/usr/libexec/kitpro-helper
+User=root
+Group=root
+EnvironmentFile=-/etc/default/kitpro-server
+EnvironmentFile=-/etc/conf.d/kitpro-server
+Environment=KITPRO_API_USER=kitpro-api
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+ReadWritePaths=/run/kitpro /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

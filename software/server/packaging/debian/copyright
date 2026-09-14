@@ -1,0 +1,9 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: KITPro Server
+Source: https://github.com/keepittechie/kitpro
+
+Files: *
+Copyright: 2026 KITPro Project
+License: Proprietary
+ This source repository does not currently grant redistribution rights under
+ an open-source license. This package is an unpublished validation artifact.

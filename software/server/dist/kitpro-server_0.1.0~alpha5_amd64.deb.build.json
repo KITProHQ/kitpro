@@ -1,0 +1,12 @@
+{
+  "package": "kitpro-server",
+  "version": "0.1.0~alpha5",
+  "architecture": "amd64",
+  "source_commit": "400097fd643787d4f5f9f7330acd5ca87ffa42d6",
+  "source_tree_dirty": true,
+  "source_date_epoch": 1789400442,
+  "build_date": "2026-09-14T15:40:42Z",
+  "go_version": "go1.27.0-X:nodwarf5",
+  "cgo_enabled": false,
+  "build_flags": ["-trimpath", "-buildvcs=false", "-ldflags=-s -w"]
+}

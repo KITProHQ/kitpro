@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "uptime-kuma",
+  "name": "Uptime Kuma",
+  "description": "Monitor websites and network services from a self-hosted dashboard.",
+  "releases": [{
+    "version": "2.3.1",
+    "registry": "docker.io",
+    "repository": "louislam/uptime-kuma",
+    "digest": "sha256:92fd01c488771d1bcb0b299770255c06994ab7e4f079b7c7fcf52b8e08789a67",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/app/data", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 3001}],
+  "restart": "unless-stopped"
+}

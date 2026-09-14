@@ -1,0 +1,34 @@
+[Unit]
+Description=KITPro Server API
+Documentation=man:kitpro-api(8)
+After=kitpro-helper.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kitpro-api
+User=kitpro-api
+Group=kitpro-api
+EnvironmentFile=-/etc/default/kitpro-server
+EnvironmentFile=-/etc/conf.d/kitpro-server
+Environment=KITPRO_HELPER_SOCKET=/run/kitpro/helper.sock
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/kitpro-api
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

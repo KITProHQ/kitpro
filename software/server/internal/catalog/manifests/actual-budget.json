@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "actual-budget",
+  "name": "Actual Budget",
+  "description": "Private, local-first budgeting and financial planning.",
+  "releases": [{
+    "version": "26.9.0",
+    "registry": "docker.io",
+    "repository": "actualbudget/actual-server",
+    "digest": "sha256:06080cca505895fffd5736089920001e979bf9595f757d1d5b9ebfc99722c410",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/data", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 5006}],
+  "restart": "unless-stopped"
+}

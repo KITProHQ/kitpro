@@ -1,0 +1,44 @@
+pkgname=kitpro-server
+pkgver=0.1.0_alpha4
+pkgrel=1
+pkgdesc='Local application manager for KITPro Server'
+arch=('x86_64')
+url='https://github.com/keepittechie/kitpro'
+license=('LicenseRef-Proprietary')
+depends=('apparmor' 'docker' 'systemd')
+makedepends=('go')
+install=kitpro-server.install
+backup=('etc/apparmor.d/usr.libexec.kitpro-helper')
+options=('!debug' '!strip')
+source=("${pkgname}-${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    local source_root="$srcdir/${pkgname}-${pkgver}/software/server"
+    local build_date
+    build_date=$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)
+    local public_version=${pkgver/_/~}
+    local ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=${public_version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=${KITPRO_SOURCE_COMMIT} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=${build_date}"
+    cd "$source_root"
+    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+    go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-api ./cmd/kitpro-api
+    go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-helper ./cmd/kitpro-helper
+}
+
+package() {
+    local source_root="$srcdir/${pkgname}-${pkgver}/software/server"
+    install -Dm0755 "$source_root/kitpro-api" "$pkgdir/usr/bin/kitpro-api"
+    install -Dm0755 "$source_root/kitpro-helper" "$pkgdir/usr/libexec/kitpro-helper"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-api.service" "$pkgdir/usr/lib/systemd/system/kitpro-api.service"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.service" "$pkgdir/usr/lib/systemd/system/kitpro-helper.service"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.socket" "$pkgdir/usr/lib/systemd/system/kitpro-helper.socket"
+    install -Dm0644 "$source_root/packaging/tmpfiles/kitpro.conf" "$pkgdir/usr/lib/tmpfiles.d/kitpro.conf"
+    install -Dm0644 "$source_root/packaging/apparmor/kitpro-helper" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-helper"
+    install -Dm0644 "$source_root/packaging/arch/kitpro-server.conf" "$pkgdir/usr/share/kitpro-server/kitpro-server.conf"
+    install -Dm0644 "$source_root/packaging/arch/kitpro-server.sysusers" "$pkgdir/usr/lib/sysusers.d/kitpro-server.conf"
+    install -Dm0644 "$source_root/README.md" "$pkgdir/usr/share/doc/kitpro-server/README.md"
+    install -Dm0644 "$srcdir/${pkgname}-${pkgver}/docs/install-arch-package.md" "$pkgdir/usr/share/doc/kitpro-server/install-arch-package.md"
+    install -Dm0644 "$source_root/packaging/debian/kitpro-api.8" "$pkgdir/usr/share/man/man8/kitpro-api.8"
+    install -Dm0644 "$source_root/packaging/debian/kitpro-helper.8" "$pkgdir/usr/share/man/man8/kitpro-helper.8"
+    install -Dm0644 "$source_root/packaging/debian/copyright" "$pkgdir/usr/share/licenses/kitpro-server/COPYING"
+}

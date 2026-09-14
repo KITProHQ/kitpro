@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "mealie",
+  "name": "Mealie",
+  "description": "Organize recipes, meal plans, and shopping lists in a self-hosted kitchen hub.",
+  "releases": [{
+    "version": "3.24.0",
+    "registry": "ghcr.io",
+    "repository": "mealie-recipes/mealie",
+    "digest": "sha256:3d2384661634e954c12ec27bb5b25a0263832f9e39044f145d726d388e9f8268",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/app/data", "persistent": true, "read_only": false}],
+  "environment": [
+    {"name": "ALLOW_SIGNUP", "value": "false"},
+    {"name": "TZ", "value": "UTC"}
+  ],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 9000}],
+  "restart": "unless-stopped"
+}

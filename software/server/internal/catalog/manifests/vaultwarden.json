@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "vaultwarden",
+  "name": "Vaultwarden",
+  "description": "A lightweight self-hosted Bitwarden-compatible password server.",
+  "releases": [{
+    "version": "1.37.2",
+    "registry": "docker.io",
+    "repository": "vaultwarden/server",
+    "digest": "sha256:5d326778c22f063d093d6b0c9c766a28249561632266776f2c93132ab0ad3a80",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/data", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80}],
+  "restart": "unless-stopped"
+}

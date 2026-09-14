@@ -1,0 +1,20 @@
+.TH KITPRO-HELPER 8 "September 2026" "KITPro Server" "System Administration"
+.SH NAME
+kitpro-helper \- confined privileged helper for KITPro Server
+.SH SYNOPSIS
+.B kitpro-helper --version
+.SH DESCRIPTION
+.B kitpro-helper
+accepts only typed KITPro operations from the authenticated API service UID over
+a Unix socket. It talks to Docker Engine directly and does not invoke a shell,
+Docker CLI, or Compose. It is normally socket-activated by systemd and confined
+by AppArmor.
+.SH FILES
+.TP
+.I /var/lib/kitpro-helper/helper.db
+Trusted ownership and receipt database.
+.TP
+.I /run/kitpro/helper.sock
+Root-owned helper socket accessible to the kitpro-api group.
+.SH SEE ALSO
+.BR kitpro-api (8)

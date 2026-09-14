@@ -1,0 +1,4 @@
+CREATE TABLE operations (id TEXT PRIMARY KEY, type TEXT NOT NULL, requested_at TEXT NOT NULL, status TEXT NOT NULL, instance_id TEXT NOT NULL, summary TEXT NOT NULL);
+CREATE TABLE installations (installation_id TEXT PRIMARY KEY, application_id TEXT NOT NULL, release_id TEXT NOT NULL, desired_state TEXT NOT NULL, runtime_generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE installation_service_exposure (installation_id TEXT NOT NULL, service_id TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')), host_address TEXT NOT NULL DEFAULT '', host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port = 0 OR host_port BETWEEN 20000 AND 29999), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(installation_id,service_id));
+CREATE UNIQUE INDEX installation_service_exposure_binding_unique ON installation_service_exposure(host_address,host_port) WHERE mode <> 'internal';

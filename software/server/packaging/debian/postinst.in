@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+if ! getent group kitpro-api >/dev/null; then
+    addgroup --system kitpro-api >/dev/null
+fi
+if ! getent passwd kitpro-api >/dev/null; then
+    adduser --system --ingroup kitpro-api --home /var/lib/kitpro-api \
+        --no-create-home --shell /usr/sbin/nologin kitpro-api >/dev/null
+fi
+
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
+
+profile=/etc/apparmor.d/usr.libexec.kitpro-helper
+profile_source=/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper
+if [ ! -f "$profile" ]; then
+    # dpkg remembers a conffile deleted during package removal. Restore the
+    # package policy from its immutable copy before the fail-closed load.
+    install -m 0644 -o root -g root "$profile_source" "$profile"
+fi
+apparmor_parser -Q -T "$profile"
+apparmor_parser -r -W -T "$profile"
+if ! aa-status --enabled; then
+    echo "kitpro-server: AppArmor is not enabled" >&2
+    exit 1
+fi
+
+if [ -r /etc/default/kitpro-server ]; then
+    # shellcheck disable=SC1091
+    . /etc/default/kitpro-server
+fi
+export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
+export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
+
+runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
+/usr/libexec/kitpro-helper --migrate-only
+
+deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service >/dev/null || true
+deb-systemd-helper enable kitpro-helper.socket kitpro-api.service >/dev/null
+deb-systemd-invoke restart kitpro-helper.socket
+deb-systemd-invoke restart kitpro-api.service
+
+exit 0

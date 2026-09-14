@@ -1,0 +1,5 @@
+kitpro-server (@VERSION@) unstable; urgency=medium
+
+  * Build the first Debian 13 amd64 alpha package.
+
+ -- KITPro Project <joshlacy@gmail.com>  @DATE@

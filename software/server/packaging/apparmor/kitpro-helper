@@ -1,0 +1,20 @@
+# KITPro Server production helper profile.
+#include <tunables/global>
+/usr/libexec/kitpro-helper flags=(attach_disconnected) {
+  #include <abstractions/base>
+  /usr/libexec/kitpro-helper rix,
+  /etc/passwd r,
+  /run/kitpro/** rw,
+  /var/lib/kitpro-helper/** rwk,
+  /srv/kitpro/** rwk,
+  /var/run/docker.sock rw,
+  /run/docker.sock rw,
+  /proc/** r,
+  /sys/** r,
+  deny /bin/** x,
+  deny /usr/bin/** x,
+  deny /home/** r,
+  deny /root/** r,
+  deny network inet,
+  deny network inet6,
+}

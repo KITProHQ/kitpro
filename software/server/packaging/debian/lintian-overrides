@@ -1,0 +1,12 @@
+# KITPro intentionally ships static CGO-disabled Go binaries so the privileged
+# helper has no runtime libc dependency on the Debian 13 amd64 baseline.
+kitpro-server: statically-linked-binary [usr/bin/kitpro-api]
+kitpro-server: statically-linked-binary [usr/libexec/kitpro-helper]
+
+# Upgrade invokes currently installed binaries by fixed package paths before
+# unpack so each trust domain creates its own production SQLite backup.
+kitpro-server: command-with-path-in-maintainer-script /usr/bin/kitpro-api (in test syntax) [preinst:*]
+
+# Docker is an external prerequisite. preinst uses systemd only to verify that
+# the already-installed daemon is active; it does not manage Docker.
+kitpro-server: maintainer-script-calls-systemctl [preinst:*]

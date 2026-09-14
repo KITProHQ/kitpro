@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+package_version='@VERSION@'
+action=${1:-}
+old_version=${2:-}
+
+if [ "$action" = upgrade ] && [ -n "$old_version" ] && dpkg --compare-versions "$old_version" gt "$package_version"; then
+    echo "kitpro-server: downgrade from $old_version to $package_version is unsupported" >&2
+    exit 1
+fi
+
+if ! systemctl is-active --quiet docker.service; then
+    echo "kitpro-server: a compatible, active Docker Engine is required" >&2
+    exit 1
+fi
+if [ ! -S /run/docker.sock ] && [ ! -S /var/run/docker.sock ]; then
+    echo "kitpro-server: Docker Engine socket is unavailable" >&2
+    exit 1
+fi
+
+if [ "$action" = upgrade ] && [ -x /usr/bin/kitpro-api ] && [ -x /usr/libexec/kitpro-helper ]; then
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+    rollback_services=true
+    trap 'if [ "$rollback_services" = true ]; then systemctl start kitpro-helper.socket kitpro-api.service 2>/dev/null || true; fi' EXIT HUP INT TERM
+
+    if [ -r /etc/default/kitpro-server ]; then
+        # The file is root-owned package configuration and contains assignments only.
+        # shellcheck disable=SC1091
+        . /etc/default/kitpro-server
+    fi
+    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
+    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
+    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}"
+    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}"
+
+    if [ -f "$KITPRO_CONTROL_DB" ]; then
+        runuser -u kitpro-api -- /usr/bin/kitpro-api --prepare-upgrade "$package_version"
+    fi
+    if [ -f "$KITPRO_HELPER_DB" ]; then
+        /usr/libexec/kitpro-helper --prepare-upgrade "$package_version"
+    fi
+    rollback_services=false
+    trap - EXIT HUP INT TERM
+fi
+
+exit 0

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "home-assistant",
+  "name": "Home Assistant",
+  "description": "A local home automation dashboard and device control hub.",
+  "releases": [{
+    "version": "stable",
+    "registry": "ghcr.io",
+    "repository": "home-assistant/home-assistant",
+    "digest": "sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "config", "container_path": "/config", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8123}],
+  "restart": "unless-stopped"
+}

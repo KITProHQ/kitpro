@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "freshrss",
+  "name": "FreshRSS",
+  "description": "Follow websites and feeds from a fast, self-hosted RSS reader.",
+  "releases": [{
+    "version": "1.29.1",
+    "registry": "docker.io",
+    "repository": "freshrss/freshrss",
+    "digest": "sha256:118f51ee604853547c085a0235d08a2ed98222e7a7010156cb9e7c86a7f24c21",
+    "platform": "linux/amd64"
+  }, {
+    "version": "1.29.1-r1",
+    "registry": "docker.io",
+    "repository": "freshrss/freshrss",
+    "digest": "sha256:118f51ee604853547c085a0235d08a2ed98222e7a7010156cb9e7c86a7f24c21",
+    "platform": "linux/amd64"
+  }],
+  "storage": [
+    {"id": "data", "container_path": "/var/www/FreshRSS/data", "persistent": true, "read_only": false},
+    {"id": "extensions", "container_path": "/var/www/FreshRSS/extensions", "persistent": true, "read_only": false}
+  ],
+  "environment": [{"name": "TZ", "value": "UTC"}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80}],
+  "restart": "unless-stopped"
+}

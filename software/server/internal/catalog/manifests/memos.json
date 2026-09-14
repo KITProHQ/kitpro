@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "memos",
+  "name": "Memos",
+  "description": "Capture private notes, links, and work logs in a self-hosted timeline.",
+  "releases": [{
+    "version": "0.30.0",
+    "registry": "docker.io",
+    "repository": "neosmemo/memos",
+    "digest": "sha256:51a4cef418b1f173ac37139ad99de08da5b8662136007231d3ac8a0498a3095a",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/var/opt/memos", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 5230}],
+  "restart": "unless-stopped"
+}

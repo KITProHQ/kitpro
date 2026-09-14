@@ -1,0 +1,9 @@
+# KITPro Server package configuration.
+# The dashboard is loopback-only by default. Use an SSH tunnel for first setup.
+KITPRO_API_ADDR=127.0.0.1:8080
+KITPRO_ALLOWED_HOSTS=127.0.0.1:8080,localhost:8080
+KITPRO_SECURE_COOKIES=0
+
+# Set to one non-loopback address assigned to this host before enabling LAN
+# exposure for catalog application services. Wildcard addresses are rejected.
+KITPRO_LAN_BIND_ADDRESS=

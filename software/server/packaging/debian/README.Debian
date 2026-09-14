@@ -1,0 +1,14 @@
+KITPro Server for Debian
+========================
+
+Docker Engine is an external prerequisite. The package does not install Docker
+and never adds the API account to the docker group.
+
+The dashboard listens on 127.0.0.1:8080 by default. For first setup, connect an
+SSH tunnel to the server and open http://127.0.0.1:8080/setup locally.
+
+Normal package removal preserves control state and all application data. Purge
+removes the package configuration file but preserves control/helper state,
+backups, logs, the service account that owns state, and /srv/kitpro. There is no
+package action that implicitly deletes self-hosted application data or trusted
+Docker ownership records.

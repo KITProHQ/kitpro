@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+case ${1:-} in
+    remove|purge)
+        deb-systemd-helper purge kitpro-api.service kitpro-helper.service kitpro-helper.socket >/dev/null 2>&1 || true
+        systemd-tmpfiles --remove /usr/lib/tmpfiles.d/kitpro.conf 2>/dev/null || true
+        # Unload and remove the live conffile on uninstall. A future reinstall
+        # restores it from the package's immutable /usr/share copy before load.
+        rm -f /etc/apparmor.d/usr.libexec.kitpro-helper
+        rmdir /run/kitpro 2>/dev/null || true
+        ;;
+esac
+
+# Control/helper databases retain the only safe link between installed
+# applications and trusted Docker ownership. Remove and purge therefore keep
+# them, their service identity, backups, logs, and /srv/kitpro. Purge removes
+# package configuration through dpkg's conffile handling, but data deletion is
+# a separate future product operation.
+exit 0

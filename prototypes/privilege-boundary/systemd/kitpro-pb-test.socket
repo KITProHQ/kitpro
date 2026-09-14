@@ -1,0 +1,15 @@
+[Unit]
+Description=Disposable KITPro privilege-boundary test socket
+After=systemd-tmpfiles-setup.service
+ConditionPathIsDirectory=/run/kitpro-pb-test
+
+[Socket]
+ListenStream=/run/kitpro-pb-test/helper.sock
+SocketUser=root
+SocketGroup=kitpro-pb-api-test
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
