@@ -88,7 +88,7 @@ The OS repository host contains no current public ISO or detached signature and 
 | Debian package static tests | PASS |
 | Arch package static tests | PASS |
 | Active documentation external links | PASS: 45 checked |
-| Repository Markdown local links | PASS: 165 files, zero broken targets |
+| Repository Markdown local links | PASS: 170 files, 224 local links, zero broken targets |
 | Release JSON parsing | PASS |
 | `kitpro-site` dependency audit | PASS: zero advisories |
 | `kitpro-site` validation/build | PASS |
