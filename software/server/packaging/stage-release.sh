@@ -11,21 +11,23 @@ deb_version=$(printf '%s\n' "$public_version" | sed -E 's/-alpha\.([0-9]+)$/~alp
 arch_version=$(printf '%s\n' "$public_version" | sed -E 's/-alpha\.([0-9]+)$/_alpha\1/')
 source_commit=$(git -C "$repo_dir" rev-parse HEAD)
 
-deb_name="kitpro-server_${deb_version}_amd64.deb"
+deb_input_name="kitpro-server_${deb_version}_amd64.deb"
+deb_name="kitpro-server_${public_version}_amd64.deb"
 arch_name="kitpro-server-${arch_version}-1-x86_64.pkg.tar.zst"
-sbom_name="kitpro-server_${deb_version}_amd64.cdx.json"
+sbom_input_name="kitpro-server_${deb_version}_amd64.cdx.json"
+sbom_name="kitpro-server_${public_version}_amd64.cdx.json"
 release_prefix="kitpro-server_${public_version}"
 build_name="${release_prefix}.build.json"
 manifest_name="${release_prefix}.release.json"
 checksums_name="${release_prefix}_SHA256SUMS"
 
-for path in "$dist_dir/$deb_name" "$dist_dir/$deb_name.build.json" \
+for path in "$dist_dir/$deb_input_name" "$dist_dir/$deb_input_name.build.json" \
     "$dist_dir/$arch_name" "$dist_dir/$arch_name.build.json" \
-    "$dist_dir/$sbom_name"; do
+    "$dist_dir/$sbom_input_name"; do
     test -f "$path" || { echo "missing release input: $path" >&2; exit 1; }
 done
 
-for metadata in "$dist_dir/$deb_name.build.json" "$dist_dir/$arch_name.build.json"; do
+for metadata in "$dist_dir/$deb_input_name.build.json" "$dist_dir/$arch_name.build.json"; do
     test "$(jq -r .source_commit "$metadata")" = "$source_commit" || {
         echo "build metadata source commit does not match HEAD: $metadata" >&2
         exit 1
@@ -40,21 +42,21 @@ for metadata in "$dist_dir/$deb_name.build.json" "$dist_dir/$arch_name.build.jso
     }
 done
 
-sbom_commit=$(jq -r '.metadata.properties[] | select(.name == "kitpro:source_commit") | .value' "$dist_dir/$sbom_name")
+sbom_commit=$(jq -r '.metadata.properties[] | select(.name == "kitpro:source_commit") | .value' "$dist_dir/$sbom_input_name")
 test "$sbom_commit" = "$source_commit" || { echo "SBOM source commit does not match HEAD" >&2; exit 1; }
-test "$(jq -r .metadata.component.version "$dist_dir/$sbom_name")" = "$public_version" || {
+test "$(jq -r .metadata.component.version "$dist_dir/$sbom_input_name")" = "$public_version" || {
     echo "SBOM public version does not match VERSION" >&2
     exit 1
 }
 
 install -d "$release_dir"
 release_dir=$(CDPATH='' cd -- "$release_dir" && pwd)
-install -m 0644 "$dist_dir/$deb_name" "$release_dir/$deb_name"
+install -m 0644 "$dist_dir/$deb_input_name" "$release_dir/$deb_name"
 install -m 0644 "$dist_dir/$arch_name" "$release_dir/$arch_name"
-install -m 0644 "$dist_dir/$sbom_name" "$release_dir/$sbom_name"
+install -m 0644 "$dist_dir/$sbom_input_name" "$release_dir/$sbom_name"
 
 jq -n --arg version "$public_version" --arg source_commit "$source_commit" \
-    --slurpfile deb "$dist_dir/$deb_name.build.json" \
+    --slurpfile deb "$dist_dir/$deb_input_name.build.json" \
     --slurpfile arch "$dist_dir/$arch_name.build.json" \
     '{kitpro_version:$version,source_commit:$source_commit,packages:{debian:$deb[0],arch:$arch[0]}}' \
     > "$release_dir/$build_name"
