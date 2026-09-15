@@ -9,18 +9,21 @@
 
 ## Capability matrix
 
-| Capability | Debian 13 | Ubuntu 26.04 | Arch `linux-lts` | Rocky Linux 10 |
+| Capability | Debian 13 | Ubuntu 26.04 LTS | Arch Linux `linux-lts` | Rocky Linux 10 |
 | --- | --- | --- | --- | --- |
-| Core catalog/runtime | Certified | Certified | Certified | Experimental |
-| NVIDIA RTX A2000 / Toolkit 1.20.0 | Certified | Certified | Certified | Not certified |
-| AMD compute | Not certified | Not certified | Device scoping only | Not certified |
-| Intel accelerated workload | Not certified | Not certified | Device scoping only | Not certified |
-| Trusted local roots | Certified | Smoke certified | Smoke certified | Not certified |
-| Existing host-mounted NFS/CIFS root | Detection implemented; no live failure drill | Detection implemented | Detection implemented | Not certified |
-| Imported read-only storage | Certified | Smoke certified | Smoke certified | Not certified |
-| Exclusive imported read-write storage | Certified | Smoke certified | Smoke certified | Not certified |
+| Basic KITPro | Certified | Certified | Certified | Experimental |
+| Enforcing AppArmor | Required and certified | Required and certified | Required and certified | Not applicable; SELinux integration not certified |
+| Rootful Docker | Required and certified | Required and certified | Required and certified | Experimental |
+| 15-app trusted catalog | Certified | Certified | Certified | Experimental |
+| Multi-container Paperless-ngx | Certified | Certified | Certified | Not certified |
+| Trusted external storage | Certified | Smoke certified | Smoke certified | Not certified |
+| Ollama CPU | Certified | Certified | Certified | Not certified |
+| NVIDIA Ollama inference | Certified: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Not certified |
+| AMD accelerated workload | Not certified | Not certified | Device scoping evidence only; compute not certified | Not certified |
+| Intel accelerated workload | Not certified | Not certified | Device scoping evidence only; workload not certified | Not certified |
+| Existing host-mounted NFS/CIFS root | Detection implemented; KITPro does not mount shares | Detection implemented; KITPro does not mount shares | Detection implemented; KITPro does not mount shares | Not certified |
+| Jellyfin, Navidrome, Audiobookshelf, SFTPGo | Certified | Smoke certified | Smoke certified | Not certified |
 | Jellyfin NVIDIA transcoding | Not certified | Not certified | Not certified | Not certified |
-| UDP publication | Not implemented | Not implemented | Not implemented | Not implemented |
 
 ## Hardware acceleration
 

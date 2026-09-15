@@ -1,0 +1,42 @@
+{
+  "version": "0.1.0-alpha.11",
+  "status": "published-prerelease",
+  "release_url": "https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11",
+  "tag_object": "9a10124b245ba3fa96344644e6ce6c93bbdde864",
+  "source_checkpoint": "1eed6b0a2199e927a9647e50206e89f6cfc19995",
+  "artifacts": [
+    {
+      "name": "kitpro-server_0.1.0-alpha.11_amd64.deb",
+      "size": 8052172,
+      "sha256": "0a832e5e9b8d55d0b21c8331b4a80b7caeba148627d387870ed50c2d6eda8399"
+    },
+    {
+      "name": "kitpro-server-0.1.0_alpha11-1-x86_64.pkg.tar.zst",
+      "size": 5825195,
+      "sha256": "4fa242cadaff977b4bbefbafae65852a7272ebab1ba3dfbf067f7290bfec0722"
+    },
+    {
+      "name": "kitpro-server_0.1.0-alpha.11_amd64.cdx.json",
+      "size": 13788,
+      "sha256": "1414c192b9a56f80661b8ba5f58e7ee1fa4d4be1ae97d80d4854f88b4fcf5584"
+    }
+  ],
+  "build_metadata": {
+    "name": "kitpro-server_0.1.0-alpha.11.build.json",
+    "size": 1172,
+    "sha256": "4d689d09fbe0a22ebb5cfcaecb8e8598468d18282b02c44cd2ccfd009be4cc2e"
+  },
+  "release_manifest": {
+    "name": "kitpro-server_0.1.0-alpha.11.release.json",
+    "size": 1320,
+    "sha256": "70b4a37acf6eeb00303a47d2dcd3910bd515207d0cfe301ae06c05a35d8d89c8"
+  },
+  "checksums": {
+    "name": "SHA256SUMS",
+    "size": 544,
+    "sha256": "8c56242944f453e23ad80a35b81460af4d9fc942b7616216e26f4433cbb0ca19"
+  },
+  "remote_asset_verification": "all published assets matched SHA256SUMS on 2026-09-15",
+  "published": true,
+  "prerelease": true
+}

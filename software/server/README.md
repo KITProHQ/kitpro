@@ -27,8 +27,8 @@ From this directory:
 go test ./...
 go vet ./...
 gofmt -l .
-./packaging/test-package.sh
-./packaging/test-arch-package.sh
+./packaging/tests/package_static_test.sh
+./packaging/tests/arch_package_static_test.sh
 ```
 
 Build packages with the version documented in the release manifest:
@@ -49,3 +49,5 @@ Do not infer a public release from a source version. Use the [v0.1.0-alpha.11 pr
 - [Catalog](../../docs/application-catalog.md)
 - [Package quickstart](../../docs/release/quickstart.md)
 - [Known limitations](../../docs/release/known-limitations.md)
+- [Contributing](../../CONTRIBUTING.md)
+- [Security policy](../../SECURITY.md)

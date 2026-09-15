@@ -12,11 +12,11 @@ Supported hosts are Debian 13 amd64, Ubuntu 26.04 LTS amd64, and fully updated A
 
 ## Get started
 
-1. Download a package from the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11).
+1. Download the current public prerelease, [`v0.1.0-alpha.11`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11).
 2. Follow the [public alpha quickstart](docs/release/quickstart.md) for Debian, Ubuntu, or Arch.
 3. Open `http://127.0.0.1:8080/`, create the first local administrator, choose an app, and select its access mode.
 
-Release notes and checksums attached to the prerelease are authoritative for downloaded packages.
+Release notes, the release manifest, and checksums on the release page are authoritative for downloaded packages.
 
 ## Explore
 
@@ -27,6 +27,7 @@ Release notes and checksums attached to the prerelease are authoritative for dow
 - [Trusted storage guide](docs/trusted-storage.md)
 - [Hardware acceleration guide](docs/hardware-acceleration.md)
 - [Screenshots and video visual inventory](docs/product/video-broll-inventory.md)
+- [Launch-video production baseline](docs/product/kitpro-server-video-baseline.md)
 - [KITPro Server product page](https://kitpro.us/server)
 
 The technical implementation entry point is [software/server/README.md](software/server/README.md). KITPro is licensed under the [Apache License 2.0](LICENSE). Future KITPro OS, hardware, and cloud ideas are separate from this Server alpha and are not current features.

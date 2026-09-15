@@ -1,13 +1,19 @@
 # Changelog
 
-## 0.1.0-alpha.11 (2026-09-15)
+## Launch-video product baseline (documentation-only)
 
-- Publish the video-ready 15-application product baseline for Debian 13, Ubuntu 26.04 LTS, and Arch Linux under the documented support boundaries.
+- Freeze a truthful 15-application inventory and one definitive platform/capability matrix.
+- Refresh the root and technical entry-point READMEs, security/limitations language, screenshots, product brief, and video B-roll inventory.
+- Preserve the public-alpha boundary: no new runtime architecture, catalog entry, or release publication is introduced by this documentation pass.
+- Summarize the current progression: constrained runtime and authentication; immutable catalog and multi-container ownership; Debian/Ubuntu/Arch packages; trusted updates; NVIDIA/Ollama acceleration; trusted storage; Jellyfin and media/data applications; and the polished local UI.
+
+## 0.1.0-alpha.11 (published 2026-09-15)
+
 - Add Navidrome and Audiobookshelf with administrator-approved read-only media libraries.
 - Add SFTPGo as the first exclusive imported read-write consumer, with browser-based first administrator setup and no default credential.
 - Run trusted images under bounded numeric identities and assign ownership only to their KITPro-managed storage directories.
 - Prevent mixed readers and writers on one trusted root while allowing safe read-only sharing.
-- Include Jellyfin, NVIDIA-certified Ollama acceleration with CPU fallback, refreshed application UI, current screenshots, synchronized documentation, checksums, and a CycloneDX SBOM.
+- Mark Jellyfin as optional NVIDIA acceleration with CPU fallback.
 
 ## 0.1.0-alpha.10 (unreleased)
 
@@ -41,15 +47,6 @@
 - Preserve the existing capability-free helper and reject candidates that need
   storage ownership mutation, unsafe bootstrap credentials, or unsupported
   orchestration behavior.
-
-## 0.1.0-alpha.2
-
-- Refined the public-alpha dashboard, catalog, application management, access,
-  update, error, responsive, and accessibility experience.
-- Refreshed public product screenshots and documentation to match the shipped
-  interface.
-- Kept the trusted catalog, persistence, reconciliation, and security
-  boundaries from alpha.1 unchanged.
 
 ## 0.1.0-alpha.1
 
