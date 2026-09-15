@@ -1,5 +1,9 @@
 # KITPro Server threat model
 
+## Typed accelerator boundary
+
+Accelerators add a device-mediated path into a container, so the helper treats them as privileged owned resources. Only registered classes are representable. The API supplies no host path, and the helper compares its request with the embedded manifest before fresh sysfs/procfs discovery. Trusted state records stable identity and exact mappings. Device disappearance, renumbering, vendor mismatch, extra mapping, component spread, and restore onto different hardware fail closed or reconcile as security drift. KITPro does not install drivers or vendor runtimes.
+
 ## 1. Purpose
 
 This document defines the security threats that KITPro Server must address before implementation. It turns [ADR-0018](../decisions/0018-security-boundaries.md), the [privileged-helper protocol](../decisions/0003-privileged-helper-protocol.md), the [Docker integration](../decisions/0004-docker-integration.md), the [durable state and reconciliation model](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0019](../decisions/0019-helper-mandatory-access-control.md) into concrete attacker paths, expected controls, and unresolved questions.

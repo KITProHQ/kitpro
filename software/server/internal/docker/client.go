@@ -33,6 +33,8 @@ type ContainerPlan struct {
 	PortBindings         map[string][]PortBinding
 	RestartPolicy        string
 	NetworkAliases       []string
+	Devices              []DeviceMapping
+	DeviceRequests       []DeviceRequest
 }
 type PortBinding struct {
 	HostIP   string
@@ -43,6 +45,12 @@ type StorageMount struct {
 	ContainerPath string
 	HostPath      string
 	ReadOnly      bool
+}
+type DeviceMapping struct{ PathOnHost, PathInContainer, CgroupPermissions string }
+type DeviceRequest struct {
+	Driver       string
+	Count        int
+	Capabilities [][]string
 }
 
 func New() *Client {
@@ -84,6 +92,7 @@ func (c *Client) do(method, path string, body io.Reader) (map[string]any, error)
 	return out, e
 }
 func (c *Client) Version() (map[string]any, error) { return c.do("GET", "/version", nil) }
+func (c *Client) Info() (map[string]any, error)    { return c.do("GET", "/info", nil) }
 func (c *Client) Pull(image string) error {
 	u := "http://docker/images/create?fromImage=" + url.QueryEscape(image)
 	q, err := http.NewRequest("POST", u, nil)
@@ -142,6 +151,12 @@ func (c *Client) CreateContainerPlan(p ContainerPlan) (string, error) {
 			}
 			return ""
 		}()}
+	}
+	if len(p.Devices) > 0 {
+		host["Devices"] = p.Devices
+	}
+	if len(p.DeviceRequests) > 0 {
+		host["DeviceRequests"] = p.DeviceRequests
 	}
 	endpoint := map[string]any{}
 	if len(p.NetworkAliases) > 0 {

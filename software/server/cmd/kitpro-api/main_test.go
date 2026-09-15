@@ -124,7 +124,7 @@ func TestVersionEndpointReportsBuildAndSchemaMetadata(t *testing.T) {
 	req := authenticatedRequest(http.MethodGet, "/api/v1/version", "", session, csrf)
 	rec := httptest.NewRecorder()
 	a.guard(a.version)(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":2`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":3`) {
 		t.Fatalf("version response: %d %s", rec.Code, rec.Body.String())
 	}
 }

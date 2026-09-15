@@ -117,6 +117,7 @@ func main() {
 	http.HandleFunc("/api/v1/apps/", a.guard(a.apps))
 	http.HandleFunc("/api/v1/installations/", a.guard(a.installations))
 	http.HandleFunc("/api/v1/host", a.guard(a.host))
+	http.HandleFunc("/api/v1/hardware", a.guard(a.hardware))
 	http.HandleFunc("/api/v1/reconcile/", a.guard(a.reconcile))
 	http.HandleFunc("/api/v1/backup", a.guard(a.backup))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
@@ -418,8 +419,20 @@ func (a *app) version(w http.ResponseWriter, r *http.Request) {
 		"package_family":         packageFamily(),
 		"platform":               platformName(),
 		"schema_version":         schema,
-		"catalog_schema_version": manifest.MultiContainerSchemaVersion,
+		"catalog_schema_version": manifest.HardwareSchemaVersion,
 	})
+}
+func (a *app) hardware(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method denied", http.StatusMethodNotAllowed)
+		return
+	}
+	resp, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "GetHardwareInventory"})
+	if err != nil || !resp.OK {
+		http.Error(w, "hardware inventory unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	json.NewEncoder(w).Encode(resp.Result)
 }
 func (a *app) reconcile(w http.ResponseWriter, r *http.Request) {
 	inst := strings.TrimPrefix(r.URL.Path, "/api/v1/reconcile/")
@@ -466,8 +479,8 @@ func (a *app) reconcile(w http.ResponseWriter, r *http.Request) {
 }
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	type appView struct {
-		ID, Name, Description, Release, Category, Initials string
-		InstalledCount                                     int
+		ID, Name, Description, Release, Category, Initials, Hardware string
+		InstalledCount                                               int
 	}
 	type installationView struct {
 		ID, Name, Description, Category, Initials, State, StateLabel, StateClass, AppID, Release string
@@ -554,7 +567,15 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		if len(m.Releases) > 0 {
 			release = m.Releases[0].Version
 		}
-		apps = append(apps, appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), InstalledCount: installedCountByApp[m.ID]})
+		hardwareLabel := "CPU"
+		for _, requirement := range m.Hardware {
+			if requirement.Optional {
+				hardwareLabel = "GPU optional"
+			} else {
+				hardwareLabel = "GPU required"
+			}
+		}
+		apps = append(apps, appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), Hardware: hardwareLabel, InstalledCount: installedCountByApp[m.ID]})
 	}
 	records, _ := operations.List(r.Context(), a.db)
 	rows := make([]operationView, 0, len(records))
@@ -581,7 +602,15 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var schema int
 	_ = a.db.QueryRowContext(r.Context(), "SELECT version FROM schema_version LIMIT 1").Scan(&schema)
-	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.MultiContainerSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount}); err != nil {
+	hardwareSummary := "No supported accelerator detected"
+	if response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "GetHardwareInventory"}); err == nil && response.OK {
+		if result, ok := response.Result.(map[string]any); ok {
+			if items, ok := result["accelerators"].([]any); ok && len(items) > 0 {
+				hardwareSummary = "Hardware acceleration available"
+			}
+		}
+	}
+	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.HardwareSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
 		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
 	}
 }
@@ -612,6 +641,7 @@ func catalogVisible(id string) bool { return id != "busybox" }
 func catalogCategory(id string) string {
 	categories := map[string]string{
 		"open-webui": "AI", "it-tools": "Developer Tools",
+		"ollama":        "AI",
 		"actual-budget": "Finance", "freshrss": "Reading", "home-assistant": "Home automation",
 		"mealie": "Food and recipes", "memos": "Notes", "paperless-ngx": "Documents",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
@@ -860,6 +890,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			helperOperation = "UpdateApplication"
 		}
 		q := protocol.Request{Version: 1, ID: id, Operation: helperOperation, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
+		for _, item := range plan.Hardware {
+			q.Hardware = append(q.Hardware, protocol.HardwareRequirement{Class: item.Class, Optional: item.Optional, CPUFallback: item.CPUFallback})
+		}
 		q.ExposureMode, q.HostAddress, q.HostPort, q.ServiceID, q.ContainerPort, q.ServiceProtocol = r.URL.Query().Get("exposure_mode"), r.URL.Query().Get("host_address"), 0, r.URL.Query().Get("service_id"), 0, r.URL.Query().Get("service_protocol")
 		if q.ExposureMode == "" {
 			q.ExposureMode = string(exposure.Internal)
@@ -884,6 +917,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, component := range plan.ResolvedComponents {
 			pc := protocol.Component{ID: component.ID, Image: component.ImageDigest, Restart: component.Restart, DependsOn: append([]string(nil), component.DependsOn...)}
+			for _, item := range component.Hardware {
+				pc.Hardware = append(pc.Hardware, protocol.HardwareRequirement{Class: item.Class, Optional: item.Optional, CPUFallback: item.CPUFallback})
+			}
 			for _, arg := range component.Command {
 				pc.Command = append(pc.Command, arg)
 			}

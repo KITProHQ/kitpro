@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "busybox", "freshrss", "home-assistant", "it-tools", "mealie", "memos", "open-webui", "paperless-ngx", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "busybox", "freshrss", "home-assistant", "it-tools", "mealie", "memos", "ollama", "open-webui", "paperless-ngx", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -38,6 +38,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"paperless-ngx", "2.20.15", "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", "/usr/src/paperless/data", 8000, nil},
 		{"open-webui", "0.11.3", "ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "/app/backend/data", 8080, nil},
 		{"it-tools", "2024.10.22-7ca5933", "docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b", "", 80, nil},
+		{"ollama", "0.34.0", "docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4", "/root/.ollama", 11434, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
@@ -45,7 +46,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 			if m.Description == "" || len(m.Services) == 0 {
 				t.Fatalf("incomplete manifest: %#v", m)
 			}
-			if m.SchemaVersion == 1 && ((tt.storagePath != "" && (len(m.Storage) == 0 || m.Storage[0].ContainerPath != tt.storagePath)) || (tt.storagePath == "" && len(m.Storage) != 0) || m.Services[0].ContainerPort != tt.port) {
+			if len(m.Components) == 0 && ((tt.storagePath != "" && (len(m.Storage) == 0 || m.Storage[0].ContainerPath != tt.storagePath)) || (tt.storagePath == "" && len(m.Storage) != 0) || m.Services[0].ContainerPort != tt.port) {
 				t.Fatalf("unexpected storage/service: %#v %#v", m.Storage, m.Services)
 			}
 			gotEnv := map[string]string{}

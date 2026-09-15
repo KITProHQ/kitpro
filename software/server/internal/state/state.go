@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 5
+	target := 6
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -117,6 +117,17 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=5"); err != nil {
+			return err
+		}
+	}
+	if n < 6 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS hardware_assignments (installation_id TEXT NOT NULL, component_id TEXT NOT NULL DEFAULT '', device_class TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('device','cpu')), vendor TEXT NOT NULL DEFAULT '', stable_id TEXT NOT NULL DEFAULT '', resolved_devices TEXT NOT NULL DEFAULT '[]', runtime_generation INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(installation_id,component_id,device_class))`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=6"); err != nil {
 			return err
 		}
 	}

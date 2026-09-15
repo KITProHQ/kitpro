@@ -58,6 +58,9 @@ Architecture experiments and development-only host tooling live under [`prototyp
 - [`docs/principles.md`](docs/principles.md) records the non-negotiable product principles.
 - [`docs/architecture.md`](docs/architecture.md) explains the implemented system constraints and lifecycle.
 - [`docs/application-catalog.md`](docs/application-catalog.md) lists the supported applications, pinned releases, and catalog limitations.
+- [`docs/hardware-acceleration.md`](docs/hardware-acceleration.md) explains CPU fallback, Ollama, and accelerator troubleshooting.
+- [`docs/architecture/gpu-device-access.md`](docs/architecture/gpu-device-access.md) defines typed device classes and helper enforcement.
+- [`docs/application-manifest.md`](docs/application-manifest.md) covers schema v3 hardware declarations.
 - [`docs/roadmap.md`](docs/roadmap.md) divides Phase 1 into small, gated milestones.
 - [`docs/api-reference.md`](docs/api-reference.md) describes the supported authenticated API surface.
 - [`docs/release/known-limitations.md`](docs/release/known-limitations.md) records honest alpha constraints.

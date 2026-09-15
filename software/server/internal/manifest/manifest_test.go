@@ -63,6 +63,24 @@ func TestGeneratedSecretDeclaration(t *testing.T) {
 		}
 	}
 }
+func TestHardwareSchemaIsTypedAndBounded(t *testing.T) {
+	data := strings.Replace(valid, `"schema_version":1`, `"schema_version":3`, 1)
+	data = strings.Replace(data, `"restart":"unless-stopped"`, `"hardware":[{"class":"gpu.nvidia","optional":true,"cpu_fallback":true}],"restart":"unless-stopped"`, 1)
+	m, err := Parse([]byte(data))
+	if err != nil || len(m.Hardware) != 1 {
+		t.Fatalf("hardware manifest: %v %#v", err, m.Hardware)
+	}
+	for _, class := range []string{"/dev/sda", "/dev/mem", "/dev/kvm", "usb", "gpu.unknown"} {
+		candidate := strings.Replace(data, `gpu.nvidia`, class, 1)
+		if _, err := Parse([]byte(candidate)); err == nil {
+			t.Fatalf("accepted unsafe hardware class %q", class)
+		}
+	}
+	badFallback := strings.Replace(data, `"optional":true,`, `"optional":false,`, 1)
+	if _, err := Parse([]byte(badFallback)); err == nil {
+		t.Fatal("accepted fallback for required hardware")
+	}
+}
 func TestManifestRejectsUnsafeVariants(t *testing.T) {
 	cases := []string{`{"schema_version":2}`, `{"schema_version":1,"id":"busybox","name":"x","releases":[],"unexpected":1}`, `{"schema_version":1,"id":"busybox","name":"x","releases":[{"version":"1","registry":"docker.io","repository":"x","digest":"sha256:bad","platform":"linux/amd64"}]}`, `{"schema_version":1,"id":"busybox","name":"x","releases":[{"version":"1","registry":"docker.io","repository":"x","digest":"sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0","platform":"linux/amd64"}],"storage":[{"id":"x","container_path":"/etc"}]}`, `{"schema_version":1,"id":"busybox","name":"x","releases":[{"version":"1","registry":"docker.io","repository":"x","digest":"sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0","platform":"linux/amd64"}],"storage":[{"id":"x","container_path":"/data"},{"id":"x","container_path":"/other"}]}`, `{"schema_version":1,"id":"busybox","name":"x","releases":[{"version":"1","registry":"docker.io","repository":"x","digest":"sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05adfab0","platform":"linux/amd64"}],"command":["/bin/sh -c unsafe"]}`, `{"schema_version":1,"id":"busybox","name":"x","releases":[],"releases":[]}`}
 	for _, c := range cases {

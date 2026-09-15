@@ -1,5 +1,9 @@
 # KITPro API reference
 
+## Hardware inventory
+
+`GET /api/v1/hardware` requires an authenticated administrator session. It returns normalized accelerators, vendor/model identity, render and compute availability, NVIDIA integration state, and IOMMU presence. It never returns raw `/dev` paths or unrelated hardware.
+
 The API is local to the KITPro control plane. Mutating endpoints require an
 authenticated administrator session, a valid CSRF token, and the expected
 Origin and Host headers. The public alpha does not promise a remote or

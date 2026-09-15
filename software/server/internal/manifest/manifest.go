@@ -6,28 +6,31 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"regexp"
 	"strings"
 )
 
 const SchemaVersion = 1
 const MultiContainerSchemaVersion = 2
+const HardwareSchemaVersion = 3
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 type Manifest struct {
-	SchemaVersion int         `json:"schema_version"`
-	ID            string      `json:"id"`
-	Name          string      `json:"name"`
-	Description   string      `json:"description,omitempty"`
-	Releases      []Release   `json:"releases"`
-	Storage       []Storage   `json:"storage,omitempty"`
-	Environment   []Env       `json:"environment,omitempty"`
-	Command       []string    `json:"command,omitempty"`
-	Restart       string      `json:"restart,omitempty"`
-	Services      []Service   `json:"services,omitempty"`
-	Components    []Component `json:"components,omitempty"`
+	SchemaVersion int           `json:"schema_version"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Description   string        `json:"description,omitempty"`
+	Releases      []Release     `json:"releases"`
+	Storage       []Storage     `json:"storage,omitempty"`
+	Environment   []Env         `json:"environment,omitempty"`
+	Command       []string      `json:"command,omitempty"`
+	Restart       string        `json:"restart,omitempty"`
+	Services      []Service     `json:"services,omitempty"`
+	Components    []Component   `json:"components,omitempty"`
+	Hardware      []Accelerator `json:"hardware,omitempty"`
 }
 type Release struct {
 	Version    string `json:"version"`
@@ -56,14 +59,23 @@ type Service struct {
 	ContainerPort int    `json:"container_port"`
 }
 type Component struct {
-	ID          string    `json:"id"`
-	Release     string    `json:"release"`
-	Storage     []Storage `json:"storage,omitempty"`
-	Environment []Env     `json:"environment,omitempty"`
-	Command     []string  `json:"command,omitempty"`
-	Services    []Service `json:"services,omitempty"`
-	DependsOn   []string  `json:"depends_on,omitempty"`
-	Restart     string    `json:"restart,omitempty"`
+	ID          string        `json:"id"`
+	Release     string        `json:"release"`
+	Storage     []Storage     `json:"storage,omitempty"`
+	Environment []Env         `json:"environment,omitempty"`
+	Command     []string      `json:"command,omitempty"`
+	Services    []Service     `json:"services,omitempty"`
+	DependsOn   []string      `json:"depends_on,omitempty"`
+	Restart     string        `json:"restart,omitempty"`
+	Hardware    []Accelerator `json:"hardware,omitempty"`
+}
+
+// Accelerator names a helper-owned device class. Host paths, groups, Docker
+// runtime arguments, and capabilities are deliberately not representable.
+type Accelerator struct {
+	Class       string `json:"class"`
+	Optional    bool   `json:"optional,omitempty"`
+	CPUFallback bool   `json:"cpu_fallback,omitempty"`
 }
 type Plan struct {
 	ApplicationID, ReleaseID, InstanceID, ImageDigest, NetworkName, DataPath, Restart string
@@ -73,6 +85,7 @@ type Plan struct {
 	Services                                                                          []Service
 	Components                                                                        []Component
 	ResolvedComponents                                                                []ResolvedComponent
+	Hardware                                                                          []Accelerator
 }
 
 // ResolvedComponent is the helper-facing, digest-pinned component plan. It is
@@ -86,6 +99,7 @@ type ResolvedComponent struct {
 	Services    []Service
 	DependsOn   []string
 	Restart     string
+	Hardware    []Accelerator
 }
 
 func Parse(data []byte) (Manifest, error) {
@@ -107,7 +121,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -115,6 +129,15 @@ func Validate(m Manifest) error {
 	}
 	if m.SchemaVersion == MultiContainerSchemaVersion && len(m.Components) < 2 {
 		return fmt.Errorf("multi-container manifest requires at least two components")
+	}
+	if m.SchemaVersion == HardwareSchemaVersion && len(m.Components) == 1 {
+		return fmt.Errorf("multi-container manifest requires at least two components")
+	}
+	if m.SchemaVersion < HardwareSchemaVersion && (len(m.Hardware) != 0 || componentsHaveHardware(m.Components)) {
+		return fmt.Errorf("hardware requires schema version 3")
+	}
+	if err := validateHardware(m.Hardware); err != nil {
+		return err
 	}
 	if !idPattern.MatchString(m.ID) || len(m.Name) == 0 || len(m.Name) > 128 || len(m.Description) > 280 || strings.ContainsAny(m.Description, "\r\n") {
 		return fmt.Errorf("invalid application identity")
@@ -198,6 +221,9 @@ func Validate(m Manifest) error {
 		if err := validateComponentFields(c); err != nil {
 			return fmt.Errorf("component %s: %w", c.ID, err)
 		}
+		if err := validateHardware(c.Hardware); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
 	}
 	for _, c := range m.Components {
 		for _, dep := range c.DependsOn {
@@ -207,6 +233,32 @@ func Validate(m Manifest) error {
 		}
 	}
 	return nil
+}
+
+func validateHardware(items []Accelerator) error {
+	if len(items) > 4 {
+		return fmt.Errorf("too many hardware requirements")
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if !hardware.ValidClass(item.Class) || seen[item.Class] {
+			return fmt.Errorf("unknown or duplicate device class %q", item.Class)
+		}
+		if item.CPUFallback && !item.Optional {
+			return fmt.Errorf("CPU fallback requires optional acceleration")
+		}
+		seen[item.Class] = true
+	}
+	return nil
+}
+
+func componentsHaveHardware(components []Component) bool {
+	for _, component := range components {
+		if len(component.Hardware) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func validateComponentFields(c Component) error {
@@ -262,7 +314,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 	if !idPattern.MatchString(instance) || network == "" || strings.ContainsAny(network, "/.\\") || !strings.HasPrefix(dataPath, "/srv/kitpro/apps/") || strings.Contains(dataPath, "..") || strings.ContainsAny(dataPath, "\\\r\n") {
 		return Plan{}, fmt.Errorf("invalid instance paths")
 	}
-	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...)}
+	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...)}
 	for _, c := range m.Components {
 		var cr Release
 		for _, candidate := range m.Releases {
@@ -271,7 +323,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 				break
 			}
 		}
-		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart}
+		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart, Hardware: append([]Accelerator(nil), c.Hardware...)}
 		p.ResolvedComponents = append(p.ResolvedComponents, resolved)
 	}
 	return p, nil

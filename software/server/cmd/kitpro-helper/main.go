@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/kitpro/kitpro/software/server/internal/backup"
 	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/docker"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
+	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"github.com/kitpro/kitpro/software/server/internal/maintenance"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/multicontainer"
@@ -185,6 +187,19 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 			start(c, db, r)
 		case "ReconcileTestWorkload":
 			reconcile(c, db, r)
+		case "GetHardwareInventory":
+			d := docker.New()
+			info, err := d.Info()
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "Docker runtime inventory unavailable"})
+				break
+			}
+			inv, err := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "hardware inventory unavailable"})
+				break
+			}
+			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: hardware.SafeView(inv)})
 		case "BackupHelperState":
 			path, be := backup.Vacuum(context.Background(), db, "/var/lib/kitpro-helper/backups", r.ID+".db")
 			if be != nil {
@@ -218,7 +233,7 @@ func validateApplicationPlan(r protocol.Request) error {
 	if !ok {
 		return fmt.Errorf("application not in trusted catalog")
 	}
-	if entry.Manifest.SchemaVersion >= manifest.MultiContainerSchemaVersion {
+	if len(entry.Manifest.Components) > 0 {
 		return validateMultiComponentPlan(r, entry.Manifest)
 	}
 	var releaseImage string
@@ -232,6 +247,9 @@ func validateApplicationPlan(r protocol.Request) error {
 	}
 	if len(r.Command) != len(entry.Manifest.Command) || len(r.Environment) != len(entry.Manifest.Environment) || len(r.Storage) != len(entry.Manifest.Storage) || len(r.Services) != len(entry.Manifest.Services) {
 		return fmt.Errorf("trusted application plan shape mismatch")
+	}
+	if !hardwareRequirementsEqual(r.Hardware, entry.Manifest.Hardware) {
+		return fmt.Errorf("trusted hardware requirement mismatch")
 	}
 	for i, command := range entry.Manifest.Command {
 		if r.Command[i] != command {
@@ -307,6 +325,159 @@ func validateApplicationPlan(r protocol.Request) error {
 	return nil
 }
 
+func hardwareRequirementsEqual(got []protocol.HardwareRequirement, want []manifest.Accelerator) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i].Class != want[i].Class || got[i].Optional != want[i].Optional || got[i].CPUFallback != want[i].CPUFallback {
+			return false
+		}
+	}
+	return true
+}
+
+type runtimeHardware struct {
+	Devices     []docker.DeviceMapping
+	Requests    []docker.DeviceRequest
+	Assignments []hardware.Assignment
+	CPU         []string
+}
+
+func resolveHardware(d *docker.Client, requirements []protocol.HardwareRequirement) (runtimeHardware, error) {
+	if len(requirements) == 0 {
+		return runtimeHardware{}, nil
+	}
+	info, err := d.Info()
+	if err != nil {
+		return runtimeHardware{}, fmt.Errorf("Docker runtime inventory unavailable: %w", err)
+	}
+	inv, err := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
+	if err != nil {
+		return runtimeHardware{}, fmt.Errorf("hardware inventory unavailable: %w", err)
+	}
+	var out runtimeHardware
+	for _, requirement := range requirements {
+		assignment, resolveErr := inv.Resolve(requirement.Class)
+		if resolveErr != nil {
+			if requirement.Optional && requirement.CPUFallback {
+				out.CPU = append(out.CPU, requirement.Class)
+				continue
+			}
+			return runtimeHardware{}, fmt.Errorf("required hardware unavailable: %s", requirement.Class)
+		}
+		out.Assignments = append(out.Assignments, assignment)
+		if assignment.NVIDIARuntime {
+			out.Requests = append(out.Requests, docker.DeviceRequest{Driver: "nvidia", Count: -1, Capabilities: [][]string{{"gpu"}}})
+		}
+		for _, node := range assignment.Devices {
+			out.Devices = append(out.Devices, docker.DeviceMapping{PathOnHost: node.Path, PathInContainer: node.Path, CgroupPermissions: "rwm"})
+		}
+	}
+	return out, nil
+}
+
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func persistHardware(db sqlExecer, installation, component string, generation int, resolved runtimeHardware) error {
+	if _, err := db.Exec("DELETE FROM hardware_assignments WHERE installation_id=? AND component_id=?", installation, component); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, class := range resolved.CPU {
+		if _, err := db.Exec(`INSERT INTO hardware_assignments(installation_id,component_id,device_class,mode,runtime_generation,created_at) VALUES(?,?,?,'cpu',?,?)`, installation, component, class, generation, now); err != nil {
+			return err
+		}
+	}
+	for _, assignment := range resolved.Assignments {
+		paths := make([]string, 0, len(assignment.Devices))
+		for _, node := range assignment.Devices {
+			paths = append(paths, node.Path)
+		}
+		encoded, _ := json.Marshal(paths)
+		if _, err := db.Exec(`INSERT INTO hardware_assignments(installation_id,component_id,device_class,mode,vendor,stable_id,resolved_devices,runtime_generation,created_at) VALUES(?,?,?,'device',?,?,?,?,?)`, installation, component, assignment.Class, assignment.Vendor, assignment.StableID, string(encoded), generation, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateHardwareObservation(db *sql.DB, installation, component string, host map[string]any) error {
+	rows, err := db.Query(`SELECT device_class,mode,vendor,stable_id,resolved_devices FROM hardware_assignments WHERE installation_id=? AND component_id=? ORDER BY device_class`, installation, component)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	expectedPaths := map[string]bool{}
+	expectNVIDIA := false
+	var inv *hardware.Inventory
+	for rows.Next() {
+		var class, mode, vendor, stable, encoded string
+		if err = rows.Scan(&class, &mode, &vendor, &stable, &encoded); err != nil {
+			return err
+		}
+		if mode == "cpu" {
+			continue
+		}
+		if inv == nil {
+			info, infoErr := docker.New().Info()
+			if infoErr != nil {
+				return fmt.Errorf("accelerator inventory unavailable")
+			}
+			discovered, discoverErr := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
+			if discoverErr != nil {
+				return fmt.Errorf("accelerator inventory unavailable")
+			}
+			inv = &discovered
+		}
+		current, resolveErr := inv.Resolve(class)
+		if resolveErr != nil {
+			return fmt.Errorf("accelerator unavailable")
+		}
+		if current.Vendor != vendor || current.StableID != stable {
+			return fmt.Errorf("accelerator identity drift")
+		}
+		if class == hardware.NVIDIAClass {
+			expectNVIDIA = true
+		}
+		var paths []string
+		if json.Unmarshal([]byte(encoded), &paths) != nil {
+			return fmt.Errorf("trusted hardware assignment unreadable")
+		}
+		for _, path := range paths {
+			expectedPaths[path] = true
+		}
+	}
+	observedPaths := map[string]bool{}
+	if devices, ok := host["Devices"].([]any); ok {
+		for _, raw := range devices {
+			if item, ok := raw.(map[string]any); ok {
+				if path, ok := item["PathOnHost"].(string); ok {
+					observedPaths[path] = true
+				}
+			}
+		}
+	}
+	if len(observedPaths) != len(expectedPaths) {
+		return fmt.Errorf("device mapping count drift")
+	}
+	for path := range expectedPaths {
+		if !observedPaths[path] {
+			return fmt.Errorf("device mapping drift")
+		}
+	}
+	requests, _ := host["DeviceRequests"].([]any)
+	if expectNVIDIA != (len(requests) == 1) {
+		return fmt.Errorf("GPU runtime request drift")
+	}
+	if !expectNVIDIA && len(requests) != 0 {
+		return fmt.Errorf("unexpected GPU runtime request")
+	}
+	return nil
+}
+
 func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 	if r.ApplicationID != m.ID || len(m.Releases) == 0 || r.ReleaseID != m.Releases[0].Version || r.Image != m.Releases[0].Registry+"/"+m.Releases[0].Repository+"@"+m.Releases[0].Digest {
 		return fmt.Errorf("top-level release identity mismatch")
@@ -354,6 +525,9 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 		}
 		if len(got.Command) != len(want.Command) || len(got.Environment) != len(want.Environment) {
 			return fmt.Errorf("component %s plan shape mismatch", got.ID)
+		}
+		if !hardwareRequirementsEqual(got.Hardware, want.Hardware) {
+			return fmt.Errorf("component %s hardware mismatch", got.ID)
 		}
 		for j, arg := range want.Command {
 			if got.Command[j] != arg || arg == "/bin/sh" || arg == "/bin/bash" || arg == "-c" || arg == "" {
@@ -459,6 +633,11 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	gen := maxGeneration(r.RuntimeGeneration)
 	name := "kitpro-" + r.ApplicationID + "-" + r.InstanceID + "-g" + strconv.Itoa(gen)
 	d := docker.New()
+	hw, e := resolveHardware(d, r.Hardware)
+	if e != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
+		return
+	}
 	// Exposure changes and explicit recreation replace only the previously
 	// trusted runtime; persistent storage remains untouched.
 	var oldID, oldNetwork string
@@ -504,7 +683,7 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		proto, _ := exposure.DockerProtocol(r.ServiceProtocol)
 		bindings[fmt.Sprintf("%d/%s", r.ContainerPort, proto)] = []docker.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
 	}
-	id, e := d.CreateContainerPlan(docker.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy})
+	id, e := d.CreateContainerPlan(docker.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests})
 	if e == nil {
 		e = d.Start(id)
 	}
@@ -520,7 +699,19 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		}
 	}
 	if e == nil {
-		_, e = db.Exec(`INSERT OR REPLACE INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation,application_id,release_id,exposure_mode,service_id,host_address,host_port,container_port,service_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.InstanceID, id, name, r.NetworkName, r.Image, r.DataPath, time.Now().UTC().Format(time.RFC3339Nano), gen, r.ApplicationID, r.ReleaseID, r.ExposureMode, r.ServiceID, r.HostAddress, r.HostPort, r.ContainerPort, r.ServiceProtocol)
+		tx, txErr := db.Begin()
+		if txErr == nil {
+			_, txErr = tx.Exec(`INSERT OR REPLACE INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation,application_id,release_id,exposure_mode,service_id,host_address,host_port,container_port,service_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.InstanceID, id, name, r.NetworkName, r.Image, r.DataPath, time.Now().UTC().Format(time.RFC3339Nano), gen, r.ApplicationID, r.ReleaseID, r.ExposureMode, r.ServiceID, r.HostAddress, r.HostPort, r.ContainerPort, r.ServiceProtocol)
+		}
+		if txErr == nil {
+			txErr = persistHardware(tx, r.InstanceID, "", gen, hw)
+		}
+		if txErr == nil {
+			txErr = tx.Commit()
+		} else if tx != nil {
+			_ = tx.Rollback()
+		}
+		e = txErr
 	}
 	if e != nil {
 		if id != "" {
@@ -606,6 +797,7 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		return
 	}
 	created := map[string]string{}
+	hardwareByComponent := map[string]runtimeHardware{}
 	cleanup := func() {
 		for _, id := range created {
 			_ = d.Stop(id)
@@ -619,6 +811,12 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	}
 	for _, componentID := range order {
 		component := byID[componentID]
+		hw, hardwareErr := resolveHardware(d, component.Hardware)
+		if hardwareErr != nil {
+			cleanup()
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: hardwareErr.Error()})
+			return
+		}
 		if err = d.Pull(component.Image); err != nil {
 			cleanup()
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
@@ -656,7 +854,7 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			}
 		}
 		name := "kitpro-" + r.ApplicationID + "-" + r.InstanceID + "-" + component.ID + "-g" + strconv.Itoa(r.RuntimeGeneration)
-		id, ce := d.CreateContainerPlan(docker.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}})
+		id, ce := d.CreateContainerPlan(docker.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Devices: hw.Devices, DeviceRequests: hw.Requests})
 		if ce == nil {
 			ce = d.Start(id)
 		}
@@ -666,11 +864,26 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			return
 		}
 		created[componentID] = id
-		if _, ce = db.Exec(`INSERT OR REPLACE INTO component_ownership(installation_id,component_id,container_id,container_name,network_name,image_digest,runtime_generation,created_at) VALUES(?,?,?,?,?,?,?,?)`, r.InstanceID, component.ID, id, name, r.NetworkName, component.Image, r.RuntimeGeneration, time.Now().UTC().Format(time.RFC3339Nano)); ce != nil {
-			cleanup()
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: ce.Error()})
-			return
+		hardwareByComponent[componentID] = hw
+	}
+	tx, txErr := db.Begin()
+	for _, component := range r.Components {
+		if txErr == nil {
+			_, txErr = tx.Exec(`INSERT OR REPLACE INTO component_ownership(installation_id,component_id,container_id,container_name,network_name,image_digest,runtime_generation,created_at) VALUES(?,?,?,?,?,?,?,?)`, r.InstanceID, component.ID, created[component.ID], "kitpro-"+r.ApplicationID+"-"+r.InstanceID+"-"+component.ID+"-g"+strconv.Itoa(r.RuntimeGeneration), r.NetworkName, component.Image, r.RuntimeGeneration, time.Now().UTC().Format(time.RFC3339Nano))
 		}
+		if txErr == nil {
+			txErr = persistHardware(tx, r.InstanceID, component.ID, r.RuntimeGeneration, hardwareByComponent[component.ID])
+		}
+	}
+	if txErr == nil {
+		txErr = tx.Commit()
+	} else if tx != nil {
+		_ = tx.Rollback()
+	}
+	if txErr != nil {
+		cleanup()
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: txErr.Error()})
+		return
 	}
 	_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='succeeded',container_id=? WHERE operation_id=?", created[order[0]], r.ID)
 	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"components": created, "network": r.NetworkName}})
@@ -727,8 +940,8 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 		network := ""
 		bindingMatches := 0
 		for rows.Next() {
-			var cid, n, image string
-			if err = rows.Scan(new(string), &cid, &n, &image); err != nil {
+			var componentID, cid, n, image string
+			if err = rows.Scan(&componentID, &cid, &n, &image); err != nil {
 				classification = "missing"
 				summary = "component ownership unreadable"
 				break
@@ -749,6 +962,10 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 				break
 			}
 			host, _ := observed["HostConfig"].(map[string]any)
+			if he := validateHardwareObservation(db, r.InstanceID, componentID, host); he != nil {
+				classification, summary = "security_drift", he.Error()
+				break
+			}
 			bindings, _ := host["PortBindings"].(map[string]any)
 			if r.ExposureMode == "internal" {
 				if len(bindings) != 0 {
@@ -799,6 +1016,9 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 			labels, _ := cfg["Labels"].(map[string]any)
 			if labels[ownership.LabelManaged] == "true" && labels[ownership.LabelInstance] == r.InstanceID && cfg["Image"] == image {
 				host, _ := got["HostConfig"].(map[string]any)
+				if he := validateHardwareObservation(db, r.InstanceID, "", host); he != nil {
+					classification, summary = "security_drift", he.Error()
+				}
 				pb, _ := host["PortBindings"].(map[string]any)
 				if !exposure.ObservedBindingsExact(exposure.Assignment{Mode: exposure.Mode(mode), Address: hostAddress, Port: hostPort}, containerPort, serviceProtocol, pb) {
 					classification, summary = "security_drift", "unexpected or missing host exposure"

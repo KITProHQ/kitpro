@@ -5,6 +5,22 @@ constrained application definitions, not Docker Compose. Unknown fields,
 duplicate keys, oversized documents, unknown schema versions, and invalid
 values are rejected before a helper request is created.
 
+## Hardware schema (version 3)
+
+Schema version 3 adds a `hardware` array at the application or component level.
+
+| Field | Type | Required | Constraint |
+|---|---|---|---|
+| `class` | string | yes | `gpu.nvidia`, `gpu.amd`, `gpu.intel.render`, or `video.vaapi` |
+| `optional` | boolean | no | Defaults to false |
+| `cpu_fallback` | boolean | no | May be true only when `optional` is true |
+
+Valid declarations include `{"hardware":[{"class":"gpu.nvidia","optional":true,"cpu_fallback":true}]}`. For multi-container applications, place the array on only the component that needs the accelerator.
+
+Raw paths such as `/dev/dri/renderD128`, unknown classes, and CPU fallback without optional acceleration are invalid. Host paths, groups, capabilities, Docker requests, runtime arguments, privileged mode, and host networking are not representable.
+
+See [GPU and device access architecture](architecture/gpu-device-access.md).
+
 ```json
 {
   "schema_version": 1,

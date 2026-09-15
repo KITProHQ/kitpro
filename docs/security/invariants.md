@@ -1,5 +1,8 @@
 # KITPro Server security invariants
 
+33. Hardware access uses only the closed trusted device-class registry. Manifests and API requests cannot contain raw device paths, arbitrary groups, capabilities, runtime arguments, privileged mode, or host networking.
+34. The helper independently revalidates hardware intent, discovers the host, resolves exact devices, persists assignments, and treats missing, changed, extra, or ambiguous mappings as security drift.
+
 These rules apply to every implementation and supported application. A change that violates one must stop release or propose an explicit replacement through an architecture decision record.
 
 1. The browser-facing KITPro web and API service runs as a dedicated unprivileged host identity, not as root.

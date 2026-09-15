@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.8 (unreleased)
+
+- Add schema v3 trusted hardware classes with helper-side discovery and exact device resolution.
+- Persist component-scoped CPU/GPU intent and reconcile device drift.
+- Add normalized hardware inventory and hardware status in catalog/settings.
+- Add Ollama 0.34.0 with persistent models, private API, and CPU fallback.
+- Validate bounded NVIDIA acceleration, reboot persistence, and CPU fallback on Debian, Ubuntu, and Arch.
+
 ## 0.1.0-alpha.7 (prepared, not published)
 
 - Add immutable Open WebUI 0.11.3 and IT-Tools 2024.10.22 catalog entries.

@@ -6,6 +6,17 @@ runtime validation. Catalog content cannot request host paths, Docker socket
 access, privileged mode, host namespaces, devices, capabilities, or host port
 bindings. Service exposure is an installation policy and defaults to internal.
 
+## Ollama
+
+- Category: AI
+- Trusted release: 0.34.0
+- Upstream: [Ollama](https://github.com/ollama/ollama)
+- Model: one official `ollama/ollama` container pinned by digest
+- Storage: persistent models at `/root/.ollama`
+- Service: HTTP API on port 11434, private by default
+- Acceleration: optional NVIDIA with explicit CPU fallback
+- Limits: no automatic model downloads; AMD ROCm and Intel acceleration are not enabled for this release; NVIDIA is validated only within the published hardware support matrix
+
 ## Supported applications
 
 | Application | Release | Image identity | Persistent storage | Service | License |
@@ -20,8 +31,9 @@ bindings. Service exposure is an installation policy and defaults to internal.
 | Paperless-ngx | 2.20.15 + Redis 7.4.11 | `docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f` plus `docker.io/library/redis@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7` | web `data`, `media`, `consume`, `export`; broker `data` | HTTP 8000 (web only) | GPL-3.0 |
 | Open WebUI | 0.11.3 | `ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c` | `data` at `/app/backend/data` | HTTP 8080 | Open WebUI license |
 | IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
+| Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 
-The nine single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The ten single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.

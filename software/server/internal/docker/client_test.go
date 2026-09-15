@@ -82,6 +82,28 @@ func TestCreateContainerPlanRestartPolicy(t *testing.T) {
 	}
 }
 
+func TestCreateContainerPlanUsesOnlyResolvedDevices(t *testing.T) {
+	var body map[string]any
+	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader(`{"Id":"container"}`)), Header: make(http.Header)}, nil
+	})}}
+	plan := ContainerPlan{Image: "image", Name: "name", Network: "network", Devices: []DeviceMapping{{PathOnHost: "/dev/dri/renderD128", PathInContainer: "/dev/dri/renderD128", CgroupPermissions: "rwm"}}}
+	if _, err := client.CreateContainerPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	host := body["HostConfig"].(map[string]any)
+	encoded, _ := json.Marshal(host["Devices"])
+	if !strings.Contains(string(encoded), "renderD128") || strings.Contains(string(encoded), "/dev/dri/card") {
+		t.Fatalf("unexpected device map: %s", encoded)
+	}
+	if host["Privileged"] != false {
+		t.Fatal("device plan became privileged")
+	}
+}
+
 func TestHasForeignNetworkMemberFindsStoppedContainerOmittedFromNetworkInspect(t *testing.T) {
 	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body string

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
+	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
@@ -293,5 +294,75 @@ func TestGeneratedEnvironmentSecretPersistsAndIsNotReturnedAsMetadata(t *testing
 	}
 	if _, err = resolvedEnvironment(db, "inst-secret01", "", []protocol.EnvVar{{Name: "BAD", Secret: true, Generate: "weak"}}); err == nil {
 		t.Fatal("weak secret generator accepted")
+	}
+}
+
+func TestHardwareRequirementsAreExactAndComponentScoped(t *testing.T) {
+	want := []manifest.Accelerator{{Class: "video.vaapi", Optional: true, CPUFallback: true}}
+	if !hardwareRequirementsEqual([]protocol.HardwareRequirement{{Class: "video.vaapi", Optional: true, CPUFallback: true}}, want) {
+		t.Fatal("exact hardware requirement rejected")
+	}
+	for _, got := range [][]protocol.HardwareRequirement{
+		{{Class: "/dev/dri/renderD128", Optional: true, CPUFallback: true}},
+		{{Class: "video.vaapi", Optional: false, CPUFallback: true}},
+		{{Class: "video.vaapi", Optional: true, CPUFallback: true}, {Class: "gpu.amd"}},
+	} {
+		if hardwareRequirementsEqual(got, want) {
+			t.Fatalf("mismatched hardware accepted: %#v", got)
+		}
+	}
+	web := protocol.Component{ID: "web"}
+	worker := protocol.Component{ID: "worker", Hardware: []protocol.HardwareRequirement{{Class: "gpu.amd"}}}
+	if len(web.Hardware) != 0 || len(worker.Hardware) != 1 {
+		t.Fatal("component device scope spread")
+	}
+}
+
+func TestCPUAssignmentRejectsUnexpectedDeviceMapping(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO hardware_assignments(installation_id,component_id,device_class,mode,runtime_generation,created_at) VALUES('inst-hardware01','','gpu.nvidia','cpu',1,'now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateHardwareObservation(db, "inst-hardware01", "", map[string]any{}); err != nil {
+		t.Fatalf("clean CPU runtime rejected: %v", err)
+	}
+	host := map[string]any{"Devices": []any{map[string]any{"PathOnHost": "/dev/sda", "PathInContainer": "/dev/sda"}}}
+	if err = validateHardwareObservation(db, "inst-hardware01", "", host); err == nil {
+		t.Fatal("unexpected block device mapping accepted")
+	}
+}
+
+func TestDeviceAssignmentPersistsAllTrustedIdentityFields(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	assignment := hardware.Assignment{
+		Class:         hardware.NVIDIAClass,
+		Vendor:        "nvidia",
+		StableID:      "0000:06:10.0:10de:2571",
+		NVIDIARuntime: true,
+	}
+	if err = persistHardware(db, "inst-hardware02", "model", 3, runtimeHardware{Assignments: []hardware.Assignment{assignment}}); err != nil {
+		t.Fatalf("persist device assignment: %v", err)
+	}
+	var class, mode, vendor, stableID, devices string
+	var generation int
+	if err = db.QueryRow(`SELECT device_class,mode,vendor,stable_id,resolved_devices,runtime_generation FROM hardware_assignments WHERE installation_id=? AND component_id=?`, "inst-hardware02", "model").Scan(&class, &mode, &vendor, &stableID, &devices, &generation); err != nil {
+		t.Fatal(err)
+	}
+	if class != hardware.NVIDIAClass || mode != "device" || vendor != "nvidia" || stableID != assignment.StableID || devices != "[]" || generation != 3 {
+		t.Fatalf("unexpected persisted assignment: %q %q %q %q %q %d", class, mode, vendor, stableID, devices, generation)
 	}
 }
