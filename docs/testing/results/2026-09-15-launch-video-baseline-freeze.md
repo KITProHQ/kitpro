@@ -13,7 +13,7 @@ KITPro Server `v0.1.0-alpha.11` is the authoritative product release for the Kee
 | Private KITPro | `12833cff02048e5b94900352b08d8aafc182114c` | Product code unchanged; this evidence and synchronized docs are committed by the freeze commit that contains this file |
 | Public KITPro clean history | `d1d0763f846301b7eb27f5bff866d4cff4334d9b` | Public-safe documentation is synchronized in a separate clean-history commit |
 | `kitpro-site` | `f15b706aaac09910da38990f6fcb2a07d1a07065` | Factual screenshot/alt-text correction deployed |
-| `kitpro-os-site` | `40b6b36495c285b7ec7a5d3faeb28c4b8cd040a6` | No change required |
+| `kitpro-os-site` | `f3eeb26bc2a0e984c539fc485c0f078bd0900e42` | Removed unavailable ISO/signature links and deployed an accurate availability notice |
 | Demo automation | `b8831fe5960b75e2f9a5fbb6e13957f80a73e815` | Reusable VM/SSH recorder and screenshot correction pushed |
 
 The private and public KITPro repositories intentionally use separate histories. The audited private and public checkpoints were clean and aligned with their intended remotes before this documentation freeze. Site and automation commits were pushed without force.
@@ -75,6 +75,8 @@ Demo automation now includes a reusable managed-VM SSH recorder, protected sudo-
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, topics, support matrix, release link, and current release references: present
 
 The public release-note body is synchronized with absolute, tag-pinned documentation URLs. No new GitHub software release was created.
+
+The OS repository host contains no current public ISO or detached signature and intentionally denies the old `/iso/` and `/isos/` routes. The OS site therefore no longer advertises those unavailable files or placeholder verification commands. It now states that no public image is currently available and links to the source repository for verified release updates.
 
 ## Validation results
 
