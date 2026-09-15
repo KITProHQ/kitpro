@@ -21,6 +21,17 @@ one test VM at a time. AMD compute and Intel acceleration are not certified.
 
 Ollama is the only shipped GPU-aware application in this release. No additional candidate passed the complete immutable-image, immutable-backend, bounded-storage, typed-device, and network-security review. This is an intentional catalog boundary, not an implication that every NVIDIA container is supported.
 
+## Trusted external storage
+
+| Platform | Local trusted roots | Existing NFS/SMB mount registration | Jellyfin |
+| --- | --- | --- | --- |
+| Debian 13 amd64 | Validated | Filesystem detection implemented; disposable live NAS unavailable | Validated with read-only media, drift, recreation, and reboot |
+| Ubuntu 26.04 LTS amd64 | Validated smoke | Same host-mounted model | Validated smoke |
+| Arch Linux x86_64 | Validated smoke | Same host-mounted model | Validated smoke under the existing `linux-lts` boundary |
+
+KITPro does not mount or credential network shares. The operating system must
+mount them first. Missing or changed mount identity fails closed.
+
 Minimum recommendation: 2 CPU cores, 4 GiB RAM, and 20 GiB free system disk,
 plus application-data capacity. KITPro listens locally by default; application
 services are internal until an administrator enables loopback or exact-address

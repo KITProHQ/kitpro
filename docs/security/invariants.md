@@ -2,6 +2,8 @@
 
 33. Hardware access uses only the closed trusted device-class registry. Manifests and API requests cannot contain raw device paths, arbitrary groups, capabilities, runtime arguments, privileged mode, or host networking.
 34. The helper independently revalidates hardware intent, discovers the host, resolves exact devices, persists assignments, and treats missing, changed, extra, or ambiguous mappings as security drift.
+35. Imported storage is reachable only through administrator-registered trusted roots and manifest-declared logical slots. Application requests cannot contain raw host paths or bind syntax.
+36. The helper canonicalizes roots, rejects symlink and protected-path escapes, records filesystem identity, enforces read-only/read-write ceilings, and treats unavailable, changed, missing, extra, or weakened mounts as security drift.
 
 These rules apply to every implementation and supported application. A change that violates one must stop release or propose an explicit replacement through an architecture decision record.
 

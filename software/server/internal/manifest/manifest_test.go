@@ -21,6 +21,22 @@ func TestParseAndResolve(t *testing.T) {
 	}
 }
 
+func TestExternalStorageIsTypedAndContainsNoHostPath(t *testing.T) {
+	valid := []byte(`{"schema_version":4,"id":"media-app","name":"Media","releases":[{"version":"1","registry":"docker.io","repository":"example/media","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","platform":"linux/amd64"}],"external_storage":[{"id":"media","container_path":"/media","mode":"read-only","required":true,"purpose":"Media library"}]}`)
+	if _, err := Parse(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]byte{
+		[]byte(`{"schema_version":4,"id":"media-app","name":"Media","releases":[{"version":"1","registry":"docker.io","repository":"example/media","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","platform":"linux/amd64"}],"external_storage":[{"id":"media","container_path":"/media","mode":"raw","purpose":"Media"}]}`),
+		[]byte(`{"schema_version":4,"id":"media-app","name":"Media","releases":[{"version":"1","registry":"docker.io","repository":"example/media","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","platform":"linux/amd64"}],"external_storage":[{"id":"media","container_path":"/media","mode":"read-only","purpose":"Media","host_path":"/etc"}]}`),
+		[]byte(`{"schema_version":4,"id":"media-app","name":"Media","releases":[{"version":"1","registry":"docker.io","repository":"example/media","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","platform":"linux/amd64"}],"storage":[{"id":"config","container_path":"/data","persistent":true}],"external_storage":[{"id":"media","container_path":"/data","mode":"read-only","purpose":"Media"}]}`),
+	} {
+		if _, err := Parse(bad); err == nil {
+			t.Fatal("accepted unbounded external storage")
+		}
+	}
+}
+
 func TestMultiContainerManifestIsTypedAndDependencyChecked(t *testing.T) {
 	data := `{"schema_version":2,"id":"paperless","name":"Paperless","releases":[{"version":"1","registry":"ghcr.io","repository":"paperless-ngx/paperless-ngx","digest":"sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0","platform":"linux/amd64"}],"components":[{"id":"db","release":"1","storage":[{"id":"data","container_path":"/var/lib/postgresql/data","persistent":true}],"services":[{"id":"postgres","name":"Postgres","protocol":"tcp","container_port":5432}]},{"id":"web","release":"1","depends_on":["db"],"storage":[{"id":"data","container_path":"/usr/src/paperless/data","persistent":true}],"services":[{"id":"web","name":"Web","protocol":"http","container_port":8000}]}]}`
 	m, err := Parse([]byte(data))

@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 6
+	target := 7
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -128,6 +128,19 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=6"); err != nil {
+			return err
+		}
+	}
+	if n < 7 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS trusted_storage_roots (root_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, canonical_path TEXT NOT NULL UNIQUE, allowed_mode TEXT NOT NULL CHECK(allowed_mode IN ('read-only','read-write')), device_major INTEGER NOT NULL, device_minor INTEGER NOT NULL, inode INTEGER NOT NULL, filesystem_type TEXT NOT NULL, mount_source TEXT NOT NULL, mount_point TEXT NOT NULL, network_backed INTEGER NOT NULL CHECK(network_backed IN (0,1)), created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS external_storage_bindings (installation_id TEXT NOT NULL, component_id TEXT NOT NULL DEFAULT '', slot_id TEXT NOT NULL, root_id TEXT NOT NULL, access_mode TEXT NOT NULL CHECK(access_mode IN ('read-only','read-write')), container_path TEXT NOT NULL, runtime_generation INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(installation_id,component_id,slot_id), FOREIGN KEY(root_id) REFERENCES trusted_storage_roots(root_id) ON DELETE RESTRICT)`)
+		} else {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS installation_storage_selections (installation_id TEXT NOT NULL, component_id TEXT NOT NULL DEFAULT '', slot_id TEXT NOT NULL, root_id TEXT NOT NULL, PRIMARY KEY(installation_id,component_id,slot_id))`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=7"); err != nil {
 			return err
 		}
 	}

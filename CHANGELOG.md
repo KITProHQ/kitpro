@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.10 (unreleased)
+
+- Add administrator-approved trusted storage roots with canonical path and filesystem identity checks; see the [trusted storage guide](docs/trusted-storage.md).
+- Add schema v4 logical read-only/read-write storage slots without raw host paths or Docker bind input.
+- Reconcile missing, extra, changed, or weakened mounts as security drift and block unavailable storage before start or recreation.
+- Add Jellyfin 12.1 with managed config/cache and a required read-only imported media library.
+
 ## 0.1.0-alpha.9 (unreleased)
 
 - Show detected GPU identity, runtime readiness, certification, current availability, and installed CPU/GPU mode in the server interface.

@@ -18,6 +18,7 @@ machine-to-machine API contract.
 | GET | `/api/v1/installations` | Installed application identities and desired state |
 | GET | `/api/v1/installations/{id}/services` | Declared services and safe access state |
 | GET | `/api/v1/operations` | Operation history and status |
+| GET | `/api/v1/storage-roots` | Trusted roots, access ceilings, filesystem type, and availability |
 
 Image digests and installation identifiers are available for administration and
 support, but clients must not turn them into arbitrary Docker requests.
@@ -50,3 +51,15 @@ authoritative for KITPro software updates.
 
 For first use, follow the [quickstart](release/quickstart.md) rather than
 calling the API directly.
+
+## Trusted storage roots
+
+`POST /api/v1/storage-roots` is the only application-management workflow that
+accepts a host path. It accepts `name`, `path`, and a bounded `mode` of
+`read-only` or `read-write`. The helper canonicalizes and independently
+validates the path before returning a generated root ID.
+
+Application install forms send `storage_<slot>=<root-id>`. They never send a
+host path, container target, bind mode, or Docker option. `DELETE
+/api/v1/storage-roots/{id}` refuses roots that remain attached to an
+installation.

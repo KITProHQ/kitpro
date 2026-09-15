@@ -31,11 +31,12 @@ The public alpha lets a user:
 2. Open its local dashboard.
 3. View detected host information.
 4. Deploy a supported application, including Paperless-ngx's managed components.
-5. View the application's runtime health.
-6. Start and stop the application.
-7. Update the application safely.
-8. View relevant logs.
-9. Uninstall the application without automatically destroying persistent user data.
+5. Register an approved local or host-mounted storage location and attach it to Jellyfin read-only.
+6. View the application's runtime health.
+7. Start and stop the application.
+8. Update the application safely.
+9. View relevant logs.
+10. Uninstall the application without automatically destroying persistent or imported user data.
 
 ![KITPro Server application catalog with trusted self-hosted apps](docs/assets/screenshots/kitpro-server-catalog.png)
 
@@ -59,8 +60,9 @@ Architecture experiments and development-only host tooling live under [`prototyp
 - [`docs/architecture.md`](docs/architecture.md) explains the implemented system constraints and lifecycle.
 - [`docs/application-catalog.md`](docs/application-catalog.md) lists the supported applications, pinned releases, and catalog limitations.
 - [`docs/hardware-acceleration.md`](docs/hardware-acceleration.md) explains CPU fallback, Ollama, and accelerator troubleshooting.
+- [`docs/trusted-storage.md`](docs/trusted-storage.md) explains approved external storage and Jellyfin media setup.
 - [`docs/architecture/gpu-device-access.md`](docs/architecture/gpu-device-access.md) defines typed device classes and helper enforcement.
-- [`docs/application-manifest.md`](docs/application-manifest.md) covers schema v3 hardware declarations.
+- [`docs/application-manifest.md`](docs/application-manifest.md) covers schema v4 hardware and external-storage declarations.
 - [`docs/roadmap.md`](docs/roadmap.md) divides Phase 1 into small, gated milestones.
 - [`docs/api-reference.md`](docs/api-reference.md) describes the supported authenticated API surface.
 - [`docs/release/known-limitations.md`](docs/release/known-limitations.md) records honest alpha constraints.

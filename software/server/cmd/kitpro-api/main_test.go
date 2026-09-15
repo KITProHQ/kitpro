@@ -124,8 +124,27 @@ func TestVersionEndpointReportsBuildAndSchemaMetadata(t *testing.T) {
 	req := authenticatedRequest(http.MethodGet, "/api/v1/version", "", session, csrf)
 	rec := httptest.NewRecorder()
 	a.guard(a.version)(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":3`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":4`) {
 		t.Fatalf("version response: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStorageRootRouteSendsOnlyTypedRegistrationFields(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID, Result: map[string]any{"id": "storage-0123456789abcdef"}}, nil
+	}
+	req := authenticatedRequest(http.MethodPost, "/api/v1/storage-roots", "name=Movies+NAS&path=%2Fmnt%2Fmedia&mode=read-only", session, csrf)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	a.guard(a.storageRoots)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("storage registration status %d: %s", rec.Code, rec.Body.String())
+	}
+	if received.Operation != "RegisterStorageRoot" || received.RootName != "Movies NAS" || received.RootPath != "/mnt/media" || received.RootMode != "read-only" || len(received.Storage) != 0 || len(received.ExternalStorage) != 0 {
+		t.Fatalf("unexpected storage registration request: %#v", received)
 	}
 }
 

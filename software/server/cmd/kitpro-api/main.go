@@ -66,6 +66,18 @@ type serviceStatus struct {
 	Endpoint      string `json:"endpoint,omitempty"`
 	ModeLabel     string `json:"-"`
 }
+type trustedRootView struct {
+	ID, Name, Path, Mode, Filesystem string
+	Available, NetworkBacked         bool
+}
+type storageSlotView struct {
+	ID, Purpose, Mode string
+	Roots             []trustedRootView
+}
+type installedStorageView struct {
+	Purpose, RootName, Mode, Path string
+	Available                     bool
+}
 
 func main() {
 	if handleMaintenance(os.Args[1:]) {
@@ -121,6 +133,8 @@ func main() {
 	http.HandleFunc("/api/v1/installations/", a.guard(a.installations))
 	http.HandleFunc("/api/v1/host", a.guard(a.host))
 	http.HandleFunc("/api/v1/hardware", a.guard(a.hardware))
+	http.HandleFunc("/api/v1/storage-roots", a.guard(a.storageRoots))
+	http.HandleFunc("/api/v1/storage-roots/", a.guard(a.storageRoots))
 	http.HandleFunc("/api/v1/reconcile/", a.guard(a.reconcile))
 	http.HandleFunc("/api/v1/backup", a.guard(a.backup))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
@@ -422,7 +436,7 @@ func (a *app) version(w http.ResponseWriter, r *http.Request) {
 		"package_family":         packageFamily(),
 		"platform":               platformName(),
 		"schema_version":         schema,
-		"catalog_schema_version": manifest.HardwareSchemaVersion,
+		"catalog_schema_version": manifest.ExternalStorageSchemaVersion,
 	})
 }
 func (a *app) hardware(w http.ResponseWriter, r *http.Request) {
@@ -436,6 +450,40 @@ func (a *app) hardware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(resp.Result)
+}
+func (a *app) storageRoots(w http.ResponseWriter, r *http.Request) {
+	request := protocol.Request{Version: 1, ID: operations.NewID()}
+	switch r.Method {
+	case http.MethodGet:
+		request.Operation = "ListStorageRoots"
+	case http.MethodPost:
+		if strings.TrimPrefix(r.URL.Path, "/api/v1/storage-roots/") != r.URL.Path && strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/storage-roots/"), "/") != "" {
+			http.Error(w, "method denied", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid storage registration", 400)
+			return
+		}
+		request.Operation, request.RootName, request.RootPath, request.RootMode = "RegisterStorageRoot", strings.TrimSpace(r.FormValue("name")), strings.TrimSpace(r.FormValue("path")), r.FormValue("mode")
+	case http.MethodDelete:
+		request.Operation = "RemoveStorageRoot"
+		request.RootID = strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/storage-roots/"), "/")
+	default:
+		http.Error(w, "method denied", http.StatusMethodNotAllowed)
+		return
+	}
+	response, err := a.callHelper(request)
+	if err != nil {
+		http.Error(w, "storage helper unavailable", 503)
+		return
+	}
+	if !response.OK {
+		http.Error(w, response.Error, 400)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response.Result)
 }
 func (a *app) reconcile(w http.ResponseWriter, r *http.Request) {
 	inst := strings.TrimPrefix(r.URL.Path, "/api/v1/reconcile/")
@@ -485,6 +533,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		ID, Name, Description, Release, Category, Initials, Hardware string
 		InstalledCount                                               int
 		HardwareUnavailable                                          bool
+		StorageSlots                                                 []storageSlotView
 	}
 	type installationView struct {
 		ID, Name, Description, Category, Initials, State, StateLabel, StateClass, AppID, Release string
@@ -493,6 +542,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		UpdateAvailable                                                                          bool
 		Services                                                                                 []serviceStatus
 		Components                                                                               []string
+		Storage                                                                                  []installedStorageView
 	}
 	type operationView struct {
 		Title, Initial, StatusLabel, StatusClass, Summary, RequestedAt, TimeLabel string
@@ -501,6 +551,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		Label, Headline, Description, Docker, Helper, Class string
 	}
 
+	storageRoots := a.trustedStorageRoots()
 	installations := []installationView{}
 	installedCountByApp := map[string]int{}
 	runningCount, privateCount, attentionCount, updateCount := 0, 0, 0, 0
@@ -537,6 +588,9 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			view.HardwareLabel, view.HardwareClass, view.HardwareID = a.installationHardware(id, appID)
+			if entry, ok := a.catalog[appID]; ok {
+				view.Storage = a.installationStorage(id, entry.Manifest)
+			}
 			view.StateLabel, view.StateClass = statePresentation(desired)
 			if desired == "running" {
 				runningCount++
@@ -591,7 +645,17 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		apps = append(apps, appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID]})
+		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID]}
+		for _, slot := range m.ExternalStorage {
+			item := storageSlotView{ID: slot.ID, Purpose: slot.Purpose, Mode: slot.Mode}
+			for _, root := range storageRoots {
+				if root.Available && (slot.Mode == "read-only" || root.Mode == "read-write") {
+					item.Roots = append(item.Roots, root)
+				}
+			}
+			app.StorageSlots = append(app.StorageSlots, item)
+		}
+		apps = append(apps, app)
 	}
 	records, _ := operations.List(r.Context(), a.db)
 	rows := make([]operationView, 0, len(records))
@@ -637,7 +701,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.HardwareSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
+	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.ExternalStorageSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
 		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
 	}
 }
@@ -659,6 +723,64 @@ func (a *app) hardwareAvailability() (bool, string) {
 		return ready, vendor
 	}
 	return true, vendor
+}
+
+func (a *app) trustedStorageRoots() []trustedRootView {
+	response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "ListStorageRoots"})
+	if err != nil || !response.OK {
+		return nil
+	}
+	result, _ := response.Result.(map[string]any)
+	items, _ := result["roots"].([]any)
+	views := []trustedRootView{}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		view := trustedRootView{}
+		view.ID, _ = item["id"].(string)
+		view.Name, _ = item["name"].(string)
+		view.Path, _ = item["path"].(string)
+		view.Mode, _ = item["mode"].(string)
+		view.Filesystem, _ = item["filesystem"].(string)
+		view.Available, _ = item["available"].(bool)
+		view.NetworkBacked, _ = item["network_backed"].(bool)
+		views = append(views, view)
+	}
+	return views
+}
+
+func (a *app) installationStorage(installation string, m manifest.Manifest) []installedStorageView {
+	response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "GetStorageAssignments", InstanceID: installation})
+	if err != nil || !response.OK {
+		return nil
+	}
+	purposes := map[string]string{}
+	for _, slot := range m.ExternalStorage {
+		purposes[slot.ID] = slot.Purpose
+	}
+	for _, component := range m.Components {
+		for _, slot := range component.ExternalStorage {
+			purposes[component.ID+"/"+slot.ID] = slot.Purpose
+		}
+	}
+	result, _ := response.Result.(map[string]any)
+	items, _ := result["assignments"].([]any)
+	views := []installedStorageView{}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		component, _ := item["component"].(string)
+		slot, _ := item["slot_id"].(string)
+		key := slot
+		if component != "" {
+			key = component + "/" + slot
+		}
+		view := installedStorageView{Purpose: purposes[key]}
+		view.RootName, _ = item["root_name"].(string)
+		view.Mode, _ = item["mode"].(string)
+		view.Path, _ = item["path"].(string)
+		view.Available, _ = item["available"].(bool)
+		views = append(views, view)
+	}
+	return views
 }
 
 func (a *app) installationHardware(installation, appID string) (label, class, stableID string) {
@@ -931,6 +1053,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, pe.Error(), 500)
 		return
 	}
+	_ = r.ParseForm()
 	opType := r.URL.Query().Get("operation_type")
 	if opType == "" {
 		opType = "InstallApplication"
@@ -965,6 +1088,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	}
 	var e error
 	helperRejected := false
+	var helperRequest protocol.Request
 	{
 		helperOperation := "InstallApplication"
 		if opType == "ConfigureServiceExposure" {
@@ -973,6 +1097,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			helperOperation = "UpdateApplication"
 		}
 		q := protocol.Request{Version: 1, ID: id, Operation: helperOperation, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
+		helperRequest = q
 		for _, item := range plan.Hardware {
 			q.Hardware = append(q.Hardware, protocol.HardwareRequirement{Class: item.Class, Optional: item.Optional, CPUFallback: item.CPUFallback})
 		}
@@ -995,6 +1120,13 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		for _, x := range plan.Storage {
 			q.Storage = append(q.Storage, protocol.StorageMount{ID: x.ID, ContainerPath: x.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + x.ID, ReadOnly: x.ReadOnly})
 		}
+		for _, slot := range plan.ExternalStorage {
+			rootID := strings.TrimSpace(r.FormValue("storage_" + slot.ID))
+			if rootID == "" {
+				_ = a.db.QueryRowContext(r.Context(), `SELECT root_id FROM installation_storage_selections WHERE installation_id=? AND component_id='' AND slot_id=?`, inst, slot.ID).Scan(&rootID)
+			}
+			q.ExternalStorage = append(q.ExternalStorage, protocol.ExternalStorageBinding{SlotID: slot.ID, RootID: rootID})
+		}
 		for _, s := range plan.Services {
 			q.Services = append(q.Services, protocol.Service{ID: s.ID, Protocol: s.Protocol, ContainerPort: s.ContainerPort})
 		}
@@ -1012,12 +1144,20 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			for _, storage := range component.Storage {
 				pc.Storage = append(pc.Storage, protocol.StorageMount{ID: storage.ID, ContainerPath: storage.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + component.ID + "/" + storage.ID, ReadOnly: storage.ReadOnly})
 			}
+			for _, slot := range component.ExternalStorage {
+				rootID := strings.TrimSpace(r.FormValue("storage_" + component.ID + "_" + slot.ID))
+				if rootID == "" {
+					_ = a.db.QueryRowContext(r.Context(), `SELECT root_id FROM installation_storage_selections WHERE installation_id=? AND component_id=? AND slot_id=?`, inst, component.ID, slot.ID).Scan(&rootID)
+				}
+				pc.ExternalStorage = append(pc.ExternalStorage, protocol.ExternalStorageBinding{SlotID: slot.ID, RootID: rootID})
+			}
 			for _, service := range component.Services {
 				pc.Services = append(pc.Services, protocol.Service{ID: service.ID, Protocol: service.Protocol, ContainerPort: service.ContainerPort})
 			}
 			q.Components = append(q.Components, pc)
 		}
 		{
+			helperRequest = q
 			var resp protocol.Response
 			resp, e = a.callHelper(q)
 			if e == nil && !resp.OK {
@@ -1039,7 +1179,17 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			// generation 1 rather than inventing a discarded runtime generation.
 			_, _ = a.db.ExecContext(r.Context(), "UPDATE installations SET desired_state='runtime_removed',runtime_generation=0,updated_at=? WHERE installation_id=?", now, inst)
 		}
-	} else if existing != "" {
+	} else {
+		for _, binding := range helperRequest.ExternalStorage {
+			_, _ = a.db.ExecContext(r.Context(), `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,'',?,?)`, inst, binding.SlotID, binding.RootID)
+		}
+		for _, component := range helperRequest.Components {
+			for _, binding := range component.ExternalStorage {
+				_, _ = a.db.ExecContext(r.Context(), `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,?,?,?)`, inst, component.ID, binding.SlotID, binding.RootID)
+			}
+		}
+	}
+	if e == nil && existing != "" {
 		updateSQL := "UPDATE installations SET desired_state='running',runtime_generation=?,updated_at=?"
 		args := []any{gen, now}
 		if opType == "UpdateApplication" {
@@ -1084,6 +1234,9 @@ func operationErrorCategory(err error) string {
 		return ""
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "storage unavailable") || strings.Contains(message, "storage identity changed") {
+		return "storage_unavailable"
+	}
 	if strings.Contains(message, "address already in use") || strings.Contains(message, "port is already allocated") || strings.Contains(message, "port collision") {
 		return "port_collision"
 	}
@@ -1095,6 +1248,8 @@ func operationErrorCategory(err error) string {
 
 func safeOperationSummary(category string) string {
 	switch category {
+	case "storage_unavailable":
+		return "storage unavailable"
 	case "port_collision":
 		return "host port unavailable"
 	case "policy_rejected":

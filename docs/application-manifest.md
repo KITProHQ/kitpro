@@ -5,6 +5,30 @@ constrained application definitions, not Docker Compose. Unknown fields,
 duplicate keys, oversized documents, unknown schema versions, and invalid
 values are rejected before a helper request is created.
 
+## External storage (schema version 4)
+
+`external_storage` declares imported-data slots. It never contains a host path.
+
+```json
+{
+  "external_storage": [{
+    "id": "media",
+    "container_path": "/media",
+    "mode": "read-only",
+    "required": true,
+    "purpose": "Media library"
+  }]
+}
+```
+
+`mode` is `read-only` or `read-write`. A read-write slot still requires a root
+whose administrator-approved ceiling is read-write. IDs and container targets
+are unique and helper-validated. Optional slots set `required` to false.
+
+Invalid manifests include `host_path`, raw bind syntax, relative or protected
+container paths, unrecognized modes, duplicate slots, and external storage in
+schema versions 1–3.
+
 ## Hardware schema (version 3)
 
 Schema version 3 adds a `hardware` array at the application or component level.

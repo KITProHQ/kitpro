@@ -18,26 +18,31 @@ type Request struct {
 	Operation string `json:"operation"`
 	// InstanceID is the stable installed-application identity; runtime
 	// incarnations are distinguished by RuntimeGeneration.
-	InstanceID        string                `json:"instance_id"`
-	RuntimeGeneration int                   `json:"runtime_generation,omitempty"`
-	Image             string                `json:"image,omitempty"`
-	ApplicationID     string                `json:"application_id,omitempty"`
-	ReleaseID         string                `json:"release_id,omitempty"`
-	NetworkName       string                `json:"network_name,omitempty"`
-	DataPath          string                `json:"data_path,omitempty"`
-	RestartPolicy     string                `json:"restart_policy,omitempty"`
-	Command           []string              `json:"command,omitempty"`
-	Environment       []EnvVar              `json:"environment,omitempty"`
-	Storage           []StorageMount        `json:"storage,omitempty"`
-	ExposureMode      string                `json:"exposure_mode,omitempty"`
-	HostAddress       string                `json:"host_address,omitempty"`
-	HostPort          int                   `json:"host_port,omitempty"`
-	ServiceID         string                `json:"service_id,omitempty"`
-	ContainerPort     int                   `json:"container_port,omitempty"`
-	ServiceProtocol   string                `json:"service_protocol,omitempty"`
-	Services          []Service             `json:"services,omitempty"`
-	Components        []Component           `json:"components,omitempty"`
-	Hardware          []HardwareRequirement `json:"hardware,omitempty"`
+	InstanceID        string                   `json:"instance_id"`
+	RuntimeGeneration int                      `json:"runtime_generation,omitempty"`
+	Image             string                   `json:"image,omitempty"`
+	ApplicationID     string                   `json:"application_id,omitempty"`
+	ReleaseID         string                   `json:"release_id,omitempty"`
+	NetworkName       string                   `json:"network_name,omitempty"`
+	DataPath          string                   `json:"data_path,omitempty"`
+	RestartPolicy     string                   `json:"restart_policy,omitempty"`
+	Command           []string                 `json:"command,omitempty"`
+	Environment       []EnvVar                 `json:"environment,omitempty"`
+	Storage           []StorageMount           `json:"storage,omitempty"`
+	ExposureMode      string                   `json:"exposure_mode,omitempty"`
+	HostAddress       string                   `json:"host_address,omitempty"`
+	HostPort          int                      `json:"host_port,omitempty"`
+	ServiceID         string                   `json:"service_id,omitempty"`
+	ContainerPort     int                      `json:"container_port,omitempty"`
+	ServiceProtocol   string                   `json:"service_protocol,omitempty"`
+	Services          []Service                `json:"services,omitempty"`
+	Components        []Component              `json:"components,omitempty"`
+	Hardware          []HardwareRequirement    `json:"hardware,omitempty"`
+	ExternalStorage   []ExternalStorageBinding `json:"external_storage,omitempty"`
+	RootID            string                   `json:"root_id,omitempty"`
+	RootName          string                   `json:"root_name,omitempty"`
+	RootPath          string                   `json:"root_path,omitempty"`
+	RootMode          string                   `json:"root_mode,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -51,21 +56,26 @@ type StorageMount struct {
 	HostPath      string `json:"host_path"`
 	ReadOnly      bool   `json:"read_only,omitempty"`
 }
+type ExternalStorageBinding struct {
+	SlotID string `json:"slot_id"`
+	RootID string `json:"root_id"`
+}
 type Service struct {
 	ID            string `json:"id"`
 	Protocol      string `json:"protocol"`
 	ContainerPort int    `json:"container_port"`
 }
 type Component struct {
-	ID          string                `json:"id"`
-	Image       string                `json:"image"`
-	Command     []string              `json:"command,omitempty"`
-	Environment []EnvVar              `json:"environment,omitempty"`
-	Storage     []StorageMount        `json:"storage,omitempty"`
-	Services    []Service             `json:"services,omitempty"`
-	DependsOn   []string              `json:"depends_on,omitempty"`
-	Restart     string                `json:"restart,omitempty"`
-	Hardware    []HardwareRequirement `json:"hardware,omitempty"`
+	ID              string                   `json:"id"`
+	Image           string                   `json:"image"`
+	Command         []string                 `json:"command,omitempty"`
+	Environment     []EnvVar                 `json:"environment,omitempty"`
+	Storage         []StorageMount           `json:"storage,omitempty"`
+	Services        []Service                `json:"services,omitempty"`
+	DependsOn       []string                 `json:"depends_on,omitempty"`
+	Restart         string                   `json:"restart,omitempty"`
+	Hardware        []HardwareRequirement    `json:"hardware,omitempty"`
+	ExternalStorage []ExternalStorageBinding `json:"external_storage,omitempty"`
 }
 type HardwareRequirement struct {
 	Class       string `json:"class"`

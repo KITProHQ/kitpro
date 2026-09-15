@@ -32,8 +32,9 @@ bindings. Service exposure is an installation policy and defaults to internal.
 | Open WebUI | 0.11.3 | `ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c` | `data` at `/app/backend/data` | HTTP 8080 | Open WebUI license |
 | IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
+| Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
 
-The ten single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The eleven single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -65,12 +66,25 @@ Open WebUI and Ollama remain independent installations. KITPro installation netw
 | LocalAI | REJECT FOR CURRENT MODEL | The pinned official server image fetches an unsigned backend from a mutable `latest` OCI tag during model installation, breaking end-to-end immutable provenance. |
 | Open WebUI and Ollama pairing | REJECT FOR CURRENT MODEL | Safe cross-installation service discovery is not yet available; independent applications remain supported. |
 | ComfyUI | REJECT FOR CURRENT MODEL | Upstream does not publish a stable official production container suitable for an immutable trusted release. |
-| Jellyfin | REJECT FOR CURRENT MODEL | A useful deployment requires media-library mounts; trusted external storage/import is not implemented. |
+| Jellyfin | ACCEPT | Schema v4 binds one administrator-approved media root read-only while config and cache remain KITPro-managed. |
 | Frigate | REJECT FOR CURRENT MODEL | Camera configuration, shared-memory sizing, and Coral/USB/PCI device needs exceed current bounded classes. |
 | whisper.cpp server | REJECT FOR CURRENT MODEL | Official images track branches/commits and require a model bootstrap/selection contract KITPro does not yet provide. |
 | InvokeAI | REJECT FOR CURRENT MODEL | Official GPU container tags track main/commit builds rather than a stable release identity suitable for the trusted catalog. |
 
 ## Candidate decision
+
+For the storage and media milestone, Jellyfin is **accepted** with one required
+read-only trusted media root. Syncthing 2.1.5 is **rejected for the current
+model**: its authoritative container exposes the GUI on 8384/TCP, synchronization
+on 22000/TCP and UDP, and discovery on 21027/UDP, while upstream strongly
+recommends host networking for correct LAN discovery. KITPro has neither host
+networking nor typed UDP multi-service exposure, and does not ship an incomplete
+GUI-only topology. Immich is **rejected for the current model**: its supported
+production deployment is a Compose stack with server, PostgreSQL, Redis, and
+machine-learning components; its upload library needs read-write lifecycle
+semantics and PostgreSQL must remain on a compatible local filesystem. The
+current milestone does not distort that topology into a simpler unsupported
+deployment.
 
 Linkding 1.46.2 is **rejected for the current model**. Its supported initial
 administrator paths require either an interactive `createsuperuser` command or
@@ -116,6 +130,8 @@ The following official sources were retrieved on 2026-09-13:
 - LocalAI: [4.9.0 release](https://github.com/mudler/LocalAI/releases/tag/v4.9.0), [official container guide](https://localai.io/basics/container/), [authentication](https://localai.io/advanced/auth/), [model management](https://localai.io/models/)
 - ComfyUI: [official documentation](https://docs.comfy.org/)
 - Jellyfin: [official container installation](https://jellyfin.org/docs/general/installation/container/)
+- Syncthing: [official container guide](https://github.com/syncthing/syncthing/blob/main/README-Docker.md), [official Dockerfile and ports](https://github.com/syncthing/syncthing/blob/main/Dockerfile)
+- Immich: [official Docker Compose installation](https://docs.immich.app/install/docker-compose/), [production requirements](https://docs.immich.app/install/requirements/)
 - Frigate: [official installation](https://docs.frigate.video/frigate/installation/)
 - whisper.cpp: [official repository and container definitions](https://github.com/ggml-org/whisper.cpp)
 - InvokeAI: [official Docker documentation](https://github.com/invoke-ai/InvokeAI/blob/main/docker/README.md)

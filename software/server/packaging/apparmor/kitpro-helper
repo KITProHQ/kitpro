@@ -7,6 +7,16 @@
   /run/kitpro/** rw,
   /var/lib/kitpro-helper/** rwk,
   /srv/kitpro/** rwk,
+  # Directory metadata only. The helper validates registered roots but never
+  # reads imported content; Docker performs the constrained bind mount.
+  /mnt/ r,
+  /mnt/**/ r,
+  /media/ r,
+  /media/**/ r,
+  /data/ r,
+  /data/**/ r,
+  /srv/ r,
+  /srv/**/ r,
   /var/run/docker.sock rw,
   /run/docker.sock rw,
   /proc/** r,

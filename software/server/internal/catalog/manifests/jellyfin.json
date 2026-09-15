@@ -1,0 +1,20 @@
+{
+  "schema_version": 4,
+  "id": "jellyfin",
+  "name": "Jellyfin",
+  "description": "Stream a private media library while keeping source media outside KITPro's lifecycle.",
+  "releases": [
+    {"version": "12.1", "registry": "docker.io", "repository": "jellyfin/jellyfin", "digest": "sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b", "platform": "linux/amd64"}
+  ],
+  "storage": [
+    {"id": "config", "container_path": "/config", "persistent": true, "read_only": false},
+    {"id": "cache", "container_path": "/cache", "persistent": true, "read_only": false}
+  ],
+  "external_storage": [
+    {"id": "media", "container_path": "/media", "mode": "read-only", "required": true, "purpose": "Media library"}
+  ],
+  "services": [
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8096}
+  ],
+  "restart": "unless-stopped"
+}

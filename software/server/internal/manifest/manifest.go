@@ -14,23 +14,25 @@ import (
 const SchemaVersion = 1
 const MultiContainerSchemaVersion = 2
 const HardwareSchemaVersion = 3
+const ExternalStorageSchemaVersion = 4
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 type Manifest struct {
-	SchemaVersion int           `json:"schema_version"`
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	Description   string        `json:"description,omitempty"`
-	Releases      []Release     `json:"releases"`
-	Storage       []Storage     `json:"storage,omitempty"`
-	Environment   []Env         `json:"environment,omitempty"`
-	Command       []string      `json:"command,omitempty"`
-	Restart       string        `json:"restart,omitempty"`
-	Services      []Service     `json:"services,omitempty"`
-	Components    []Component   `json:"components,omitempty"`
-	Hardware      []Accelerator `json:"hardware,omitempty"`
+	SchemaVersion   int               `json:"schema_version"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Description     string            `json:"description,omitempty"`
+	Releases        []Release         `json:"releases"`
+	Storage         []Storage         `json:"storage,omitempty"`
+	Environment     []Env             `json:"environment,omitempty"`
+	Command         []string          `json:"command,omitempty"`
+	Restart         string            `json:"restart,omitempty"`
+	Services        []Service         `json:"services,omitempty"`
+	Components      []Component       `json:"components,omitempty"`
+	Hardware        []Accelerator     `json:"hardware,omitempty"`
+	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
 }
 type Release struct {
 	Version    string `json:"version"`
@@ -44,6 +46,16 @@ type Storage struct {
 	ContainerPath string `json:"container_path"`
 	Persistent    bool   `json:"persistent"`
 	ReadOnly      bool   `json:"read_only"`
+}
+
+// ExternalStorage declares a logical imported-data slot. Host paths and bind
+// options are deliberately absent and are resolved by the privileged helper.
+type ExternalStorage struct {
+	ID            string `json:"id"`
+	ContainerPath string `json:"container_path"`
+	Mode          string `json:"mode"`
+	Required      bool   `json:"required,omitempty"`
+	Purpose       string `json:"purpose"`
 }
 type Env struct {
 	Name     string `json:"name"`
@@ -59,15 +71,16 @@ type Service struct {
 	ContainerPort int    `json:"container_port"`
 }
 type Component struct {
-	ID          string        `json:"id"`
-	Release     string        `json:"release"`
-	Storage     []Storage     `json:"storage,omitempty"`
-	Environment []Env         `json:"environment,omitempty"`
-	Command     []string      `json:"command,omitempty"`
-	Services    []Service     `json:"services,omitempty"`
-	DependsOn   []string      `json:"depends_on,omitempty"`
-	Restart     string        `json:"restart,omitempty"`
-	Hardware    []Accelerator `json:"hardware,omitempty"`
+	ID              string            `json:"id"`
+	Release         string            `json:"release"`
+	Storage         []Storage         `json:"storage,omitempty"`
+	Environment     []Env             `json:"environment,omitempty"`
+	Command         []string          `json:"command,omitempty"`
+	Services        []Service         `json:"services,omitempty"`
+	DependsOn       []string          `json:"depends_on,omitempty"`
+	Restart         string            `json:"restart,omitempty"`
+	Hardware        []Accelerator     `json:"hardware,omitempty"`
+	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
 }
 
 // Accelerator names a helper-owned device class. Host paths, groups, Docker
@@ -86,20 +99,22 @@ type Plan struct {
 	Components                                                                        []Component
 	ResolvedComponents                                                                []ResolvedComponent
 	Hardware                                                                          []Accelerator
+	ExternalStorage                                                                   []ExternalStorage
 }
 
 // ResolvedComponent is the helper-facing, digest-pinned component plan. It is
 // intentionally explicit so a catalog cannot smuggle arbitrary Docker fields.
 type ResolvedComponent struct {
-	ID          string
-	ImageDigest string
-	Command     []string
-	Environment []Env
-	Storage     []Storage
-	Services    []Service
-	DependsOn   []string
-	Restart     string
-	Hardware    []Accelerator
+	ID              string
+	ImageDigest     string
+	Command         []string
+	Environment     []Env
+	Storage         []Storage
+	Services        []Service
+	DependsOn       []string
+	Restart         string
+	Hardware        []Accelerator
+	ExternalStorage []ExternalStorage
 }
 
 func Parse(data []byte) (Manifest, error) {
@@ -121,7 +136,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -135,6 +150,12 @@ func Validate(m Manifest) error {
 	}
 	if m.SchemaVersion < HardwareSchemaVersion && (len(m.Hardware) != 0 || componentsHaveHardware(m.Components)) {
 		return fmt.Errorf("hardware requires schema version 3")
+	}
+	if m.SchemaVersion < ExternalStorageSchemaVersion && (len(m.ExternalStorage) != 0 || componentsHaveExternalStorage(m.Components)) {
+		return fmt.Errorf("external storage requires schema version 4")
+	}
+	if err := validateExternalStorage(m.ExternalStorage, m.Storage); err != nil {
+		return err
 	}
 	if err := validateHardware(m.Hardware); err != nil {
 		return err
@@ -224,6 +245,9 @@ func Validate(m Manifest) error {
 		if err := validateHardware(c.Hardware); err != nil {
 			return fmt.Errorf("component %s: %w", c.ID, err)
 		}
+		if err := validateExternalStorage(c.ExternalStorage, c.Storage); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
 	}
 	for _, c := range m.Components {
 		for _, dep := range c.DependsOn {
@@ -233,6 +257,39 @@ func Validate(m Manifest) error {
 		}
 	}
 	return nil
+}
+
+func validateExternalStorage(items []ExternalStorage, managed []Storage) error {
+	if len(items) > 8 {
+		return fmt.Errorf("too many external storage slots")
+	}
+	seen := map[string]bool{}
+	targets := map[string]bool{}
+	for _, item := range managed {
+		seen[item.ID] = true
+		targets[item.ContainerPath] = true
+	}
+	for _, item := range items {
+		if !idPattern.MatchString(item.ID) || seen[item.ID] || targets[item.ContainerPath] || (item.Mode != "read-only" && item.Mode != "read-write") || !safeContainerPath(item.ContainerPath) || item.Purpose == "" || len(item.Purpose) > 80 || strings.ContainsAny(item.Purpose, "\r\n") {
+			return fmt.Errorf("invalid external storage declaration")
+		}
+		seen[item.ID] = true
+		targets[item.ContainerPath] = true
+	}
+	return nil
+}
+
+func safeContainerPath(path string) bool {
+	return strings.HasPrefix(path, "/") && !strings.Contains(path, "..") && path != "/" && !strings.HasPrefix(path, "/proc") && !strings.HasPrefix(path, "/sys") && !strings.HasPrefix(path, "/dev") && !strings.HasPrefix(path, "/etc") && !strings.Contains(path, "docker.sock")
+}
+
+func componentsHaveExternalStorage(components []Component) bool {
+	for _, component := range components {
+		if len(component.ExternalStorage) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func validateHardware(items []Accelerator) error {
@@ -314,7 +371,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 	if !idPattern.MatchString(instance) || network == "" || strings.ContainsAny(network, "/.\\") || !strings.HasPrefix(dataPath, "/srv/kitpro/apps/") || strings.Contains(dataPath, "..") || strings.ContainsAny(dataPath, "\\\r\n") {
 		return Plan{}, fmt.Errorf("invalid instance paths")
 	}
-	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...)}
+	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...)}
 	for _, c := range m.Components {
 		var cr Release
 		for _, candidate := range m.Releases {
@@ -323,7 +380,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 				break
 			}
 		}
-		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart, Hardware: append([]Accelerator(nil), c.Hardware...)}
+		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart, Hardware: append([]Accelerator(nil), c.Hardware...), ExternalStorage: append([]ExternalStorage(nil), c.ExternalStorage...)}
 		p.ResolvedComponents = append(p.ResolvedComponents, resolved)
 	}
 	return p, nil

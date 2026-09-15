@@ -1,14 +1,26 @@
 # KITPro Server threat model
 
-## Typed accelerator boundary
+## Implemented trusted-resource boundaries
 
 Accelerators add a device-mediated path into a container, so the helper treats them as privileged owned resources. Only registered classes are representable. The API supplies no host path, and the helper compares its request with the embedded manifest before fresh sysfs/procfs discovery. Trusted state records stable identity and exact mappings. Device disappearance, renumbering, vendor mismatch, extra mapping, component spread, and restore onto different hardware fail closed or reconcile as security drift. KITPro does not install drivers or vendor runtimes.
 
+Imported storage follows the same semantic boundary. An administrator may
+register an absolute existing directory, but applications and manifests refer
+only to logical slots and trusted-root IDs. The helper canonicalizes the root,
+rejects protected host trees and symbolic-link aliases, records filesystem and
+inode identity, and accepts only dedicated children of `/mnt`, `/media`,
+`/data`, or `/srv`. It then constructs the exact Docker bind. Required storage that is
+missing or has changed identity blocks start and recreation. An extra bind,
+wrong target, or read-only bind changed to read-write is security drift.
+
 ## 1. Purpose
 
-This document defines the security threats that KITPro Server must address before implementation. It turns [ADR-0018](../decisions/0018-security-boundaries.md), the [privileged-helper protocol](../decisions/0003-privileged-helper-protocol.md), the [Docker integration](../decisions/0004-docker-integration.md), the [durable state and reconciliation model](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0019](../decisions/0019-helper-mandatory-access-control.md) into concrete attacker paths, expected controls, and unresolved questions.
+This document defines the security threats KITPro Server addresses. It turns [ADR-0018](../decisions/0018-security-boundaries.md), the [privileged-helper protocol](../decisions/0003-privileged-helper-protocol.md), the [Docker integration](../decisions/0004-docker-integration.md), the [durable state and reconciliation model](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0019](../decisions/0019-helper-mandatory-access-control.md) into concrete attacker paths, implemented controls, and unresolved questions.
 
-This is a design threat model, not a security assessment of running software. KITPro has no application implementation to test yet. Each control remains a requirement until tests prove it on the supported host.
+This remains a design threat model rather than a guarantee that application
+images or the Linux container boundary are invulnerable. The repository's
+dated validation records identify which controls have live supported-host
+evidence.
 
 ## 2. Scope
 

@@ -44,6 +44,8 @@ The first slice does not need fleet management, a large catalog, custom hardware
 
 The 20 GiB free-space figure in ADR-0017 is a KITPro and system-capacity floor. Application data, media, photos, databases, backups, and other workload content need separate capacity planning.
 
+Trusted external data follows the [trusted storage architecture](architecture/trusted-storage.md): administrators register roots, manifests request logical slots, and the helper owns canonical resolution, filesystem identity, mount mode, and reconciliation. Imported data is never part of application lifecycle deletion.
+
 ## Fixed constraints
 
 Any proposed architecture must preserve these constraints:

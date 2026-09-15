@@ -46,6 +46,7 @@ func main() {
 	if e = state.Migrate(context.Background(), db, true); e != nil {
 		fatal(e.Error())
 	}
+	stopInstallationsWithUnavailableStorage(db)
 	var l net.Listener
 	if os.Getenv("LISTEN_FDS") == "1" {
 		l, e = net.FileListener(os.NewFile(3, "kitpro-helper.socket"))
@@ -207,6 +208,34 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 				break
 			}
 			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		case "RegisterStorageRoot":
+			result, err := registerStorageRoot(db, r)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+			}
+		case "ListStorageRoots":
+			result, err := listStorageRoots(db)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "storage inventory unavailable"})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"roots": result}})
+			}
+		case "RemoveStorageRoot":
+			err := removeStorageRoot(db, r.RootID)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "removed"}})
+			}
+		case "GetStorageAssignments":
+			result, err := storageAssignments(db, r.InstanceID)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "storage assignments unavailable"})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"assignments": result}})
+			}
 		case "BackupHelperState":
 			path, be := backup.Vacuum(context.Background(), db, "/var/lib/kitpro-helper/backups", r.ID+".db")
 			if be != nil {
@@ -282,6 +311,9 @@ func validateApplicationPlan(r protocol.Request) error {
 	}
 	if len(r.Command) != len(entry.Manifest.Command) || len(r.Environment) != len(entry.Manifest.Environment) || len(r.Storage) != len(entry.Manifest.Storage) || len(r.Services) != len(entry.Manifest.Services) {
 		return fmt.Errorf("trusted application plan shape mismatch")
+	}
+	if !externalBindingsEqual(r.ExternalStorage, entry.Manifest.ExternalStorage) {
+		return fmt.Errorf("trusted external storage requirement mismatch")
 	}
 	if !hardwareRequirementsEqual(r.Hardware, entry.Manifest.Hardware) {
 		return fmt.Errorf("trusted hardware requirement mismatch")
@@ -366,6 +398,18 @@ func hardwareRequirementsEqual(got []protocol.HardwareRequirement, want []manife
 	}
 	for i := range want {
 		if got[i].Class != want[i].Class || got[i].Optional != want[i].Optional || got[i].CPUFallback != want[i].CPUFallback {
+			return false
+		}
+	}
+	return true
+}
+
+func externalBindingsEqual(got []protocol.ExternalStorageBinding, want []manifest.ExternalStorage) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i].SlotID != want[i].ID || (want[i].Required && got[i].RootID == "") {
 			return false
 		}
 	}
@@ -564,6 +608,9 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 		if !hardwareRequirementsEqual(got.Hardware, want.Hardware) {
 			return fmt.Errorf("component %s hardware mismatch", got.ID)
 		}
+		if !externalBindingsEqual(got.ExternalStorage, want.ExternalStorage) {
+			return fmt.Errorf("component %s external storage mismatch", got.ID)
+		}
 		for j, arg := range want.Command {
 			if got.Command[j] != arg || arg == "/bin/sh" || arg == "/bin/bash" || arg == "-c" || arg == "" {
 				return fmt.Errorf("component %s command mismatch", got.ID)
@@ -673,6 +720,12 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 		return
 	}
+	entries, _ := catalog.Load()
+	externalMounts, e := resolveExternalMounts(db, r.InstanceID, "", gen, entries[r.ApplicationID].Manifest.ExternalStorage, r.ExternalStorage)
+	if e != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
+		return
+	}
 	// Exposure changes and explicit recreation replace only the previously
 	// trusted runtime; persistent storage remains untouched.
 	var oldID, oldNetwork string
@@ -708,6 +761,7 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	for _, s := range r.Storage {
 		mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
 	}
+	mounts = append(mounts, externalMounts...)
 	env, e := resolvedEnvironment(db, r.InstanceID, "", r.Environment)
 	if e != nil {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
@@ -740,6 +794,9 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		}
 		if txErr == nil {
 			txErr = persistHardware(tx, r.InstanceID, "", gen, hw)
+		}
+		if txErr == nil {
+			txErr = persistExternalBindings(tx, r.InstanceID, "", gen, entries[r.ApplicationID].Manifest.ExternalStorage, r.ExternalStorage)
 		}
 		if txErr == nil {
 			txErr = tx.Commit()
@@ -802,6 +859,20 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		return
 	}
 	d := docker.New()
+	entries, _ := catalog.Load()
+	manifestComponents := map[string]manifest.Component{}
+	for _, component := range entries[r.ApplicationID].Manifest.Components {
+		manifestComponents[component.ID] = component
+	}
+	externalByComponent := map[string][]docker.StorageMount{}
+	for _, component := range r.Components {
+		resolved, resolveErr := resolveExternalMounts(db, r.InstanceID, component.ID, r.RuntimeGeneration, manifestComponents[component.ID].ExternalStorage, component.ExternalStorage)
+		if resolveErr != nil {
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: resolveErr.Error()})
+			return
+		}
+		externalByComponent[component.ID] = resolved
+	}
 	// Replace the prior trusted component set for this installation. The
 	// generation and network names differ, so persistent storage is untouched.
 	if oldRows, qe := db.Query("SELECT container_id,network_name FROM component_ownership WHERE installation_id=?", r.InstanceID); qe == nil {
@@ -874,6 +945,7 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		for _, s := range component.Storage {
 			mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
 		}
+		mounts = append(mounts, externalByComponent[component.ID]...)
 		bindings := map[string][]docker.PortBinding{}
 		for _, service := range component.Services {
 			if service.ID == r.ServiceID {
@@ -908,6 +980,9 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		}
 		if txErr == nil {
 			txErr = persistHardware(tx, r.InstanceID, component.ID, r.RuntimeGeneration, hardwareByComponent[component.ID])
+		}
+		if txErr == nil {
+			txErr = persistExternalBindings(tx, r.InstanceID, component.ID, r.RuntimeGeneration, manifestComponents[component.ID].ExternalStorage, component.ExternalStorage)
 		}
 	}
 	if txErr == nil {
@@ -1001,6 +1076,11 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 				classification, summary = "security_drift", he.Error()
 				break
 			}
+			application, _ := labels["com.kitpro.application"].(string)
+			if se := validateStorageObservation(db, r.InstanceID, componentID, application, host); se != nil {
+				classification, summary = "security_drift", se.Error()
+				break
+			}
 			bindings, _ := host["PortBindings"].(map[string]any)
 			if r.ExposureMode == "internal" {
 				if len(bindings) != 0 {
@@ -1053,6 +1133,10 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 				host, _ := got["HostConfig"].(map[string]any)
 				if he := validateHardwareObservation(db, r.InstanceID, "", host); he != nil {
 					classification, summary = "security_drift", he.Error()
+				}
+				application, _ := labels["com.kitpro.application"].(string)
+				if se := validateStorageObservation(db, r.InstanceID, "", application, host); se != nil {
+					classification, summary = "security_drift", se.Error()
 				}
 				pb, _ := host["PortBindings"].(map[string]any)
 				if !exposure.ObservedBindingsExact(exposure.Assignment{Mode: exposure.Mode(mode), Address: hostAddress, Port: hostPort}, containerPort, serviceProtocol, pb) {
@@ -1174,6 +1258,10 @@ func markRuntimeRemoved(db *sql.DB, instanceID string) error {
 	return err
 }
 func start(c net.Conn, db *sql.DB, r protocol.Request) {
+	if err := validateInstallationStorageAvailable(db, r.InstanceID); err != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "storage unavailable"})
+		return
+	}
 	var componentCount int
 	_ = db.QueryRow("SELECT COUNT(*) FROM component_ownership WHERE installation_id=?", r.InstanceID).Scan(&componentCount)
 	if componentCount > 0 {
