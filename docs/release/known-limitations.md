@@ -6,6 +6,9 @@
 - Ollama's trusted image supports CPU and optional NVIDIA. AMD ROCm and Intel image variants are future catalog work.
 - AMD device scoping has live local evidence, but AMD compute and Intel accelerated workloads remain unvalidated.
 - Jellyfin awaits a trusted media-import/storage model; KITPro will not accept arbitrary host media mounts.
+- LocalAI is excluded because its official image fetches an unsigned mutable backend during model installation; pinning only the outer image is not sufficient provenance.
+- Cross-installation Open WebUI-to-Ollama discovery is not implemented. Isolated application networks remain the security boundary.
+- KITPro grants bounded device access but does not schedule GPU work or reserve VRAM when multiple applications share one GPU.
 
 - Only the platforms in the support matrix are certified.
 - Rootful Docker and enforcing AppArmor are required.

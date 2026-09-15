@@ -4,7 +4,7 @@ KITPro runs trusted applications on the CPU and can grant a registered accelerat
 
 ## Check the host
 
-Open **Settings**. The Acceleration row reports whether KITPro found a supported accelerator. Authenticated technical clients can request `GET /api/v1/hardware`. The response omits raw device paths and reports normalized vendor/model identity, render/compute availability, NVIDIA integration, and IOMMU state.
+Open **Settings**. The Hardware acceleration panel reports the detected vendor and model and whether the container runtime is ready. Authenticated technical clients can request `GET /api/v1/hardware`. The response omits raw device paths and reports normalized vendor/model identity, render/compute availability, NVIDIA integration, and IOMMU state.
 
 ## Install Ollama
 
@@ -18,7 +18,7 @@ The initial trusted release supports CPU fallback and optional NVIDIA accelerati
 
 ## Verify the result
 
-The catalog card says **GPU optional**. Without a usable NVIDIA runtime, the helper records CPU mode. On a validated supported host it reports hardware acceleration. Reconciliation must return `exact`; required-hardware failures or security drift need operator attention.
+The catalog card distinguishes **CPU supported**, **GPU optional**, **GPU required**, certification, and current availability. Without a usable NVIDIA runtime, the helper records CPU mode for Ollama. The installed-app page reports the helper-owned assignment as the detected GPU, CPU fallback, or required GPU unavailable. Reconciliation must return `exact`; required-hardware failures or security drift need operator attention.
 
 ## Troubleshooting
 
@@ -45,5 +45,6 @@ KITPro re-discovers and compares stable identity. Required hardware fails closed
 ### CPU fallback
 
 CPU mode is expected when optional acceleration is unavailable. It is slower but does not weaken isolation, and KITPro never labels it GPU-accelerated.
+
 
 See the [architecture](architecture/gpu-device-access.md) and [manifest reference](application-manifest.md).

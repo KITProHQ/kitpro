@@ -82,6 +82,9 @@ func main() {
 	if e = auth.Init(context.Background(), db); e != nil {
 		panic(e)
 	}
+	if _, e = operations.RecoverAccepted(context.Background(), db); e != nil {
+		panic(e)
+	}
 	allowed := map[string]bool{"127.0.0.1:8080": true, "localhost:8080": true}
 	for _, h := range strings.Split(env("KITPRO_ALLOWED_HOSTS", ""), ",") {
 		if h = strings.TrimSpace(h); h != "" {
@@ -481,10 +484,11 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	type appView struct {
 		ID, Name, Description, Release, Category, Initials, Hardware string
 		InstalledCount                                               int
+		HardwareUnavailable                                          bool
 	}
 	type installationView struct {
 		ID, Name, Description, Category, Initials, State, StateLabel, StateClass, AppID, Release string
-		AccessLabel, OpenEndpoint, AvailableRelease                                              string
+		AccessLabel, OpenEndpoint, AvailableRelease, HardwareLabel, HardwareClass, HardwareID    string
 		Generation, InstalledCount                                                               int
 		UpdateAvailable                                                                          bool
 		Services                                                                                 []serviceStatus
@@ -532,6 +536,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			view.HardwareLabel, view.HardwareClass, view.HardwareID = a.installationHardware(id, appID)
 			view.StateLabel, view.StateClass = statePresentation(desired)
 			if desired == "running" {
 				runningCount++
@@ -557,6 +562,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 			installations = append(installations, view)
 		}
 	}
+	hardwareAvailable, hardwareVendor := a.hardwareAvailability()
 	apps := []appView{}
 	for _, id := range catalog.IDs(a.catalog) {
 		m := a.catalog[id].Manifest
@@ -567,15 +573,25 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		if len(m.Releases) > 0 {
 			release = m.Releases[0].Version
 		}
-		hardwareLabel := "CPU"
+		hardwareLabel := "CPU supported"
+		hardwareUnavailable := false
 		for _, requirement := range m.Hardware {
 			if requirement.Optional {
-				hardwareLabel = "GPU optional"
+				hardwareLabel = "CPU supported · GPU optional"
 			} else {
 				hardwareLabel = "GPU required"
 			}
+			if requirement.Class == "gpu.nvidia" {
+				hardwareLabel += " · NVIDIA certified"
+				if hardwareAvailable && hardwareVendor == "nvidia" {
+					hardwareLabel += " · available"
+				} else if !requirement.Optional {
+					hardwareLabel += " · unavailable"
+					hardwareUnavailable = true
+				}
+			}
 		}
-		apps = append(apps, appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), Hardware: hardwareLabel, InstalledCount: installedCountByApp[m.ID]})
+		apps = append(apps, appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID]})
 	}
 	records, _ := operations.List(r.Context(), a.db)
 	rows := make([]operationView, 0, len(records))
@@ -602,17 +618,84 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var schema int
 	_ = a.db.QueryRowContext(r.Context(), "SELECT version FROM schema_version LIMIT 1").Scan(&schema)
-	hardwareSummary := "No supported accelerator detected"
+	hardwareSummary := "No supported accelerator detected. CPU workloads remain available where supported."
 	if response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "GetHardwareInventory"}); err == nil && response.OK {
 		if result, ok := response.Result.(map[string]any); ok {
 			if items, ok := result["accelerators"].([]any); ok && len(items) > 0 {
-				hardwareSummary = "Hardware acceleration available"
+				if accelerator, ok := items[0].(map[string]any); ok {
+					model, _ := accelerator["model"].(string)
+					vendor, _ := accelerator["vendor"].(string)
+					hardwareSummary = model + " — detected"
+					if vendor == "nvidia" {
+						if runtimeReady, _ := result["nvidia_runtime"].(bool); runtimeReady {
+							hardwareSummary = model + " — available; NVIDIA Container Toolkit detected"
+						} else {
+							hardwareSummary = model + " — GPU detected, but Docker GPU runtime is unavailable"
+						}
+					}
+				}
 			}
 		}
 	}
 	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.HardwareSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
 		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
 	}
+}
+
+func (a *app) hardwareAvailability() (bool, string) {
+	response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "GetHardwareInventory"})
+	if err != nil || !response.OK {
+		return false, ""
+	}
+	result, _ := response.Result.(map[string]any)
+	items, _ := result["accelerators"].([]any)
+	if len(items) != 1 {
+		return false, ""
+	}
+	accelerator, _ := items[0].(map[string]any)
+	vendor, _ := accelerator["vendor"].(string)
+	if vendor == "nvidia" {
+		ready, _ := result["nvidia_runtime"].(bool)
+		return ready, vendor
+	}
+	return true, vendor
+}
+
+func (a *app) installationHardware(installation, appID string) (label, class, stableID string) {
+	entry, ok := a.catalog[appID]
+	if !ok || len(entry.Manifest.Hardware) == 0 {
+		return "CPU", "", ""
+	}
+	response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "GetHardwareAssignment", InstanceID: installation})
+	if err == nil && response.OK {
+		result, _ := response.Result.(map[string]any)
+		items, _ := result["assignments"].([]any)
+		if len(items) > 0 {
+			assignment, _ := items[0].(map[string]any)
+			mode, _ := assignment["mode"].(string)
+			class, _ = assignment["class"].(string)
+			stableID, _ = assignment["stable_id"].(string)
+			if mode == "cpu" {
+				return "CPU fallback", class, stableID
+			}
+			available, _ := assignment["available"].(bool)
+			if !available {
+				if !entry.Manifest.Hardware[0].Optional {
+					return "Required GPU unavailable", class, stableID
+				}
+				return "Assigned GPU unavailable — recreate for CPU fallback", class, stableID
+			}
+			model, _ := assignment["model"].(string)
+			if model == "" {
+				model = "NVIDIA GPU"
+			}
+			return model, class, stableID
+		}
+	}
+	if !entry.Manifest.Hardware[0].Optional {
+		return "Required GPU unavailable", entry.Manifest.Hardware[0].Class, ""
+	}
+	return "CPU fallback", entry.Manifest.Hardware[0].Class, ""
 }
 
 func platformName() string {

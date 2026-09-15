@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.9 (unreleased)
+
+- Show detected GPU identity, runtime readiness, certification, current availability, and installed CPU/GPU mode in the server interface.
+- Reject GPU candidates whose complete runtime or data path cannot retain immutable provenance, bounded storage, and typed devices.
+- Keep Open WebUI and Ollama independent until trusted cross-installation service discovery exists.
+- Record why ComfyUI, Jellyfin, Frigate, whisper.cpp, and InvokeAI do not yet fit the trusted runtime boundary.
+
 ## 0.1.0-alpha.8 (unreleased)
 
 - Add schema v3 trusted hardware classes with helper-side discovery and exact device resolution.

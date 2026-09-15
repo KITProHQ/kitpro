@@ -1,0 +1,11 @@
+{
+  "release": "0.1.0-alpha.9",
+  "status": "validation-only-not-published",
+  "source_checkpoint": "176b404dab780203f4ed9d78d6378889e8586334",
+  "reproducible": true,
+  "artifacts": [
+    {"path": "/tmp/kitpro-alpha9-a/kitpro-server_0.1.0~alpha9_amd64.deb", "architecture": "amd64", "sha256": "11f23cf5fbdc73341372d38c5391958d7caabc6873b2bc088f85c7790cade54a"},
+    {"path": "/tmp/kitpro-alpha9-a/kitpro-server-0.1.0_alpha9-1-x86_64.pkg.tar.zst", "architecture": "x86_64", "sha256": "60c3cb68d5f611e6f0aee2c789a0f1ec488bbb85203ac4579f9fca0e6f90d082"}
+  ],
+  "sbom": {"path": "/tmp/kitpro-alpha9-a/kitpro-server_0.1.0~alpha9_amd64.cdx.json", "sha256": "74998a75fcfef7b941b6d37d3a20488f11a7f2072e174421d3956d1a5e77ee16"}
+}

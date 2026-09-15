@@ -56,6 +56,20 @@ loopback.
 IT-Tools is intentionally stateless. It needs one HTTP container, no storage,
 secrets, devices, capabilities, host networking, or background components.
 
+Open WebUI and Ollama remain independent installations. KITPro installation networks are isolated, and no trusted cross-installation service-discovery primitive exists. Administrators can configure a separately reachable Ollama endpoint in Open WebUI, but KITPro does not add host networking or inject an unvalidated URL.
+
+## GPU candidate decisions
+
+| Candidate | Decision | Reason |
+|---|---|---|
+| LocalAI | REJECT FOR CURRENT MODEL | The pinned official server image fetches an unsigned backend from a mutable `latest` OCI tag during model installation, breaking end-to-end immutable provenance. |
+| Open WebUI and Ollama pairing | REJECT FOR CURRENT MODEL | Safe cross-installation service discovery is not yet available; independent applications remain supported. |
+| ComfyUI | REJECT FOR CURRENT MODEL | Upstream does not publish a stable official production container suitable for an immutable trusted release. |
+| Jellyfin | REJECT FOR CURRENT MODEL | A useful deployment requires media-library mounts; trusted external storage/import is not implemented. |
+| Frigate | REJECT FOR CURRENT MODEL | Camera configuration, shared-memory sizing, and Coral/USB/PCI device needs exceed current bounded classes. |
+| whisper.cpp server | REJECT FOR CURRENT MODEL | Official images track branches/commits and require a model bootstrap/selection contract KITPro does not yet provide. |
+| InvokeAI | REJECT FOR CURRENT MODEL | Official GPU container tags track main/commit builds rather than a stable release identity suitable for the trusted catalog. |
+
 ## Candidate decision
 
 Linkding 1.46.2 is **rejected for the current model**. Its supported initial
@@ -99,6 +113,12 @@ The following official sources were retrieved on 2026-09-13:
 - Stirling PDF: [official Docker guide](https://docs.stirlingpdf.com/Installation/Docker%20Install/), [releases](https://github.com/Stirling-Tools/Stirling-PDF/releases)
 - IT-Tools: [official repository and deployment instructions](https://github.com/CorentinTh/it-tools)
 - Securo: [official repository and production topology](https://github.com/securo-finance/securo)
+- LocalAI: [4.9.0 release](https://github.com/mudler/LocalAI/releases/tag/v4.9.0), [official container guide](https://localai.io/basics/container/), [authentication](https://localai.io/advanced/auth/), [model management](https://localai.io/models/)
+- ComfyUI: [official documentation](https://docs.comfy.org/)
+- Jellyfin: [official container installation](https://jellyfin.org/docs/general/installation/container/)
+- Frigate: [official installation](https://docs.frigate.video/frigate/installation/)
+- whisper.cpp: [official repository and container definitions](https://github.com/ggml-org/whisper.cpp)
+- InvokeAI: [official Docker documentation](https://github.com/invoke-ai/InvokeAI/blob/main/docker/README.md)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one

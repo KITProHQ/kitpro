@@ -200,6 +200,13 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 				break
 			}
 			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: hardware.SafeView(inv)})
+		case "GetHardwareAssignment":
+			result, err := hardwareAssignmentView(db, r.InstanceID)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "hardware assignment unavailable"})
+				break
+			}
+			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 		case "BackupHelperState":
 			path, be := backup.Vacuum(context.Background(), db, "/var/lib/kitpro-helper/backups", r.ID+".db")
 			if be != nil {
@@ -211,6 +218,34 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "operation not permitted"})
 		}
 	}
+}
+
+func hardwareAssignmentView(db *sql.DB, installation string) (map[string]any, error) {
+	if !strings.HasPrefix(installation, "inst-") || len(installation) < 13 || len(installation) > 80 {
+		return nil, fmt.Errorf("invalid installation identity")
+	}
+	rows, err := db.Query(`SELECT component_id,device_class,mode,vendor,stable_id,runtime_generation FROM hardware_assignments WHERE installation_id=? ORDER BY component_id,device_class`, installation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	info, _ := docker.New().Info()
+	inv, _ := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
+	assignments := []map[string]any{}
+	for rows.Next() {
+		var component, class, mode, vendor, stableID string
+		var generation int
+		if err := rows.Scan(&component, &class, &mode, &vendor, &stableID, &generation); err != nil {
+			return nil, err
+		}
+		item := map[string]any{"component": component, "class": class, "mode": mode, "vendor": vendor, "stable_id": stableID, "runtime_generation": generation, "available": false}
+		if model := inv.ModelForStableID(stableID); model != "" {
+			item["model"] = model
+			item["available"] = true
+		}
+		assignments = append(assignments, item)
+	}
+	return map[string]any{"assignments": assignments}, rows.Err()
 }
 func validateApplicationPlan(r protocol.Request) error {
 	digest := r.Image[strings.LastIndex(r.Image, "@sha256:")+1:]

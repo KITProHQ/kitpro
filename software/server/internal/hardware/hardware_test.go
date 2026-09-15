@@ -37,3 +37,17 @@ func TestResolveVAAPIMapsOneVendorRenderNode(t *testing.T) {
 		t.Fatalf("assignment=%#v err=%v", a, err)
 	}
 }
+
+func TestCertifiedNVIDIAModelAndStableLookup(t *testing.T) {
+	accelerator := Accelerator{Vendor: "nvidia", DeviceID: "2571", Model: modelName("nvidia", "2571"), StableID: "0000:01:00.0:10de:2571"}
+	inv := Inventory{Accelerators: []Accelerator{accelerator}}
+	if accelerator.Model != "NVIDIA RTX A2000 12GB" {
+		t.Fatalf("unexpected certified model name: %q", accelerator.Model)
+	}
+	if got := inv.ModelForStableID(accelerator.StableID); got != accelerator.Model {
+		t.Fatalf("stable identity lookup=%q", got)
+	}
+	if got := inv.ModelForStableID("missing"); got != "" {
+		t.Fatalf("missing identity disclosed as %q", got)
+	}
+}

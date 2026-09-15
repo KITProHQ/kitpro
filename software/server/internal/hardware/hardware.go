@@ -168,7 +168,19 @@ func readHex(path string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(string(b))), "0x")
 }
 func modelName(vendor, device string) string {
+	if vendor == "nvidia" && device == "2571" {
+		return "NVIDIA RTX A2000 12GB"
+	}
 	return strings.ToUpper(vendor[:1]) + vendor[1:] + " PCI device " + device
+}
+
+func (i Inventory) ModelForStableID(stableID string) string {
+	for _, accelerator := range i.Accelerators {
+		if accelerator.StableID == stableID {
+			return accelerator.Model
+		}
+	}
+	return ""
 }
 func stableDeviceID(path, vendor, device string) string {
 	real, err := filepath.EvalSymlinks(path)

@@ -19,6 +19,8 @@ GPU support is not universal. It requires visible vendor hardware, its host driv
 The validated NVIDIA device was an RTX A2000 12GB passed through exclusively to
 one test VM at a time. AMD compute and Intel acceleration are not certified.
 
+Ollama is the only shipped GPU-aware application in this release. No additional candidate passed the complete immutable-image, immutable-backend, bounded-storage, typed-device, and network-security review. This is an intentional catalog boundary, not an implication that every NVIDIA container is supported.
+
 Minimum recommendation: 2 CPU cores, 4 GiB RAM, and 20 GiB free system disk,
 plus application-data capacity. KITPro listens locally by default; application
 services are internal until an administrator enables loopback or exact-address

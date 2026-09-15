@@ -44,6 +44,10 @@ Reconciliation compares trusted state with fresh discovery and Docker inspect. M
 
 Hardware is component-scoped. A web component receives no accelerator merely because its worker declares one.
 
+The helper exposes a bounded assignment view to the authenticated control plane. It contains component, registered class, CPU/device mode, vendor, stable identity, normalized model, and runtime generation. It omits resolved `/dev` paths. Settings uses normalized discovery; installed-app pages use helper-owned assignment state instead of trusting Docker alone.
+
+Accepted asynchronous operations are process-local work. On API startup, an operation interrupted before a helper response is marked failed with a safe retry message. KITPro never infers success after a crash; desired installation state can be recreated idempotently.
+
 ## AppArmor
 
 No AppArmor permission was added. The packaged helper already had read-only `/sys/**` and `/proc/**` inspection plus Docker-socket access for bounded lifecycle operations. It still has no arbitrary child execution, internet socket access, or user-home access. Docker, not the helper process, opens a resolved container device.

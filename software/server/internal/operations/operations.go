@@ -39,6 +39,17 @@ func Update(ctx context.Context, db *sql.DB, id, status, summary string) error {
 	_, e := db.ExecContext(ctx, "UPDATE operations SET status=?,summary=? WHERE id=?", status, summary, id)
 	return e
 }
+
+// RecoverAccepted closes operations whose in-process helper call was lost when
+// the API restarted. The desired installation remains available for an
+// explicit, idempotent recreate; success is never inferred after a crash.
+func RecoverAccepted(ctx context.Context, db *sql.DB) (int64, error) {
+	result, err := db.ExecContext(ctx, "UPDATE operations SET status='failed',summary='interrupted by API restart; retry safely' WHERE status='accepted'")
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 func Get(ctx context.Context, db *sql.DB, id string) (Record, error) {
 	var r Record
 	e := db.QueryRowContext(ctx, "SELECT id,type,requested_at,status,instance_id,summary FROM operations WHERE id=?", id).Scan(&r.ID, &r.Type, &r.RequestedAt, &r.Status, &r.InstanceID, &r.Summary)

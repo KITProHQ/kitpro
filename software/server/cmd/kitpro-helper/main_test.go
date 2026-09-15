@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -364,5 +365,33 @@ func TestDeviceAssignmentPersistsAllTrustedIdentityFields(t *testing.T) {
 	}
 	if class != hardware.NVIDIAClass || mode != "device" || vendor != "nvidia" || stableID != assignment.StableID || devices != "[]" || generation != 3 {
 		t.Fatalf("unexpected persisted assignment: %q %q %q %q %q %d", class, mode, vendor, stableID, devices, generation)
+	}
+}
+
+func TestHardwareAssignmentViewIsBoundedAndOmitsRawDevicePaths(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO hardware_assignments(installation_id,component_id,device_class,mode,vendor,stable_id,resolved_devices,runtime_generation,created_at) VALUES('inst-assignment01','model','gpu.nvidia','device','nvidia','0000:01:00.0:10de:2571','["/dev/nvidia0"]',4,'now')`); err != nil {
+		t.Fatal(err)
+	}
+	view, err := hardwareAssignmentView(db, "inst-assignment01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(view)
+	if strings.Contains(string(encoded), "/dev/") || !strings.Contains(string(encoded), "gpu.nvidia") {
+		t.Fatalf("unsafe or incomplete assignment view: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"available":false`) {
+		t.Fatalf("stale identity not marked unavailable: %s", encoded)
+	}
+	if _, err := hardwareAssignmentView(db, "/dev/sda"); err == nil {
+		t.Fatal("unbounded identity accepted")
 	}
 }
