@@ -1,19 +1,13 @@
 # Changelog
 
-## Video-ready product baseline (documentation-only, unreleased)
+## 0.1.0-alpha.11 (2026-09-15)
 
-- Freeze a truthful 15-application inventory and one definitive platform/capability matrix.
-- Refresh the root and technical entry-point READMEs, security/limitations language, screenshots, product brief, and video B-roll inventory.
-- Preserve the public-alpha boundary: no new runtime architecture, catalog entry, or release publication is introduced by this documentation pass.
-- Summarize the current progression: constrained runtime and authentication; immutable catalog and multi-container ownership; Debian/Ubuntu/Arch packages; trusted updates; NVIDIA/Ollama acceleration; trusted storage; Jellyfin and media/data applications; and the polished local UI.
-
-## 0.1.0-alpha.11 (unreleased)
-
+- Publish the video-ready 15-application product baseline for Debian 13, Ubuntu 26.04 LTS, and Arch Linux under the documented support boundaries.
 - Add Navidrome and Audiobookshelf with administrator-approved read-only media libraries.
 - Add SFTPGo as the first exclusive imported read-write consumer, with browser-based first administrator setup and no default credential.
 - Run trusted images under bounded numeric identities and assign ownership only to their KITPro-managed storage directories.
 - Prevent mixed readers and writers on one trusted root while allowing safe read-only sharing.
-- Mark Jellyfin as optional NVIDIA acceleration with CPU fallback.
+- Include Jellyfin, NVIDIA-certified Ollama acceleration with CPU fallback, refreshed application UI, current screenshots, synchronized documentation, checksums, and a CycloneDX SBOM.
 
 ## 0.1.0-alpha.10 (unreleased)
 
