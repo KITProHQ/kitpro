@@ -34,6 +34,8 @@ grep -q 'profile_source=/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-hel
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-helper.socket"
 test -f "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
 grep -q '^Version: 0.1.0~alpha3$' "$unpack/control/control"
+test "$("$unpack/data/usr/bin/kitpro-api" --version | awk '{print $2}')" = 0.1.0-alpha.3
+test "$("$unpack/data/usr/libexec/kitpro-helper" --version | awk '{print $2}')" = 0.1.0-alpha.3
 grep -q '^Depends: adduser, apparmor, systemd$' "$unpack/control/control"
 grep -q 'Environment=KITPRO_API_USER=kitpro-api' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-helper$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"

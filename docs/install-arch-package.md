@@ -24,7 +24,7 @@ supported.
 Builds use `makepkg` as a non-root account. Install the resulting package with:
 
 ```sh
-sudo pacman -U kitpro-server-0.1.0_alpha1-1-x86_64.pkg.tar.zst
+sudo pacman -U kitpro-server-0.1.0_alpha2-1-x86_64.pkg.tar.zst
 ```
 
 The transaction fails closed unless Docker is active and AppArmor is enabled.

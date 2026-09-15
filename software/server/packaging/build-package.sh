@@ -4,9 +4,15 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 server_dir=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 repo_dir=$(git -C "$server_dir" rev-parse --show-toplevel)
-version=${1:-0.1.0~alpha1}
+public_version=$(tr -d '\n' < "$repo_dir/VERSION")
+default_version=$(printf '%s\n' "$public_version" | sed -E 's/-alpha\.([0-9]+)$/~alpha\1/')
+version=${1:-$default_version}
 output_dir=${2:-$server_dir/dist}
 architecture=amd64
+case $version in
+    *~alpha*) public_version=$(printf '%s\n' "$version" | sed -E 's/~alpha([0-9]+)$/-alpha.\1/') ;;
+    *) public_version=$version ;;
+esac
 
 if command -v dpkg >/dev/null 2>&1; then
     if ! dpkg --validate-version "$version" >/dev/null 2>&1; then
@@ -44,7 +50,7 @@ install -d "$control" "$root/usr/bin" "$root/usr/libexec" \
     "$root/usr/share/doc/kitpro-server" "$root/usr/share/man/man8" \
     "$root/usr/share/lintian/overrides"
 
-ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=$version -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=$source_commit -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=$build_date"
+ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=$public_version -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=$source_commit -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=$build_date"
 (cd "$server_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$root/usr/bin/kitpro-api" ./cmd/kitpro-api)
 (cd "$server_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$root/usr/libexec/kitpro-helper" ./cmd/kitpro-helper)
 
@@ -99,7 +105,8 @@ fi
 cat > "$package.build.json" <<EOF
 {
   "package": "kitpro-server",
-  "version": "$version",
+  "version": "$public_version",
+  "package_version": "$version",
   "architecture": "$architecture",
   "source_commit": "$source_commit",
   "source_tree_dirty": $source_tree_dirty,

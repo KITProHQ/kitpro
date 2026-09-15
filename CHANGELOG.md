@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.2
+
+- Refined the public-alpha dashboard, catalog, application management, access,
+  update, error, responsive, and accessibility experience.
+- Refreshed public product screenshots and documentation to match the shipped
+  interface.
+- Kept the trusted catalog, persistence, reconciliation, and security
+  boundaries from alpha.1 unchanged.
+
 ## 0.1.0-alpha.1
 
 - Public alpha packaging for Debian, Ubuntu, and Arch.
