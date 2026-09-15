@@ -12,6 +12,11 @@ Start with the [public alpha quickstart](docs/release/quickstart.md). The
 current catalog and platform boundary are in the [application catalog](docs/application-catalog.md)
 and [support matrix](docs/support-matrix.md).
 
+KITPro is licensed under the [Apache License 2.0](LICENSE).
+Learn more about [KITPro Server](https://os.kitpro.us/server).
+
+![KITPro Server dashboard showing server health and installed self-hosted applications](docs/assets/screenshots/kitpro-server-dashboard.png)
+
 ## KITPro Server
 
 KITPro Server provides a local web interface for deploying, operating, monitoring, updating, backing up, and troubleshooting self-hosted applications.
@@ -31,6 +36,10 @@ The public alpha lets a user:
 7. Update the application safely.
 8. View relevant logs.
 9. Uninstall the application without automatically destroying persistent user data.
+
+![KITPro Server application catalog with trusted self-hosted apps](docs/assets/screenshots/kitpro-server-catalog.png)
+
+![KITPro Server application management view showing status, access, and lifecycle controls](docs/assets/screenshots/kitpro-server-application.png)
 
 ## Repository areas
 

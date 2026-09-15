@@ -4,7 +4,7 @@ Architecture: amd64
 Maintainer: KITPro Project <joshlacy@gmail.com>
 Installed-Size: @INSTALLED_SIZE@
 Depends: adduser, apparmor, systemd
-Homepage: https://github.com/keepittechie/kitpro
+Homepage: https://github.com/KITProHQ/kitpro
 Section: admin
 Priority: optional
 Description: local application manager for KITPro Server

@@ -1,5 +1,13 @@
 # KITPro Server production slice
 
+[View the KITPro Server product page](https://os.kitpro.us/server).
+
+![KITPro Server dashboard showing server health and installed self-hosted applications](../../docs/assets/screenshots/kitpro-server-dashboard.png)
+
+![KITPro Server application management view showing status, access, and lifecycle controls](../../docs/assets/screenshots/kitpro-server-application.png)
+
+KITPro Server is licensed under the [Apache License 2.0](../../LICENSE).
+
 This is a deliberately bounded production implementation. It provides a local API, host/Docker inspection, a typed helper boundary, a local-administrator authentication boundary, and a constrained embedded application catalog. The catalog contains seven single-container applications plus Paperless-ngx as a managed multi-container application. The helper never accepts arbitrary Docker or shell commands.
 
 Catalog applications are represented by schema-versioned JSON

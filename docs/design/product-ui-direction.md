@@ -5,12 +5,11 @@
 ### Source of truth
 
 The intended brand reference is [os.kitpro.us](https://os.kitpro.us). A direct
-inspection was attempted on 2026-09-14, but the reference site was not
-reachable from the validation environment (DNS resolution failed). The server
-UI therefore keeps the visual language already established for KITPro: a calm,
-light surface, a blue primary action, soft borders, rounded cards, generous
-spacing, and local system typography. Exact brand color and font claims are
-deliberately deferred until the reference can be inspected reliably.
+inspection on 2026-09-14 returned the live KITpro OS page (Next.js-rendered,
+dark graphite surfaces, blue actions, rounded cards, white headings, muted gray
+copy, and a compact sticky navigation). The server UI should share that calm,
+technical visual language while retaining its operational density and offline,
+local-font behavior.
 
 ### What is already good
 
@@ -61,8 +60,17 @@ deliberately deferred until the reference can be inspected reliably.
   resource tables: they obscure the operational tasks of a local server.
 - No new configuration fields or raw environment-variable controls: the
   existing typed manifest and trusted update model remain the authority.
-- No invented brand hex values or external font dependency while the live
-  reference is unavailable.
+- No invented brand hex values or external font dependency; the live reference
+  establishes the direction, while the server keeps its local token system.
+
+### Website source identification
+
+The live site HTML and assets match the remote `keepittechie/kitpro-os` project,
+which is an OS/ISO source repository rather than a Next.js web source. The
+canonical Next.js services site is the private `kitpro-site` repository; its
+`/server` route is the implementation location for the KITPro Server product
+page. The existing deploy script requires an explicit approved deployment, so
+this pass validates the route locally without changing production routing.
 
 ### Validation focus
 
