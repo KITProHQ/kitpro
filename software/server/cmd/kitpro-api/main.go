@@ -611,6 +611,7 @@ func catalogVisible(id string) bool { return id != "busybox" }
 
 func catalogCategory(id string) string {
 	categories := map[string]string{
+		"open-webui": "AI", "it-tools": "Developer Tools",
 		"actual-budget": "Finance", "freshrss": "Reading", "home-assistant": "Home automation",
 		"mealie": "Food and recipes", "memos": "Notes", "paperless-ngx": "Documents",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
@@ -805,7 +806,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if release == "" {
-		release = entry.Manifest.Releases[0].Version
+		release = entry.Manifest.Releases[len(entry.Manifest.Releases)-1].Version
 	}
 	if target := r.URL.Query().Get("target_release"); target != "" {
 		release = target
@@ -873,7 +874,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			q.Command = append(q.Command, x)
 		}
 		for _, x := range plan.Environment {
-			q.Environment = append(q.Environment, protocol.EnvVar{Name: x.Name, Value: x.Value, Secret: x.Secret})
+			q.Environment = append(q.Environment, protocol.EnvVar{Name: x.Name, Value: x.Value, Secret: x.Secret, Generate: x.Generate})
 		}
 		for _, x := range plan.Storage {
 			q.Storage = append(q.Storage, protocol.StorageMount{ID: x.ID, ContainerPath: x.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + x.ID, ReadOnly: x.ReadOnly})
@@ -887,7 +888,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 				pc.Command = append(pc.Command, arg)
 			}
 			for _, variable := range component.Environment {
-				pc.Environment = append(pc.Environment, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret})
+				pc.Environment = append(pc.Environment, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret, Generate: variable.Generate})
 			}
 			for _, storage := range component.Storage {
 				pc.Storage = append(pc.Storage, protocol.StorageMount{ID: storage.ID, ContainerPath: storage.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + component.ID + "/" + storage.ID, ReadOnly: storage.ReadOnly})

@@ -13,6 +13,9 @@ import (
 )
 
 type Client struct{ HTTP *http.Client }
+
+const imagePullTimeout = 30 * time.Minute
+
 type ContainerSummary struct {
 	ID     string            `json:"Id"`
 	Names  []string          `json:"Names"`
@@ -87,7 +90,9 @@ func (c *Client) Pull(image string) error {
 	if err != nil {
 		return err
 	}
-	r, err := c.HTTP.Do(q)
+	pullHTTP := *c.HTTP
+	pullHTTP.Timeout = imagePullTimeout
+	r, err := pullHTTP.Do(q)
 	if err != nil {
 		return err
 	}
@@ -96,7 +101,10 @@ func (c *Client) Pull(image string) error {
 		b, _ := io.ReadAll(io.LimitReader(r.Body, 16*1024))
 		return fmt.Errorf("docker pull: HTTP %s: %s", r.Status, strings.TrimSpace(string(b)))
 	}
-	_, err = io.Copy(io.Discard, io.LimitReader(r.Body, 256*1024))
+	// Docker's progress stream grows with image size and layer count. Drain it
+	// completely so closing the response does not cancel an otherwise healthy
+	// pull; the dedicated timeout above remains the hard upper bound.
+	_, err = io.Copy(io.Discard, r.Body)
 	return err
 }
 func (c *Client) CreateNetwork(name string, labels map[string]string) (map[string]any, error) {

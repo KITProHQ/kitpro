@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 4
+	target := 5
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -106,6 +106,17 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=4"); err != nil {
+			return err
+		}
+	}
+	if n < 5 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS installation_secrets (installation_id TEXT NOT NULL, component_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(installation_id,component_id,name))`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=5"); err != nil {
 			return err
 		}
 	}

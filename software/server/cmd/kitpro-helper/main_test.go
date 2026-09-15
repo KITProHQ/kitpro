@@ -46,7 +46,7 @@ func trustedCatalogRequest(t *testing.T, appID string) protocol.Request {
 		DataPath: plan.DataPath, RestartPolicy: plan.Restart, ExposureMode: "internal",
 	}
 	for _, variable := range plan.Environment {
-		request.Environment = append(request.Environment, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret})
+		request.Environment = append(request.Environment, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret, Generate: variable.Generate})
 	}
 	for _, storage := range plan.Storage {
 		request.Storage = append(request.Storage, protocol.StorageMount{ID: storage.ID, ContainerPath: storage.ContainerPath, HostPath: "/srv/kitpro/apps/" + appID + "/" + instance + "/" + storage.ID, ReadOnly: storage.ReadOnly})
@@ -266,5 +266,32 @@ func TestTrustedExposureMustMatchBeforeStart(t *testing.T) {
 	}
 	if !trustedExposureMatches(map[string]any{"HostConfig": map[string]any{"PortBindings": map[string]any{}}}, "internal", "", 20000, 0, "") {
 		t.Fatal("internal runtime without publication rejected")
+	}
+}
+
+func TestGeneratedEnvironmentSecretPersistsAndIsNotReturnedAsMetadata(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	declaration := []protocol.EnvVar{{Name: "APP_SECRET", Secret: true, Generate: "random-hex-32"}}
+	first, err := resolvedEnvironment(db, "inst-secret01", "", declaration)
+	if err != nil || len(first) != 1 || !strings.HasPrefix(first[0], "APP_SECRET=") || len(strings.TrimPrefix(first[0], "APP_SECRET=")) != 64 {
+		t.Fatalf("generated environment: %v %#v", err, first)
+	}
+	second, err := resolvedEnvironment(db, "inst-secret01", "", declaration)
+	if err != nil || second[0] != first[0] {
+		t.Fatalf("secret changed across recreation: %v %#v %#v", err, first, second)
+	}
+	other, err := resolvedEnvironment(db, "inst-secret02", "", declaration)
+	if err != nil || other[0] == first[0] {
+		t.Fatalf("secret was not isolated: %v %#v", err, other)
+	}
+	if _, err = resolvedEnvironment(db, "inst-secret01", "", []protocol.EnvVar{{Name: "BAD", Secret: true, Generate: "weak"}}); err == nil {
+		t.Fatal("weak secret generator accepted")
 	}
 }

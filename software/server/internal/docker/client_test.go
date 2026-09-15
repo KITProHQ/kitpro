@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -15,6 +16,19 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func TestClientUsesUnixTransport(t *testing.T) {
 	if New() == nil {
 		t.Fatal("nil client")
+	}
+}
+
+func TestPullDrainsLargeProgressStream(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 300*1024)
+	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.RequestURI(), "/images/create?fromImage=") {
+			t.Fatalf("unexpected pull request: %s %s", r.Method, r.URL.RequestURI())
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+	})}}
+	if err := client.Pull("registry.example/app@sha256:digest"); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -18,8 +18,10 @@ bindings. Service exposure is an installation policy and defaults to internal.
 | Vaultwarden | 1.37.2 | `docker.io/vaultwarden/server@sha256:5d326778c22f063d093d6b0c9c766a28249561632266776f2c93132ab0ad3a80` | `data` at `/data` | HTTP 80 | AGPL-3.0 |
 | Home Assistant | stable | `ghcr.io/home-assistant/home-assistant@sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa` | `config` at `/config` | HTTP 8123 | Apache-2.0 |
 | Paperless-ngx | 2.20.15 + Redis 7.4.11 | `docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f` plus `docker.io/library/redis@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7` | web `data`, `media`, `consume`, `export`; broker `data` | HTTP 8000 (web only) | GPL-3.0 |
+| Open WebUI | 0.11.3 | `ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c` | `data` at `/app/backend/data` | HTTP 8080 | Open WebUI license |
+| IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
 
-The seven single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The nine single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -28,6 +30,19 @@ FreshRSS, Uptime Kuma, and Memos use their browser setup flows for initial
 credentials. Mealie ships with typed non-secret defaults `ALLOW_SIGNUP=false`
 and `TZ=UTC`; its first database migration can take several minutes. No entry
 contains a credential or accepts arbitrary environment variables.
+
+Open WebUI starts with authentication enabled and keeps users, settings, and
+chats in its persistent data store. KITPro generates and preserves its
+`WEBUI_SECRET_KEY`; the value is never displayed. The application installs
+without an LLM. An administrator configures a remote or OpenAI-compatible
+backend in Open WebUI after installation. KITPro does not bundle Ollama, API
+keys, host networking, or device access. Containers currently use Docker's
+ordinary bridge egress, so configured external APIs are reachable; KITPro does
+not claim an egress firewall or direct access to services bound only on host
+loopback.
+
+IT-Tools is intentionally stateless. It needs one HTTP container, no storage,
+secrets, devices, capabilities, host networking, or background components.
 
 ## Candidate decision
 
@@ -44,6 +59,19 @@ traverse KITPro's root-owned `0750` installation storage without an ownership
 policy that the current manifest model does not express. No application-specific
 `chown` or privileged exception was added.
 
+Application Catalog Expansion V3 also evaluated n8n 2.38.7, Flowise 3.1.4,
+Stirling PDF 2.14.3, and Securo 0.15.1. n8n and Flowise run as an unprivileged
+image user and cannot initialize KITPro's root-owned `0700` bind storage; the
+helper deliberately retains an empty capability set instead of gaining
+`CAP_CHOWN`. Stirling PDF's current first-run fallback creates a known default
+administrator credential when explicit credentials are absent, while KITPro's
+non-disclosing secret contract has no safe one-time credential-reveal flow.
+Securo's supported production layout requires PostgreSQL, Redis, migrations,
+web/backend services, and Celery worker/beat components with readiness-gated
+startup and assembled shared connection secrets. Schema v2 supports components
+and ordering but not those readiness/bootstrap contracts. None was collapsed
+into an unsafe or unsupported topology.
+
 ## Upstream provenance
 
 The following official sources were retrieved on 2026-09-13:
@@ -53,6 +81,12 @@ The following official sources were retrieved on 2026-09-13:
 - Mealie: [project releases](https://github.com/mealie-recipes/mealie/releases), [official GHCR package](https://github.com/mealie-recipes/mealie/pkgs/container/mealie), [backend configuration](https://github.com/mealie-recipes/mealie/blob/mealie-next/docs/docs/documentation/getting-started/installation/backend-config.md)
 - Memos: [project releases](https://github.com/usememos/memos/releases), [official Docker deployment](https://usememos.com/docs/deploy/docker), [official GHCR package](https://github.com/usememos/memos/pkgs/container/memos)
 - Linkding: [1.46.2 release](https://github.com/sissbruecker/linkding/releases/tag/v1.46.2), [official deployment README](https://github.com/sissbruecker/linkding/blob/master/README.md), [configuration options](https://github.com/sissbruecker/linkding/blob/master/docs/src/content/docs/options.md)
+- Open WebUI: [official Docker quick start](https://docs.openwebui.com/getting-started/quick-start/), [releases](https://github.com/open-webui/open-webui/releases)
+- n8n: [official Docker installation](https://docs.n8n.io/hosting/installation/docker/), [releases](https://github.com/n8n-io/n8n/releases)
+- Flowise: [official environment reference](https://docs.flowiseai.com/configuration/environment-variables), [releases](https://github.com/FlowiseAI/Flowise/releases)
+- Stirling PDF: [official Docker guide](https://docs.stirlingpdf.com/Installation/Docker%20Install/), [releases](https://github.com/Stirling-Tools/Stirling-PDF/releases)
+- IT-Tools: [official repository and deployment instructions](https://github.com/CorentinTh/it-tools)
+- Securo: [official repository and production topology](https://github.com/securo-finance/securo)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one

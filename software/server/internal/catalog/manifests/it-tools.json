@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "it-tools",
+  "name": "IT-Tools",
+  "description": "Stateless browser-based utilities for networking, encoding, hashing, and development.",
+  "releases": [
+    {"version": "2024.10.22-7ca5933", "registry": "docker.io", "repository": "corentinth/it-tools", "digest": "sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b", "platform": "linux/amd64"}
+  ],
+  "services": [
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80}
+  ],
+  "restart": "unless-stopped"
+}

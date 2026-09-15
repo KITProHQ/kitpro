@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "busybox", "freshrss", "home-assistant", "mealie", "memos", "paperless-ngx", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "busybox", "freshrss", "home-assistant", "it-tools", "mealie", "memos", "open-webui", "paperless-ngx", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -36,20 +36,25 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"vaultwarden", "1.37.2", "docker.io/vaultwarden/server@sha256:5d326778c22f063d093d6b0c9c766a28249561632266776f2c93132ab0ad3a80", "/data", 80, nil},
 		{"home-assistant", "stable", "ghcr.io/home-assistant/home-assistant@sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa", "/config", 8123, nil},
 		{"paperless-ngx", "2.20.15", "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", "/usr/src/paperless/data", 8000, nil},
+		{"open-webui", "0.11.3", "ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "/app/backend/data", 8080, nil},
+		{"it-tools", "2024.10.22-7ca5933", "docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b", "", 80, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			m := c[tt.id].Manifest
-			if m.Description == "" || len(m.Storage) == 0 && len(m.Components) == 0 || len(m.Services) == 0 {
+			if m.Description == "" || len(m.Services) == 0 {
 				t.Fatalf("incomplete manifest: %#v", m)
 			}
-			if m.SchemaVersion == 1 && (m.Storage[0].ContainerPath != tt.storagePath || m.Services[0].ContainerPort != tt.port) {
+			if m.SchemaVersion == 1 && ((tt.storagePath != "" && (len(m.Storage) == 0 || m.Storage[0].ContainerPath != tt.storagePath)) || (tt.storagePath == "" && len(m.Storage) != 0) || m.Services[0].ContainerPort != tt.port) {
 				t.Fatalf("unexpected storage/service: %#v %#v", m.Storage, m.Services)
 			}
 			gotEnv := map[string]string{}
 			for _, variable := range m.Environment {
 				if variable.Secret {
-					t.Fatal("catalog embeds a secret environment declaration")
+					if variable.Value != "" || variable.Generate != "random-hex-32" || !variable.Required {
+						t.Fatal("catalog has an unsafe secret environment declaration")
+					}
+					continue
 				}
 				gotEnv[variable.Name] = variable.Value
 			}

@@ -46,6 +46,7 @@ type Env struct {
 	Name     string `json:"name"`
 	Value    string `json:"value,omitempty"`
 	Secret   bool   `json:"secret,omitempty"`
+	Generate string `json:"generate,omitempty"`
 	Required bool   `json:"required,omitempty"`
 }
 type Service struct {
@@ -150,6 +151,9 @@ func Validate(m Manifest) error {
 		if e.Secret && e.Value != "" {
 			return fmt.Errorf("secret values may not be embedded")
 		}
+		if (e.Generate != "" && (!e.Secret || !e.Required)) || (e.Generate != "" && e.Generate != "random-hex-32") {
+			return fmt.Errorf("invalid generated secret declaration")
+		}
 	}
 	if m.Restart != "" && m.Restart != "no" && m.Restart != "unless-stopped" {
 		return fmt.Errorf("invalid restart policy")
@@ -217,6 +221,9 @@ func validateComponentFields(c Component) error {
 	for _, e := range c.Environment {
 		if !regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`).MatchString(e.Name) || seen[e.Name] || (e.Required && e.Value != "") || (e.Secret && e.Value != "") {
 			return fmt.Errorf("invalid environment declaration")
+		}
+		if (e.Generate != "" && (!e.Secret || !e.Required)) || (e.Generate != "" && e.Generate != "random-hex-32") {
+			return fmt.Errorf("invalid generated secret declaration")
 		}
 		seen[e.Name] = true
 	}

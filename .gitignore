@@ -1,2 +1,3 @@
 # Local gstack browser and terminal runtime state.
 .gstack/
+.env

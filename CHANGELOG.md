@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.7 (prepared, not published)
+
+- Add immutable Open WebUI 0.11.3 and IT-Tools 2024.10.22 catalog entries.
+- Add stable, installation-scoped `random-hex-32` application secrets without
+  exposing values through the API, interface, receipts, or logs.
+- Allow large image pulls to use a bounded 30-minute transfer window and drain
+  the complete Docker progress stream.
+- Preserve the existing capability-free helper and reject candidates that need
+  storage ownership mutation, unsafe bootstrap credentials, or unsupported
+  orchestration behavior.
+
 ## 0.1.0-alpha.2
 
 - Refined the public-alpha dashboard, catalog, application management, access,

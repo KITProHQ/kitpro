@@ -32,10 +32,13 @@ derives host paths under `/srv/kitpro/apps/<application>/<installation>/`; users
 cannot provide bind sources. `/`, `/etc`, `/proc`, `/sys`, `/dev`, and Docker
 socket paths are rejected.
 
-Environment entries are explicitly named and bounded. Secret entries may be
-declared for future generated/user-provided values but may not embed values in
-catalog files. Secrets must not appear in logs, receipts, API responses, or
-HTML.
+Environment entries are explicitly named and bounded. A required secret may
+declare the bounded `random-hex-32` generator. The helper creates 32 random
+bytes, persists the encoded value in its root-only state database, and reuses
+the value for recreation, restart, and update. A generated secret cannot also
+contain a catalog value. Secret values never appear in logs, receipts, API
+responses, or HTML. Helper database backups include generated secrets so a
+restored installation does not silently rotate them.
 
 Only `no` and `unless-stopped` restart policies are allowed. Commands, when
 needed, are fixed catalog argv arrays; users cannot supply executable text or

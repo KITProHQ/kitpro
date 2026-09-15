@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "open-webui",
+  "name": "Open WebUI",
+  "description": "Private AI chat workspace that connects to a separately configured model backend.",
+  "releases": [
+    {"version": "0.11.2", "registry": "ghcr.io", "repository": "open-webui/open-webui", "digest": "sha256:4fdd422b9464921d4bef176046c47326b778219408aaee2f4bd8a21c10789f87", "platform": "linux/amd64"},
+    {"version": "0.11.3", "registry": "ghcr.io", "repository": "open-webui/open-webui", "digest": "sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "platform": "linux/amd64"}
+  ],
+  "storage": [
+    {"id": "data", "container_path": "/app/backend/data", "persistent": true, "read_only": false}
+  ],
+  "environment": [
+    {"name": "WEBUI_SECRET_KEY", "secret": true, "required": true, "generate": "random-hex-32"}
+  ],
+  "services": [
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8080}
+  ],
+  "restart": "unless-stopped"
+}

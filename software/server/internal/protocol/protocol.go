@@ -39,9 +39,10 @@ type Request struct {
 	Components        []Component    `json:"components,omitempty"`
 }
 type EnvVar struct {
-	Name   string `json:"name"`
-	Value  string `json:"value,omitempty"`
-	Secret bool   `json:"secret,omitempty"`
+	Name     string `json:"name"`
+	Value    string `json:"value,omitempty"`
+	Secret   bool   `json:"secret,omitempty"`
+	Generate string `json:"generate,omitempty"`
 }
 type StorageMount struct {
 	ID            string `json:"id"`

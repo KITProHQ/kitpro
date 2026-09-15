@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"github.com/kitpro/kitpro/software/server/internal/backup"
 	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
@@ -237,7 +239,7 @@ func validateApplicationPlan(r protocol.Request) error {
 		}
 	}
 	for i, variable := range entry.Manifest.Environment {
-		if r.Environment[i].Name != variable.Name || r.Environment[i].Value != variable.Value || r.Environment[i].Secret != variable.Secret {
+		if r.Environment[i].Name != variable.Name || r.Environment[i].Value != variable.Value || r.Environment[i].Secret != variable.Secret || r.Environment[i].Generate != variable.Generate {
 			return fmt.Errorf("trusted environment mismatch")
 		}
 	}
@@ -293,7 +295,7 @@ func validateApplicationPlan(r protocol.Request) error {
 		}
 	}
 	for _, e := range r.Environment {
-		if e.Name == "" || e.Secret {
+		if e.Name == "" || (e.Secret && (e.Value != "" || e.Generate != "random-hex-32")) || (!e.Secret && e.Generate != "") {
 			return fmt.Errorf("invalid environment")
 		}
 	}
@@ -359,7 +361,7 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 			}
 		}
 		for j, variable := range want.Environment {
-			if got.Environment[j].Name != variable.Name || got.Environment[j].Value != variable.Value || got.Environment[j].Secret != variable.Secret || got.Environment[j].Secret {
+			if got.Environment[j].Name != variable.Name || got.Environment[j].Value != variable.Value || got.Environment[j].Secret != variable.Secret || got.Environment[j].Generate != variable.Generate {
 				return fmt.Errorf("component %s environment mismatch", got.ID)
 			}
 		}
@@ -375,7 +377,7 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 			}
 		}
 		for _, e := range got.Environment {
-			if e.Secret || e.Name == "" {
+			if e.Name == "" || (e.Secret && (e.Value != "" || e.Generate != "random-hex-32")) || (!e.Secret && e.Generate != "") {
 				return fmt.Errorf("component %s invalid environment", got.ID)
 			}
 		}
@@ -492,9 +494,10 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	for _, s := range r.Storage {
 		mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
 	}
-	env := make([]string, 0, len(r.Environment))
-	for _, v := range r.Environment {
-		env = append(env, v.Name+"="+v.Value)
+	env, e := resolvedEnvironment(db, r.InstanceID, "", r.Environment)
+	if e != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
+		return
 	}
 	bindings := map[string][]docker.PortBinding{}
 	if r.ExposureMode == "loopback" || r.ExposureMode == "lan" {
@@ -628,9 +631,11 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 				return
 			}
 		}
-		envs := make([]string, 0, len(component.Environment))
-		for _, v := range component.Environment {
-			envs = append(envs, v.Name+"="+v.Value)
+		envs, secretErr := resolvedEnvironment(db, r.InstanceID, component.ID, component.Environment)
+		if secretErr != nil {
+			cleanup()
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
+			return
 		}
 		mounts := make([]docker.StorageMount, 0, len(component.Storage))
 		for _, s := range component.Storage {
@@ -669,6 +674,37 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	}
 	_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='succeeded',container_id=? WHERE operation_id=?", created[order[0]], r.ID)
 	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"components": created, "network": r.NetworkName}})
+}
+
+func resolvedEnvironment(db *sql.DB, installationID, componentID string, variables []protocol.EnvVar) ([]string, error) {
+	result := make([]string, 0, len(variables))
+	for _, variable := range variables {
+		value := variable.Value
+		if variable.Secret {
+			if variable.Generate != "random-hex-32" || value != "" {
+				return nil, fmt.Errorf("invalid generated secret")
+			}
+			var secret string
+			err := db.QueryRow(`SELECT value FROM installation_secrets WHERE installation_id=? AND component_id=? AND name=?`, installationID, componentID, variable.Name).Scan(&secret)
+			if err == sql.ErrNoRows {
+				raw := make([]byte, 32)
+				if _, err = rand.Read(raw); err != nil {
+					return nil, err
+				}
+				secret = hex.EncodeToString(raw)
+				_, err = db.Exec(`INSERT OR IGNORE INTO installation_secrets(installation_id,component_id,name,value,created_at) VALUES(?,?,?,?,?)`, installationID, componentID, variable.Name, secret, time.Now().UTC().Format(time.RFC3339Nano))
+				if err == nil {
+					err = db.QueryRow(`SELECT value FROM installation_secrets WHERE installation_id=? AND component_id=? AND name=?`, installationID, componentID, variable.Name).Scan(&secret)
+				}
+			}
+			if err != nil || len(secret) != 64 {
+				return nil, fmt.Errorf("generated secret unavailable")
+			}
+			value = secret
+		}
+		result = append(result, variable.Name+"="+value)
+	}
+	return result, nil
 }
 func maxGeneration(g int) int {
 	if g < 1 {
