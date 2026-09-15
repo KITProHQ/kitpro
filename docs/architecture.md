@@ -8,9 +8,10 @@ implementation.
 
 KITPro Server is the name of the public-alpha product. Each decision is
 recorded in [`docs/decisions/`](decisions/README.md). The production API,
-helper, Docker, state, catalog, exposure, and multi-container decisions listed
-below are accepted for the certified alpha platforms; future capabilities such
-as TLS, rollback, and off-host backup remain open.
+helper, Docker, state, catalog, exposure, multi-container, generated-secret,
+hardware, and trusted-storage boundaries are implemented on the certified
+alpha platforms. TLS automation, general rollback, and off-host backup remain
+open.
 
 ADR-0017 selects Debian 13 as the primary/reference host. Ubuntu Server 26.04
 LTS and fully updated Arch Linux amd64 hosts using official repositories and
@@ -33,14 +34,16 @@ workflow:
 1. Install KITPro Server on the host.
 2. Open the local dashboard.
 3. Detect and display host information.
-4. Deploy the supported application.
-5. Display its runtime health.
-6. Start and stop it.
-7. Update it safely.
-8. Display relevant logs.
-9. Uninstall it without automatically deleting persistent user data.
+4. Register approved external storage when an app needs it.
+5. Deploy a supported single- or multi-container application from an immutable catalog release.
+6. Display runtime, storage, and optional accelerator state.
+7. Start, stop, recreate, and update it through typed operations.
+8. Choose internal, loopback, or exact-address LAN exposure for declared services.
+9. Remove the runtime without automatically deleting managed or imported user data.
 
-The first slice does not need fleet management, a large catalog, custom hardware, KITPro OS, mandatory accounts, a hosted control plane, a proprietary runtime, or AI features.
+The alpha does not include fleet management, custom hardware, KITPro OS,
+mandatory accounts, a hosted control plane, a proprietary runtime, arbitrary
+Docker configuration, or complete disaster recovery.
 
 The 20 GiB free-space figure in ADR-0017 is a KITPro and system-capacity floor. Application data, media, photos, databases, backups, and other workload content need separate capacity planning.
 
@@ -74,7 +77,7 @@ The architecture must assign the following responsibilities. The list does not p
 | Application specification | Describes a trusted application, its source, configuration, health checks, networking, storage, secrets, and lifecycle behavior through the bounded manifest schemas. |
 | State and operation history | The control plane stores desired state and user-facing metadata. The helper independently stores trusted ownership, privileged receipts, leases, and audit events. Fresh host and Docker inspection supplies observed state. The storage technologies remain open. |
 | Logs and observations | Collects relevant KITPro, host, and workload information without presenting raw volume as useful diagnosis. |
-| Data protection integration | Identifies persistent data and connects lifecycle operations to backup and recovery rules. The backup tool is open. |
+| Data protection integration | Separates managed and imported data, creates validated control-state backups before migrations and trusted updates, and documents that imported data and full application recovery remain external responsibilities. |
 
 No responsibility in this table implies that KITPro owns user application data. KITPro may record where data lives and how an operation affects it.
 

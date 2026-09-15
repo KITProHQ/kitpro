@@ -1,5 +1,12 @@
 # Changelog
 
+## Video-ready product baseline (documentation-only, unreleased)
+
+- Freeze a truthful 15-application inventory and one definitive platform/capability matrix.
+- Refresh the root and technical entry-point READMEs, security/limitations language, screenshots, product brief, and video B-roll inventory.
+- Preserve the public-alpha boundary: no new runtime architecture, catalog entry, or release publication is introduced by this documentation pass.
+- Summarize the current progression: constrained runtime and authentication; immutable catalog and multi-container ownership; Debian/Ubuntu/Arch packages; trusted updates; NVIDIA/Ollama acceleration; trusted storage; Jellyfin and media/data applications; and the polished local UI.
+
 ## 0.1.0-alpha.11 (unreleased)
 
 - Add Navidrome and Audiobookshelf with administrator-approved read-only media libraries.

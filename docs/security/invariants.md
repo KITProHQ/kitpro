@@ -1,10 +1,5 @@
 # KITPro Server security invariants
 
-33. Hardware access uses only the closed trusted device-class registry. Manifests and API requests cannot contain raw device paths, arbitrary groups, capabilities, runtime arguments, privileged mode, or host networking.
-34. The helper independently revalidates hardware intent, discovers the host, resolves exact devices, persists assignments, and treats missing, changed, extra, or ambiguous mappings as security drift.
-35. Imported storage is reachable only through administrator-registered trusted roots and manifest-declared logical slots. Application requests cannot contain raw host paths or bind syntax.
-36. The helper canonicalizes roots, rejects symlink and protected-path escapes, records filesystem identity, enforces read-only/read-write ceilings, and treats unavailable, changed, missing, extra, or weakened mounts as security drift.
-
 These rules apply to every implementation and supported application. A change that violates one must stop release or propose an explicit replacement through an architecture decision record.
 
 1. The browser-facing KITPro web and API service runs as a dedicated unprivileged host identity, not as root.
@@ -40,5 +35,9 @@ These rules apply to every implementation and supported application. A change th
 31. The helper does not require shell, Docker CLI, Compose CLI, arbitrary child execution, or general outbound IP networking. Any exception needs an explicit architectural decision.
 32. AppArmor and SELinux rules grant only the helper executable, runtime, state, audit, Docker socket, and approved storage access required by the semantic operation set. MAC policy never authorizes arbitrary host paths.
 33. MAC confinement does not weaken or replace Docker semantic validation. The helper rejects dangerous Docker capabilities before dispatch even when the helper profile or domain is enforcing.
+34. Hardware access uses only the closed trusted device-class registry. Manifests and API requests cannot contain raw device paths, arbitrary groups, capabilities, runtime arguments, privileged mode, or host networking.
+35. The helper independently revalidates hardware intent, discovers the host, resolves exact devices, persists assignments, and treats missing, changed, extra, or ambiguous mappings as security drift.
+36. Imported storage is reachable only through administrator-registered trusted roots and manifest-declared logical slots. Application requests cannot contain raw host paths or bind syntax.
+37. The helper canonicalizes roots, rejects symlink and protected-path escapes, records filesystem identity, enforces read-only/read-write ceilings, and treats unavailable, changed, missing, extra, or weakened mounts as security drift.
 
 The detailed rationale, actors, threats, and tests are in the [threat model](threat-model.md), [ADR-0016](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0018](../decisions/0018-security-boundaries.md).

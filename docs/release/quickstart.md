@@ -1,23 +1,41 @@
 # KITPro Server public alpha quickstart
 
-## Debian or Ubuntu
+Download the package and matching `SHA256SUMS` from the [current GitHub release](https://github.com/KITProHQ/kitpro/releases). Use the version and filename from that release; development release notes do not mean a package was published.
 
-1. Use a supported amd64 host with rootful Docker and enforcing AppArmor.
-2. Install Docker with `tools/install-docker.sh` when it is not already present.
-3. Verify the downloaded package checksum, then install the `.deb` with `apt install ./kitpro-server_0.1.0~alpha2_amd64.deb`.
-4. Open the local dashboard at `http://127.0.0.1:8080/` and create the first administrator.
-5. Install an application from the catalog. Applications start internal-only.
-6. Choose loopback or the configured LAN address to expose a declared service.
+## Debian 13 or Ubuntu 26.04 LTS
 
-Persistent data is under `/srv/kitpro/apps/<application>/<installation>/`.
-Removing a runtime preserves the installation and data; package upgrades back
-up KITPro control state before migrations. Application data backup is separate.
+Requirements: amd64, rootful Docker, systemd, and an enforcing AppArmor kernel/userspace setup.
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_VERSION_amd64.deb
+sudo systemctl status kitpro-api kitpro-helper
+```
+
+The package is named `kitpro-server`. If Docker is absent, review and run `tools/install-docker.sh` or install Docker using the operating-system policy before installing KITPro.
 
 ## Arch Linux
 
-Use a fully updated system with `linux-lts`, then install the native
-`kitpro-server-0.1.0_alpha2-1-x86_64.pkg.tar.zst` using `pacman -U`.
-Always use complete `pacman -Syu` upgrades; partial upgrades are unsupported.
+Requirements: x86_64, a fully updated system using official repositories, `linux-lts`, rootful Docker, systemd, and enforcing AppArmor. Partial upgrades are unsupported.
 
-For recovery, inspect the operation history and validated backups before
-changing state. Do not grant the API account Docker socket access.
+```sh
+sudo pacman -Syu
+sha256sum -c SHA256SUMS --ignore-missing
+sudo pacman -U ./kitpro-server-VERSION-1-x86_64.pkg.tar.zst
+sudo systemctl status kitpro-api kitpro-helper
+```
+
+Reboot into `linux-lts` after installing or changing the kernel/AppArmor boundary before expecting the helper to pass readiness checks.
+
+## First run
+
+1. From the server itself, open `http://127.0.0.1:8080/`.
+2. Create the first local administrator. KITPro has no default password.
+3. Review Settings for platform, helper, hardware, and trusted-storage status.
+4. Choose an application from Catalog. Apps start Private.
+5. For a media/file app, register an administrator-approved storage root first and choose the compatible read-only or read-write slot.
+6. Change a declared service to This server only or Local network only when needed. LAN exposure binds the configured address, never a wildcard.
+
+Managed data lives under `/srv/kitpro/apps/<application>/<installation>/` and survives runtime recreation. Imported data stays at the administrator-approved root and is not deleted or backed up by KITPro. Package migrations and trusted app updates protect control state, not the complete external library.
+
+See the [Debian/Ubuntu guide](../install-debian-package.md), [Arch guide](../install-arch-package.md), [support matrix](../support-matrix.md), and [known limitations](known-limitations.md).

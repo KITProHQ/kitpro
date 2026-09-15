@@ -388,4 +388,4 @@ Revisit this decision if:
 - [Linux `openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html) documents resolution constraints for links, mount crossings, and escapes below a directory file descriptor.
 - [systemd service execution settings](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml) document `NoNewPrivileges` and other service controls.
 - [Docker Engine security](https://docs.docker.com/engine/security/) explains why Docker daemon control and unsafe container parameters can become host control.
-- [Red Hat SELinux documentation](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/pdf/using_selinux/creating-selinux-policies-for-containers_using-selinux) describes mandatory access policy for processes, files, and containers.
+- [The upstream Udica project](https://github.com/containers/udica) documents container-aware SELinux policy generation from runtime inspection.

@@ -7,6 +7,21 @@
 | Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor; no partial upgrades |
 | Rocky Linux 10 amd64 | Experimental | Validate SELinux and Docker integration before use |
 
+## Capability matrix
+
+| Capability | Debian 13 | Ubuntu 26.04 | Arch `linux-lts` | Rocky Linux 10 |
+| --- | --- | --- | --- | --- |
+| Core catalog/runtime | Certified | Certified | Certified | Experimental |
+| NVIDIA RTX A2000 / Toolkit 1.20.0 | Certified | Certified | Certified | Not certified |
+| AMD compute | Not certified | Not certified | Device scoping only | Not certified |
+| Intel accelerated workload | Not certified | Not certified | Device scoping only | Not certified |
+| Trusted local roots | Certified | Smoke certified | Smoke certified | Not certified |
+| Existing host-mounted NFS/CIFS root | Detection implemented; no live failure drill | Detection implemented | Detection implemented | Not certified |
+| Imported read-only storage | Certified | Smoke certified | Smoke certified | Not certified |
+| Exclusive imported read-write storage | Certified | Smoke certified | Smoke certified | Not certified |
+| Jellyfin NVIDIA transcoding | Not certified | Not certified | Not certified | Not certified |
+| UDP publication | Not implemented | Not implemented | Not implemented | Not implemented |
+
 ## Hardware acceleration
 
 | Platform | Discovery | Ollama CPU | NVIDIA | AMD | Intel/VAAPI |

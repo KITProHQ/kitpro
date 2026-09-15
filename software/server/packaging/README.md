@@ -4,7 +4,7 @@ Native Arch Linux packaging lives under `packaging/arch/`. Build it as an
 unprivileged user with:
 
 ```sh
-./packaging/build-arch-package.sh
+./packaging/build-arch-package.sh 0.1.0_alpha11
 ```
 
 The builder creates a deterministic source archive, substitutes its checksum
@@ -19,29 +19,15 @@ builds remain attributable and reproducible. See
 Build the Debian 13 and Ubuntu Server 26.04 LTS amd64 package with:
 
 ```sh
-./packaging/build-package.sh
+./packaging/build-package.sh 0.1.0~alpha11
 ```
 
-The output uses the native Debian spelling of the public version in the root
-`VERSION` file (for example, `0.1.0-alpha.2` becomes
-`dist/kitpro-server_0.1.0~alpha2_amd64.deb`) and includes SHA-256 and
+The output is `dist/kitpro-server_0.1.0~alpha11_amd64.deb` plus SHA-256 and
 build-metadata files. `SOURCE_DATE_EPOCH` may override the default source-commit
 timestamp. The build is static (`CGO_ENABLED=0`) and uses `-trimpath`.
 Generate the CycloneDX SBOM separately with
-`./packaging/generate-sbom.sh`; the generator version is pinned in
+`./packaging/generate-sbom.sh 0.1.0~alpha11`; the generator version is pinned in
 that script and the SBOM receives its own adjacent checksum.
-
-After both packages and the SBOM are built from a clean commit, stage the
-public release assets with:
-
-```sh
-./packaging/stage-release.sh ./dist /path/to/release-directory
-```
-
-The staging command refuses mismatched versions, source commits, dirty-build
-metadata, or SBOM identity. It emits one combined build-metadata file, a
-machine-readable release manifest, and a checksum file without writing those
-generated release records back into source history.
 
 Docker Engine is a pre-existing runtime prerequisite rather than a Debian
 package dependency. This avoids binding KITPro to either Debian's `docker.io`

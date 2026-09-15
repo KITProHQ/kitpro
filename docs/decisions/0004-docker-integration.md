@@ -352,4 +352,4 @@ Revisit this decision if:
 - [Docker firewall behavior](https://docs.docker.com/engine/network/firewall-nftables) documents nftables, iptables, firewalld, forwarding, and Docker network interaction.
 - [Docker image pull by digest](https://docs.docker.com/reference/cli/docker/image/pull/) documents immutable digest references and their update tradeoff.
 - [OCI image manifest specification](https://specs.opencontainers.org/image-spec/manifest/) defines content-addressed images and multi-platform indexes.
-- [Red Hat SELinux documentation](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/pdf/using_selinux/creating-selinux-policies-for-containers_using-selinux) covers SELinux policy for container mounts, ports, capabilities, and processes.
+- [The upstream Udica project](https://github.com/containers/udica) covers SELinux policy generation from container mounts, ports, and capabilities.

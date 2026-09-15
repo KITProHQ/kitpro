@@ -19,6 +19,28 @@ bindings. Service exposure is an installation policy and defaults to internal.
 
 ## Supported applications
 
+| Application | Category | Purpose | Model | Storage model | GPU | Exposure and major limitation |
+| --- | --- | --- | --- | --- | --- | --- |
+| FreshRSS | Reading | RSS reader | Single | Managed data/extensions | CPU | HTTP, private by default; browser bootstrap |
+| Uptime Kuma | Monitoring | Service monitoring | Single | Managed data | CPU | HTTP, private by default |
+| Mealie | Food | Recipe management | Single | Managed data | CPU | HTTP, private by default; signup disabled by default |
+| Memos | Notes | Notes and captures | Single | Managed data | CPU | HTTP, private by default |
+| Actual Budget | Finance | Local budgeting | Single | Managed data | CPU | HTTP, private by default |
+| Vaultwarden | Security | Password vault | Single | Managed data | CPU | HTTP, private by default; public TLS is outside KITPro |
+| Home Assistant | Home automation | Home dashboard | Single | Managed config | CPU | HTTP, private by default; no arbitrary devices or host network |
+| Paperless-ngx | Documents | Document archive | Multi | Managed app, media, consume, export, and broker data | CPU | Web only; Redis remains internal |
+| Open WebUI | AI | Authenticated AI interface | Single | Managed data and generated secret | CPU | HTTP, private by default; backend configured separately |
+| IT-Tools | Developer tools | Browser utilities | Single | Stateless | CPU | HTTP, private by default |
+| Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
+| Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
+| Navidrome | Music | Music streaming | Single | Managed database plus read-only trusted music | CPU | HTTP, private by default |
+| Audiobookshelf | Media | Audiobook streaming | Single | Managed config/metadata plus read-only trusted library | CPU | HTTP, private by default |
+| SFTPGo | Files | Scoped file access | Single | Managed config plus exclusive trusted read-write root | CPU | Web UI exposable; SFTP remains internal |
+
+All user-facing services start internal-only. An administrator may select
+loopback or one configured LAN address; wildcard publication, host networking,
+and automatic Internet exposure are unavailable.
+
 | Application | Release | Image identity | Persistent storage | Service | License |
 | --- | --- | --- | --- | --- | --- |
 | FreshRSS | 1.29.1 | `docker.io/freshrss/freshrss@sha256:118f51ee604853547c085a0235d08a2ed98222e7a7010156cb9e7c86a7f24c21` | `data` at `/var/www/FreshRSS/data`; `extensions` at `/var/www/FreshRSS/extensions` | HTTP 80 | AGPL-3.0 |
@@ -107,31 +129,10 @@ semantics and PostgreSQL must remain on a compatible local filesystem. The
 current milestone does not distort that topology into a simpler unsupported
 deployment.
 
-Linkding 1.46.2 is **rejected for the current model**. Its supported initial
-administrator paths require either an interactive `createsuperuser` command or
-the `LD_SUPERUSER_NAME` and `LD_SUPERUSER_PASSWORD` environment variables.
-KITPro does not yet have a production secret store or a typed one-time bootstrap
-operation, and weakening the manifest boundary to inject a password would be
-unsafe. Memos supplies comparable self-hosted notes and link-capture value while
-fitting the existing browser-setup, single-container model.
-
-Gitea was also evaluated as a possible substitute. Its rootful image could not
-traverse KITPro's root-owned `0750` installation storage without an ownership
-policy that the current manifest model does not express. No application-specific
-`chown` or privileged exception was added.
-
-Application Catalog Expansion V3 also evaluated n8n 2.38.7, Flowise 3.1.4,
-Stirling PDF 2.14.3, and Securo 0.15.1. n8n and Flowise run as an unprivileged
-image user and cannot initialize KITPro's root-owned `0700` bind storage; the
-helper deliberately retains an empty capability set instead of gaining
-`CAP_CHOWN`. Stirling PDF's current first-run fallback creates a known default
-administrator credential when explicit credentials are absent, while KITPro's
-non-disclosing secret contract has no safe one-time credential-reveal flow.
-Securo's supported production layout requires PostgreSQL, Redis, migrations,
-web/backend services, and Celery worker/beat components with readiness-gated
-startup and assembled shared connection secrets. Schema v2 supports components
-and ordering but not those readiness/bootstrap contracts. None was collapsed
-into an unsafe or unsupported topology.
+Older candidate decisions are preserved in dated evidence reports. They are not
+current capability statements: generated secrets and bounded managed-storage
+ownership now exist. Deferred applications must be researched again against the
+current schema rather than accepted from an old rejection or an old workaround.
 
 ## Upstream provenance
 
@@ -148,7 +149,7 @@ The following official sources were retrieved on 2026-09-13:
 - Stirling PDF: [official Docker guide](https://docs.stirlingpdf.com/Installation/Docker%20Install/), [releases](https://github.com/Stirling-Tools/Stirling-PDF/releases)
 - IT-Tools: [official repository and deployment instructions](https://github.com/CorentinTh/it-tools)
 - Securo: [official repository and production topology](https://github.com/securo-finance/securo)
-- LocalAI: [4.9.0 release](https://github.com/mudler/LocalAI/releases/tag/v4.9.0), [official container guide](https://localai.io/basics/container/), [authentication](https://localai.io/advanced/auth/), [model management](https://localai.io/models/)
+- LocalAI: [4.9.0 release](https://github.com/mudler/LocalAI/releases/tag/v4.9.0), [official container guide](https://localai.io/basics/container/), [authentication](https://localai.io/docs/features/authentication/), [model management](https://localai.io/models/)
 - ComfyUI: [official documentation](https://docs.comfy.org/)
 - Jellyfin: [official container installation](https://jellyfin.org/docs/general/installation/container/)
 - Syncthing: [official container guide](https://github.com/syncthing/syncthing/blob/main/README-Docker.md), [official Dockerfile and ports](https://github.com/syncthing/syncthing/blob/main/Dockerfile)
@@ -163,7 +164,8 @@ installation-owned bridge; only the web service is user-exposable. Debian 13,
 Ubuntu 26.04, and Arch Linux live acceptance is recorded in the multi-container
 architecture result.
 
-Adding or updating an entry requires repeating digest resolution, strict
-manifest tests, helper-plan validation, persistence/recreation tests, exposure
-tests, reconciliation, and supported-host integration. Application upgrades
-remain a separate future operation.
+Adding or updating an entry requires digest resolution, strict manifest tests,
+helper-plan validation, persistence/recreation tests, exposure tests,
+reconciliation, and supported-host integration. Trusted administrator-initiated
+application updates are supported only where the catalog defines a reviewed
+release transition.

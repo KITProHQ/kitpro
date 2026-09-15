@@ -21,4 +21,5 @@ Completed package-platform certifications:
 
 Current feature-milestone validation:
 
+- [Video-ready product baseline](2026-09-15-video-ready-product-baseline.md)
 - [Media and data-heavy catalog expansion](2026-09-15-media-data-heavy-catalog-expansion.md)

@@ -1,8 +1,8 @@
 # Install KITPro Server on Debian 13 or Ubuntu 26.04 LTS
 
-KITPro Server `0.1.0-alpha.2` supports Debian 13 and Ubuntu Server 26.04 LTS on
-amd64. Both distributions use the same package artifact. Rocky Linux 10
-remains experimental.
+KITPro Server supports Debian 13 and Ubuntu Server 26.04 LTS on amd64. Both
+distributions use the same `.deb` artifact. Rocky Linux 10 remains experimental.
+Use the filename and checksum from the [current public release](https://github.com/KITProHQ/kitpro/releases).
 
 ## Prerequisites
 
@@ -21,8 +21,8 @@ it never installs Docker or adds `kitpro-api` to the `docker` group.
 Verify the adjacent checksum, then install the local artifact:
 
 ```sh
-sha256sum -c kitpro-server_0.1.0~alpha2_amd64.deb.sha256
-sudo apt install ./kitpro-server_0.1.0~alpha2_amd64.deb
+sha256sum -c SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_VERSION_amd64.deb
 ```
 
 Installation creates the `kitpro-api` system account, loads the helper's
