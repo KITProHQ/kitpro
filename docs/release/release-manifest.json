@@ -1,13 +1,13 @@
 {
   "kitpro_version": "0.1.0-alpha.1",
-  "source_commit": "57ca023d726a4d89a491f9632f8ab3deaabc519b",
+  "source_commit": "f998fc1c0ab110c2324324fde85d981affa8cefe",
   "supported_platforms": ["debian-13-amd64", "ubuntu-26.04-amd64", "arch-x86_64-linux-lts"],
   "schema_version": 4,
   "catalog_schema_version": 2,
   "artifacts": [
-    {"path": "software/server/dist/releases/0.1.0-alpha.1/kitpro-server_0.1.0~alpha1_amd64.deb", "architecture": "amd64", "sha256": "23e078c81e43e55d7779caa19ef785edb786f52deb57f5b6efc02cc82895be71"},
-    {"path": "software/server/dist/releases/0.1.0-alpha.1/kitpro-server-0.1.0_alpha1-1-x86_64.pkg.tar.zst", "architecture": "x86_64", "sha256": "793a9ec514196f6ccf93fb055eed4b337e612c2ba3cf0f5f5612b160d806f4ed"}
+    {"path": "software/server/dist/kitpro-server_0.1.0~alpha1_amd64.deb", "architecture": "amd64", "sha256": "175fde7b207d94decf4c3f3eb3cef23da7f0af4c4ee19499287211412108532d"},
+    {"path": "software/server/dist/kitpro-server-0.1.0_alpha1-1-x86_64.pkg.tar.zst", "architecture": "x86_64", "sha256": "afe76ba569a1a3d6908a0e9e295ec86cbcf52f3574d62c7af8d6db6b10fd2657"}
   ],
-  "sbom": {"path": "software/server/dist/releases/0.1.0-alpha.1/kitpro-server_0.1.0~alpha1_amd64.cdx.json", "sha256": "0f0108551c69d6d173da4169b44270a28c6ec252b933f2fc1e3b51eb1cd3edb4"},
+  "sbom": {"path": "software/server/dist/kitpro-server_0.1.0~alpha1_amd64.cdx.json", "sha256": "fb42c1444ed1bb89c6c061149723960b5c3a08a76d0939154d1b4606bb12c873"},
   "build_policy": {"go": "go1.27.x", "cgo": false, "flags": ["-trimpath", "-buildvcs=false", "-s", "-w"], "source_date_epoch": "source commit timestamp"}
 }

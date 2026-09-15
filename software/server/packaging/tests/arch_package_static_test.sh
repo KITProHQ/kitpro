@@ -10,6 +10,7 @@ shellcheck "$server_dir/packaging/build-arch-package.sh" "$arch_dir/kitpro-serve
 grep -Fxq "depends=('apparmor' 'docker' 'systemd')" "$arch_dir/PKGBUILD"
 grep -Fxq "license=('Apache-2.0')" "$arch_dir/PKGBUILD"
 grep -Fxq "options=('!debug' '!strip')" "$arch_dir/PKGBUILD"
+grep -Fq 'local public_version=${pkgver/_/"~"}' "$arch_dir/PKGBUILD"
 grep -q 'EnvironmentFile=-/etc/conf.d/kitpro-server' "$server_dir/packaging/systemd/kitpro-api.service"
 grep -q 'EnvironmentFile=-/etc/conf.d/kitpro-server' "$server_dir/packaging/systemd/kitpro-helper.service"
 grep -q 'aa-enabled' "$arch_dir/kitpro-server.install"

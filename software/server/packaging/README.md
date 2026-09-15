@@ -4,7 +4,7 @@ Native Arch Linux packaging lives under `packaging/arch/`. Build it as an
 unprivileged user with:
 
 ```sh
-./packaging/build-arch-package.sh 0.1.0_alpha5
+./packaging/build-arch-package.sh 0.1.0_alpha1
 ```
 
 The builder creates a deterministic source archive, substitutes its checksum
@@ -19,14 +19,14 @@ builds remain attributable and reproducible. See
 Build the Debian 13 and Ubuntu Server 26.04 LTS amd64 package with:
 
 ```sh
-./packaging/build-package.sh 0.1.0~alpha3
+./packaging/build-package.sh 0.1.0~alpha1
 ```
 
-The output is `dist/kitpro-server_0.1.0~alpha3_amd64.deb` plus SHA-256 and
+The output is `dist/kitpro-server_0.1.0~alpha1_amd64.deb` plus SHA-256 and
 build-metadata files. `SOURCE_DATE_EPOCH` may override the default source-commit
 timestamp. The build is static (`CGO_ENABLED=0`) and uses `-trimpath`.
 Generate the CycloneDX SBOM separately with
-`./packaging/generate-sbom.sh 0.1.0~alpha3`; the generator version is pinned in
+`./packaging/generate-sbom.sh 0.1.0~alpha1`; the generator version is pinned in
 that script and the SBOM receives its own adjacent checksum.
 
 Docker Engine is a pre-existing runtime prerequisite rather than a Debian

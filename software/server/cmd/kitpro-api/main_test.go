@@ -44,7 +44,10 @@ func newTestApp(t *testing.T) (*app, *http.Cookie, *http.Cookie) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app{db: db, tmpl: template.Must(template.New("page").Parse(page)), authCfg: auth.DefaultConfig, allowedHosts: map[string]bool{"127.0.0.1:8080": true}, catalog: entries}
+	a := &app{db: db, tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, allowedHosts: map[string]bool{"127.0.0.1:8080": true}, catalog: entries}
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
 	return a, &http.Cookie{Name: auth.CookieName, Value: token}, &http.Cookie{Name: auth.CSRFCookieName, Value: csrf}
 }
 
@@ -136,7 +139,7 @@ func TestApplicationUpdateUsesTrustedReleaseAndPreservesInstallation(t *testing.
 	m.Releases = append(m.Releases, manifest.Release{Version: "1.29.1-maintenance", Registry: m.Releases[0].Registry, Repository: m.Releases[0].Repository, Digest: m.Releases[0].Digest, Platform: m.Releases[0].Platform})
 	a.catalog["freshrss"] = catalog.Entry{Manifest: m}
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
-		if request.ReleaseID != "1.29.1-maintenance" || request.InstanceID != "inst-12345678" || request.RuntimeGeneration != 2 || request.ExposureMode != "loopback" || request.HostPort != 20000 {
+		if request.Operation != "UpdateApplication" || request.ReleaseID != "1.29.1-maintenance" || request.InstanceID != "inst-12345678" || request.RuntimeGeneration != 2 || request.ExposureMode != "loopback" || request.HostPort != 20000 {
 			t.Fatalf("unexpected update request: %#v", request)
 		}
 		return protocol.Response{OK: true, RequestID: request.ID}, nil
@@ -180,8 +183,65 @@ func TestPasswordFormSubmitsExplicitCSRFToken(t *testing.T) {
 	request.AddCookie(csrf)
 	recorder := httptest.NewRecorder()
 	a.password(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `name=csrf_token type=hidden value="`+csrf.Value+`"`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `name="csrf_token" value="`+csrf.Value+`"`) {
 		t.Fatalf("password form lacks explicit CSRF proof: %s", recorder.Body.String())
+	}
+}
+
+func TestBrandedAssetsAndAuthenticationPages(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	for path, contentType := range map[string]string{"/assets/kitpro.css": "text/css", "/assets/kitpro.js": "text/javascript"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "127.0.0.1:8080"
+		body := webCSS
+		if path == "/assets/kitpro.js" {
+			body = webJS
+		}
+		a.asset(contentType+"; charset=utf-8", body)(recorder, request)
+		if recorder.Code != http.StatusOK || !strings.HasPrefix(recorder.Header().Get("Content-Type"), contentType) || recorder.Body.Len() == 0 {
+			t.Fatalf("asset %s: status=%d type=%q bytes=%d", path, recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.Len())
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request.Host = "127.0.0.1:8080"
+	a.login(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "/assets/kitpro.css") || !strings.Contains(recorder.Body.String(), "Welcome back") {
+		t.Fatalf("login page is not using the product design system: %s", recorder.Body.String())
+	}
+}
+
+func TestInstallationLifecycleRouteUsesStableInstallationIdentity(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-12345678/stop", "", session, csrf)
+	a.guard(a.installations)(recorder, request)
+	if recorder.Code != http.StatusAccepted || received.Operation != "StopApplication" || received.InstanceID != "inst-12345678" || received.RuntimeGeneration != 1 {
+		t.Fatalf("lifecycle status=%d request=%#v body=%s", recorder.Code, received, recorder.Body.String())
+	}
+	var desired string
+	if err := a.db.QueryRow(`SELECT desired_state FROM installations WHERE installation_id='inst-12345678'`).Scan(&desired); err != nil || desired != "stopped" {
+		t.Fatalf("desired state=%q error=%v", desired, err)
+	}
+}
+
+func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
+	a, _, csrf := newTestApp(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(csrf)
+	a.home(recorder, request)
+	body := recorder.Body.String()
+	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") {
+		t.Fatalf("catalog presentation is not curated: %s", body)
 	}
 }
 

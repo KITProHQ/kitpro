@@ -175,7 +175,7 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 			} else {
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: v})
 			}
-		case "InstallApplication", "ConfigureServiceExposure":
+		case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication":
 			createApplication(c, db, r)
 		case "StopApplication", "RemoveApplication":
 			remove(c, db, r)
@@ -419,7 +419,10 @@ func validateTrustedRecreation(db *sql.DB, r protocol.Request) error {
 	if err != nil {
 		return fmt.Errorf("trusted ownership unavailable")
 	}
-	if r.RuntimeGeneration != generation+1 || (applicationID != "" && applicationID != r.ApplicationID) || (releaseID != "" && releaseID != r.ReleaseID) || image != r.Image || dataPath != r.DataPath {
+	if r.RuntimeGeneration != generation+1 || (applicationID != "" && applicationID != r.ApplicationID) || dataPath != r.DataPath {
+		return fmt.Errorf("trusted runtime identity mismatch")
+	}
+	if r.Operation != "UpdateApplication" && ((releaseID != "" && releaseID != r.ReleaseID) || image != r.Image) {
 		return fmt.Errorf("trusted runtime identity mismatch")
 	}
 	if trustedPort != 0 && r.HostPort != trustedPort {

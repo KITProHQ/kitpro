@@ -1,5 +1,7 @@
 # KITPro Server product UI direction
 
+The implemented application design system and second-pass audit are documented in [application-ui-system.md](application-ui-system.md).
+
 ## Second-pass Product Design review
 
 ### Source of truth
@@ -65,12 +67,12 @@ local-font behavior.
 
 ### Website source identification
 
-The live site HTML and assets match the remote `keepittechie/kitpro-os` project,
-which is an OS/ISO source repository rather than a Next.js web source. The
-canonical Next.js services site is the private `kitpro-site` repository; its
-`/server` route is the implementation location for the KITPro Server product
-page. The existing deploy script requires an explicit approved deployment, so
-this pass validates the route locally without changing production routing.
+The live site HTML, copy, assets, and Next.js build match the recovered
+`kitpro-os-site` source repository. It is the canonical development source for
+`os.kitpro.us`; its `/server` route is the
+KITPro Server product page. This application pass uses the site's implemented
+tokens and visual character as its brand reference without changing or
+redeploying the website.
 
 ### Validation focus
 

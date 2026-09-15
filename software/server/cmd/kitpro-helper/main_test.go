@@ -187,6 +187,33 @@ func TestTrustedRecreationRequiresGenerationAndStablePort(t *testing.T) {
 	}
 }
 
+func TestTrustedApplicationUpdateMayChangePinnedReleaseOnlyThroughUpdateOperation(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	base := validFreshRSSRequest()
+	_, err = db.Exec(`INSERT INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation,application_id,release_id,exposure_mode,service_id,host_address,host_port,container_port,service_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, base.InstanceID, "container", "name", base.NetworkName, base.Image, base.DataPath, "now", 1, base.ApplicationID, base.ReleaseID, "loopback", "web", "127.0.0.1", 20000, 80, "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.RuntimeGeneration, base.HostPort = 2, 20000
+	base.ReleaseID = "trusted-maintenance-release"
+	base.Image = "docker.io/freshrss/freshrss@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	base.Operation = "InstallApplication"
+	if err = validateTrustedRecreation(db, base); err == nil {
+		t.Fatal("release change accepted as ordinary recreation")
+	}
+	base.Operation = "UpdateApplication"
+	if err = validateTrustedRecreation(db, base); err != nil {
+		t.Fatalf("trusted update transition rejected: %v", err)
+	}
+}
+
 func TestRuntimeRemovalRetainsTrustedInstallationForRecreate(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
 	if err != nil {

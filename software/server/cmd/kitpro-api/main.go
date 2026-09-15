@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -30,10 +31,20 @@ import (
 //go:embed web.html
 var page string
 
+//go:embed auth.html
+var authPage string
+
+//go:embed web.css
+var webCSS string
+
+//go:embed web.js
+var webJS string
+
 type app struct {
 	db            *sql.DB
 	helper        string
 	tmpl          *template.Template
+	authTmpl      *template.Template
 	authCfg       auth.Config
 	secureCookies bool
 	allowedHosts  map[string]bool
@@ -53,6 +64,7 @@ type serviceStatus struct {
 	HostAddress   string `json:"host_address,omitempty"`
 	HostPort      int    `json:"host_port,omitempty"`
 	Endpoint      string `json:"endpoint,omitempty"`
+	ModeLabel     string `json:"-"`
 }
 
 func main() {
@@ -76,7 +88,7 @@ func main() {
 			allowed[h] = true
 		}
 	}
-	a := &app{db: db, helper: env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock"), tmpl: template.Must(template.New("page").Parse(page)), authCfg: auth.DefaultConfig, secureCookies: env("KITPRO_SECURE_COOKIES", "") == "1", allowedHosts: allowed}
+	a := &app{db: db, helper: env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, secureCookies: env("KITPRO_SECURE_COOKIES", "") == "1", allowedHosts: allowed}
 	a.catalog, e = catalog.Load()
 	if e != nil {
 		panic(e)
@@ -92,6 +104,8 @@ func main() {
 		}
 	}
 	auth.Cleanup(context.Background(), db, time.Now())
+	http.HandleFunc("/assets/kitpro.css", a.asset("text/css; charset=utf-8", webCSS))
+	http.HandleFunc("/assets/kitpro.js", a.asset("text/javascript; charset=utf-8", webJS))
 	http.HandleFunc("/setup", a.setup)
 	http.HandleFunc("/login", a.login)
 	http.HandleFunc("/logout", a.guard(a.logout))
@@ -107,6 +121,49 @@ func main() {
 	http.HandleFunc("/api/v1/backup", a.guard(a.backup))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
 	http.ListenAndServe(env("KITPRO_API_ADDR", "127.0.0.1:8080"), nil)
+}
+
+type authPageData struct {
+	Title, Eyebrow, Heading, Description string
+	NeedsCurrentPassword, NeedsUsername  bool
+	PasswordLabel, PasswordName          string
+	PasswordAutocomplete                 string
+	MinimumLength                        bool
+	CSRF, SubmitLabel, Footer, Error     string
+}
+
+func (a *app) securityHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+func (a *app) asset(contentType, body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.allowedHosts[r.Host] {
+			http.Error(w, "host denied", http.StatusBadRequest)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		a.securityHeaders(w)
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, body)
+		}
+	}
+}
+
+func (a *app) renderAuth(w http.ResponseWriter, status int, data authPageData) {
+	a.securityHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := a.authTmpl.Execute(w, data); err != nil {
+		slog.Default().Error("auth page render failed", "event", "ui_render_failed", "error", err)
+	}
 }
 
 func handleMaintenance(args []string) bool {
@@ -173,12 +230,11 @@ func fatalMaintenance(message string) {
 }
 func (a *app) password(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
 		csrf := ""
 		if cookie, err := r.Cookie(auth.CSRFCookieName); err == nil {
-			csrf = template.HTMLEscapeString(cookie.Value)
+			csrf = cookie.Value
 		}
-		_, _ = fmt.Fprintf(w, "<h1>Change password</h1><form method=post><input name=current_password type=password autocomplete=current-password required><input name=new_password type=password autocomplete=new-password minlength=12 maxlength=72 required><input name=csrf_token type=hidden value=\"%s\"><button>Change password</button></form>", csrf)
+		a.renderAuth(w, http.StatusOK, passwordPage(csrf, ""))
 		return
 	}
 	if r.Method != "POST" {
@@ -192,11 +248,19 @@ func (a *app) password(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, csrf, e := auth.ChangePassword(r.Context(), a.db, id, r.FormValue("current_password"), r.FormValue("new_password"))
 	if e != nil {
-		http.Error(w, "password change failed", 400)
+		csrfToken := ""
+		if cookie, err := r.Cookie(auth.CSRFCookieName); err == nil {
+			csrfToken = cookie.Value
+		}
+		a.renderAuth(w, http.StatusBadRequest, passwordPage(csrfToken, "The password could not be changed. Check your current password and try again."))
 		return
 	}
 	a.setCookies(w, tok, csrf)
 	http.Redirect(w, r, "/", 303)
+}
+
+func passwordPage(csrf, message string) authPageData {
+	return authPageData{Title: "Change password · KITPro Server", Eyebrow: "Account settings", Heading: "Change your password", Description: "Update the password for your local administrator account.", NeedsCurrentPassword: true, PasswordLabel: "New password", PasswordName: "new_password", PasswordAutocomplete: "new-password", MinimumLength: true, CSRF: csrf, SubmitLabel: "Change password", Footer: "Your account and application data stay on this server.", Error: message}
 }
 func (a *app) setCookies(w http.ResponseWriter, tok, csrf string) {
 	http.SetCookie(w, &http.Cookie{Name: auth.CookieName, Value: tok, Path: "/", HttpOnly: true, Secure: a.secureCookies, SameSite: http.SameSiteStrictMode, MaxAge: int(a.authCfg.AbsoluteLifetime.Seconds())})
@@ -217,9 +281,7 @@ func (a *app) guard(next http.HandlerFunc) http.HandlerFunc {
 			}
 			return
 		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		a.securityHeaders(w)
 		if r.Method != "GET" && r.Method != "HEAD" {
 			if o := r.Header.Get("Origin"); o == "" || !a.allowedOrigin(o) {
 				slog.Default().Warn("origin rejected", "event", "origin_rejected", "origin", o)
@@ -258,15 +320,18 @@ func (a *app) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "POST" {
 		if e := auth.Setup(r.Context(), a.db, r.FormValue("username"), r.FormValue("password")); e != nil {
-			http.Error(w, "setup failed", 400)
+			a.renderAuth(w, http.StatusBadRequest, setupPage("Setup could not be completed. Choose a username and a password of at least 12 characters."))
 			return
 		}
 		slog.Default().Info("setup completed", "event", "setup_completed", "username", r.FormValue("username"))
 		http.Redirect(w, r, "/login", 303)
 		return
 	}
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
-	w.Write([]byte(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Set up KITPro</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:30rem;margin:10vh auto;padding:1.25rem;color:#172033;background:#f6f7fb}main{background:#fff;border:1px solid #dfe3ec;border-radius:12px;padding:1.5rem}label{display:block;font-weight:650;margin-top:1rem}input{display:block;width:100%;box-sizing:border-box;padding:.65rem;margin-top:.35rem;border:1px solid #9aa5b5;border-radius:8px;font:inherit}button{margin-top:1.25rem;padding:.65rem .9rem;border:0;border-radius:8px;background:#175cd3;color:#fff;font:inherit;font-weight:700}button:focus-visible,input:focus-visible{outline:3px solid #8ab4ff;outline-offset:2px}.muted{color:#596579}</style></head><body><main><h1>Set up KITPro Server</h1><p class="muted">Create the local administrator for this server. Your application data stays on your server.</p><form method="post"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required><p class="muted">Use at least 12 characters.</p><button type="submit">Create administrator</button></form></main></body></html>`))
+	a.renderAuth(w, http.StatusOK, setupPage(""))
+}
+
+func setupPage(message string) authPageData {
+	return authPageData{Title: "Set up KITPro Server", Eyebrow: "Welcome to your server", Heading: "Create your local administrator", Description: "This account manages KITPro on this server. No cloud account is required.", NeedsUsername: true, PasswordLabel: "Password", PasswordName: "password", PasswordAutocomplete: "new-password", MinimumLength: true, SubmitLabel: "Create administrator", Footer: "Next, you will sign in and choose your first application. Your data stays on your server.", Error: message}
 }
 func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	if !a.allowedHosts[r.Host] {
@@ -281,7 +346,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(delay.Seconds()+1)))
 				slog.Default().Warn("login throttled", "event", "login_throttled", "remote", r.RemoteAddr)
 			}
-			http.Error(w, "invalid username or password", 401)
+			a.renderAuth(w, http.StatusUnauthorized, loginPage("The username or password was not recognized. Check your details and try again."))
 			return
 		}
 		slog.Default().Info("login succeeded", "event", "login_success", "username", r.FormValue("username"))
@@ -295,7 +360,11 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		_ = csrf
 		return
 	}
-	w.Write([]byte(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · KITPro</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:30rem;margin:10vh auto;padding:1.25rem;color:#172033;background:#f6f7fb}main{background:#fff;border:1px solid #dfe3ec;border-radius:12px;padding:1.5rem}label{display:block;font-weight:650;margin-top:1rem}input{display:block;width:100%;box-sizing:border-box;padding:.65rem;margin-top:.35rem;border:1px solid #9aa5b5;border-radius:8px;font:inherit}button{margin-top:1.25rem;padding:.65rem .9rem;border:0;border-radius:8px;background:#175cd3;color:#fff;font:inherit;font-weight:700}button:focus-visible,input:focus-visible{outline:3px solid #8ab4ff;outline-offset:2px}</style></head><body><main><h1>Sign in to KITPro</h1><p>Manage your local applications and server settings.</p><form method="post"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form></main></body></html>`))
+	a.renderAuth(w, http.StatusOK, loginPage(""))
+}
+
+func loginPage(message string) authPageData {
+	return authPageData{Title: "Sign in · KITPro Server", Eyebrow: "Local administration", Heading: "Welcome back", Description: "Sign in to manage the applications and services on this server.", NeedsUsername: true, PasswordLabel: "Password", PasswordName: "password", PasswordAutocomplete: "current-password", SubmitLabel: "Sign in", Footer: "KITPro uses a local account. Your credentials are not sent to a KITPro cloud service.", Error: message}
 }
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	if !a.allowedHosts[r.Host] {
@@ -345,8 +414,9 @@ func (a *app) version(w http.ResponseWriter, r *http.Request) {
 		"version":                buildinfo.Version,
 		"source_commit":          buildinfo.SourceCommit,
 		"build_date":             buildinfo.BuildDate,
-		"architecture":           "linux/amd64",
-		"package_family":         "debian-or-arch",
+		"architecture":           "linux/" + runtime.GOARCH,
+		"package_family":         packageFamily(),
+		"platform":               platformName(),
 		"schema_version":         schema,
 		"catalog_schema_version": manifest.MultiContainerSchemaVersion,
 	})
@@ -395,33 +465,28 @@ func (a *app) reconcile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
-	rows, _ := operations.List(r.Context(), a.db)
 	type appView struct {
-		ID          string
-		Name        string
-		Description string
-		Release     string
-		Releases    []string
-	}
-	apps := []appView{}
-	for _, id := range catalog.IDs(a.catalog) {
-		m := a.catalog[id].Manifest
-		rel := ""
-		if len(m.Releases) > 0 {
-			rel = m.Releases[0].Version
-		}
-		versions := make([]string, 0, len(m.Releases))
-		for _, release := range m.Releases {
-			versions = append(versions, release.Version)
-		}
-		apps = append(apps, appView{m.ID, m.Name, m.Description, rel, versions})
+		ID, Name, Description, Release, Category, Initials string
+		InstalledCount                                     int
 	}
 	type installationView struct {
-		ID, Name, State, AppID, Release string
-		Generation                      int
-		Services                        []serviceStatus
+		ID, Name, Description, Category, Initials, State, StateLabel, StateClass, AppID, Release string
+		AccessLabel, OpenEndpoint, AvailableRelease                                              string
+		Generation, InstalledCount                                                               int
+		UpdateAvailable                                                                          bool
+		Services                                                                                 []serviceStatus
+		Components                                                                               []string
 	}
+	type operationView struct {
+		Title, Initial, StatusLabel, StatusClass, Summary, RequestedAt, TimeLabel string
+	}
+	type healthView struct {
+		Label, Headline, Description, Docker, Helper, Class string
+	}
+
 	installations := []installationView{}
+	installedCountByApp := map[string]int{}
+	runningCount, privateCount, attentionCount, updateCount := 0, 0, 0, 0
 	installedRows, _ := a.db.QueryContext(r.Context(), "SELECT installation_id,application_id,desired_state,runtime_generation FROM installations ORDER BY created_at")
 	if installedRows != nil {
 		defer installedRows.Close()
@@ -431,22 +496,214 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 			if installedRows.Scan(&id, &appID, &desired, &generation) != nil {
 				continue
 			}
-			name := appID
-			if entry, ok := a.catalog[appID]; ok {
-				name = entry.Manifest.Name
-			}
+			installedCountByApp[appID]++
+			view := installationView{ID: id, Name: appID, AppID: appID, State: desired, Generation: generation, AccessLabel: "Private"}
 			services, _ := a.serviceStatuses(r.Context(), id)
-			release := ""
-			_ = a.db.QueryRowContext(r.Context(), "SELECT release_id FROM installations WHERE installation_id=?", id).Scan(&release)
-			installations = append(installations, installationView{id, name, desired, appID, release, generation, services})
+			view.Services = services
+			_ = a.db.QueryRowContext(r.Context(), "SELECT release_id FROM installations WHERE installation_id=?", id).Scan(&view.Release)
+			if entry, ok := a.catalog[appID]; ok {
+				m := entry.Manifest
+				view.Name, view.Description, view.Category, view.Initials = m.Name, m.Description, catalogCategory(m.ID), appInitials(m.Name)
+				if len(m.Components) == 0 && len(m.Releases) > 1 {
+					candidate := m.Releases[len(m.Releases)-1].Version
+					if candidate != view.Release {
+						view.AvailableRelease, view.UpdateAvailable = candidate, true
+						updateCount++
+					}
+				}
+				if len(m.Components) == 0 {
+					view.Components = []string{"Application"}
+				} else {
+					for _, component := range m.Components {
+						view.Components = append(view.Components, componentLabel(component.ID))
+					}
+				}
+			}
+			view.StateLabel, view.StateClass = statePresentation(desired)
+			if desired == "running" {
+				runningCount++
+			} else if desired != "stopped" && desired != "runtime_removed" {
+				attentionCount++
+			}
+			if len(services) == 0 {
+				privateCount++
+			}
+			for i := range services {
+				services[i].ModeLabel = exposureLabel(services[i].Mode)
+				if services[i].Mode == string(exposure.Internal) {
+					privateCount++
+				}
+				if services[i].Endpoint != "" && view.OpenEndpoint == "" {
+					view.OpenEndpoint = services[i].Endpoint
+				}
+				if services[i].Mode != "" {
+					view.AccessLabel = services[i].ModeLabel
+				}
+			}
+			view.Services = services
+			installations = append(installations, view)
 		}
+	}
+	apps := []appView{}
+	for _, id := range catalog.IDs(a.catalog) {
+		m := a.catalog[id].Manifest
+		if !catalogVisible(m.ID) {
+			continue
+		}
+		release := ""
+		if len(m.Releases) > 0 {
+			release = m.Releases[0].Version
+		}
+		apps = append(apps, appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), InstalledCount: installedCountByApp[m.ID]})
+	}
+	records, _ := operations.List(r.Context(), a.db)
+	rows := make([]operationView, 0, len(records))
+	for _, record := range records {
+		title := operationTitle(record.Type)
+		label, class := operationStatus(record.Status)
+		summary := operationSummary(record)
+		when := record.RequestedAt
+		if parsed, err := time.Parse(time.RFC3339Nano, record.RequestedAt); err == nil {
+			when = parsed.Local().Format("Jan 2, 3:04 PM")
+		}
+		rows = append(rows, operationView{Title: title, Initial: strings.ToUpper(title[:1]), StatusLabel: label, StatusClass: class, Summary: summary, RequestedAt: record.RequestedAt, TimeLabel: when})
+	}
+	health := healthView{Label: "Healthy", Headline: "Your server is ready.", Description: "KITPro is connected to its protected helper and ready to manage trusted applications.", Docker: "Connected", Helper: "Protected", Class: "is-healthy"}
+	if response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectDocker"}); err != nil || !response.OK {
+		health = healthView{Label: "Attention needed", Headline: "Container services need attention.", Description: "KITPro cannot reach Docker through its protected helper. Existing data remains in place.", Docker: "Unavailable", Helper: "Check service", Class: "needs-attention"}
+		attentionCount++
 	}
 	csrf := ""
 	if cookie, err := r.Cookie(auth.CSRFCookieName); err == nil {
 		csrf = cookie.Value
 	}
-	a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "CSRF": csrf, "Version": buildinfo.Version})
+	a.securityHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	var schema int
+	_ = a.db.QueryRowContext(r.Context(), "SELECT version FROM schema_version LIMIT 1").Scan(&schema)
+	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.MultiContainerSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount}); err != nil {
+		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
+	}
 }
+
+func platformName() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "Linux"
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			return strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
+		}
+	}
+	return "Linux"
+}
+
+func packageFamily() string {
+	data, _ := os.ReadFile("/etc/os-release")
+	if strings.Contains(string(data), "ID=arch") {
+		return "pacman"
+	}
+	return "apt/dpkg"
+}
+
+func catalogVisible(id string) bool { return id != "busybox" }
+
+func catalogCategory(id string) string {
+	categories := map[string]string{
+		"actual-budget": "Finance", "freshrss": "Reading", "home-assistant": "Home automation",
+		"mealie": "Food and recipes", "memos": "Notes", "paperless-ngx": "Documents",
+		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
+	}
+	if category := categories[id]; category != "" {
+		return category
+	}
+	return "Application"
+}
+
+func appInitials(name string) string {
+	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(name))
+	if len(words) == 0 {
+		return "AP"
+	}
+	if len(words) == 1 {
+		runes := []rune(words[0])
+		if len(runes) == 1 {
+			return strings.ToUpper(string(runes[0]))
+		}
+		return strings.ToUpper(string(runes[:2]))
+	}
+	return strings.ToUpper(string([]rune(words[0])[0]) + string([]rune(words[1])[0]))
+}
+
+func componentLabel(id string) string {
+	if id == "broker" {
+		return "Background service"
+	}
+	if id == "web" {
+		return "Web application"
+	}
+	return strings.ToUpper(id[:1]) + id[1:]
+}
+
+func statePresentation(state string) (string, string) {
+	switch state {
+	case "running":
+		return "Healthy", "badge-success"
+	case "stopped":
+		return "Stopped", "badge-warning"
+	case "runtime_removed":
+		return "Runtime removed", "badge-warning"
+	default:
+		return "Needs attention", "badge-danger"
+	}
+}
+
+func exposureLabel(mode string) string {
+	switch mode {
+	case string(exposure.Loopback):
+		return "This server only"
+	case string(exposure.LAN):
+		return "Local network"
+	default:
+		return "Private"
+	}
+}
+
+func operationTitle(operationType string) string {
+	titles := map[string]string{
+		"InstallApplication": "Application installed", "UpdateApplication": "Application updated",
+		"ConfigureServiceExposure": "Access changed", "RecreateApplication": "Runtime recreated",
+		"StartApplication": "Application started", "StopApplication": "Application stopped",
+		"RemoveApplication": "Runtime removed",
+	}
+	if title := titles[operationType]; title != "" {
+		return title
+	}
+	return "Server operation"
+}
+
+func operationStatus(status string) (string, string) {
+	switch status {
+	case "succeeded":
+		return "Completed", "badge-success"
+	case "failed":
+		return "Needs attention", "badge-danger"
+	default:
+		return "In progress", "badge-info"
+	}
+}
+
+func operationSummary(record operations.Record) string {
+	if record.Status == "failed" {
+		return "KITPro could not complete this operation. Review the application and retry when ready."
+	}
+	if record.Status != "succeeded" {
+		return "KITPro is applying the requested change."
+	}
+	return "The requested change completed successfully."
+}
+
 func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" && strings.Trim(r.URL.Path, "/") != "api/v1/operations" {
 		id := strings.TrimPrefix(r.URL.Path, "/api/v1/operations/")
@@ -599,7 +856,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		if opType == "ConfigureServiceExposure" {
 			helperOperation = opType
 		} else if opType == "UpdateApplication" {
-			helperOperation = "InstallApplication"
+			helperOperation = "UpdateApplication"
 		}
 		q := protocol.Request{Version: 1, ID: id, Operation: helperOperation, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
 		q.ExposureMode, q.HostAddress, q.HostPort, q.ServiceID, q.ContainerPort, q.ServiceProtocol = r.URL.Query().Get("exposure_mode"), r.URL.Query().Get("host_address"), 0, r.URL.Query().Get("service_id"), 0, r.URL.Query().Get("service_protocol")
@@ -783,8 +1040,47 @@ func (a *app) apps(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(detail{m.ID, m.Name, m.Description, m.SchemaVersion, m.Releases, m.Storage})
 }
 
+func (a *app) runInstallationLifecycle(w http.ResponseWriter, r *http.Request, installationID, action string) {
+	var generation int
+	if err := a.db.QueryRowContext(r.Context(), "SELECT runtime_generation FROM installations WHERE installation_id=?", installationID).Scan(&generation); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	operationType := map[string]string{"start": "StartApplication", "stop": "StopApplication", "remove": "RemoveApplication"}[action]
+	desired := map[string]string{"start": "running", "stop": "stopped", "remove": "runtime_removed"}[action]
+	operationID := operations.NewID()
+	if err := operations.Insert(r.Context(), a.db, operationID, operationType, installationID); err != nil {
+		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
+		return
+	}
+	response, err := a.callHelper(protocol.Request{Version: 1, ID: operationID, Operation: operationType, InstanceID: installationID, RuntimeGeneration: generation})
+	if err == nil && !response.OK {
+		err = fmt.Errorf("helper rejected operation")
+	}
+	status, summary := "succeeded", "helper accepted"
+	if err != nil {
+		status, summary = "failed", safeOperationSummary(operationErrorCategory(err))
+	}
+	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
+	if err != nil {
+		http.Error(w, "KITPro could not complete the lifecycle operation", http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = a.db.ExecContext(r.Context(), "UPDATE installations SET desired_state=?,updated_at=? WHERE installation_id=?", desired, time.Now().UTC().Format(time.RFC3339Nano), installationID)
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "status": status})
+}
+
 func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/installations/"), "/"), "/")
+	if len(parts) == 2 && (parts[1] == "start" || parts[1] == "stop" || parts[1] == "remove") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		a.runInstallationLifecycle(w, r, parts[0], parts[1])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "update" {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method", 405)
@@ -793,15 +1089,23 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Release string `json:"release"`
 		}
-		dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
-		dec.DisallowUnknownFields()
-		if dec.Decode(&in) != nil || in.Release == "" {
-			http.Error(w, "release is required", 400)
-			return
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
+			dec.DisallowUnknownFields()
+			if dec.Decode(&in) != nil {
+				http.Error(w, "release is required", 400)
+				return
+			}
+			var trailing any
+			if dec.Decode(&trailing) != io.EOF {
+				http.Error(w, "invalid request", 400)
+				return
+			}
+		} else {
+			in.Release = r.FormValue("release")
 		}
-		var trailing any
-		if dec.Decode(&trailing) != io.EOF {
-			http.Error(w, "invalid request", 400)
+		if in.Release == "" {
+			http.Error(w, "release is required", 400)
 			return
 		}
 		var appID, current string
@@ -1058,12 +1362,13 @@ func (a *app) serviceStatuses(ctx context.Context, installationID string) ([]ser
 	}
 	out := make([]serviceStatus, 0, len(entry.Manifest.Services))
 	for _, declared := range entry.Manifest.Services {
-		status := serviceStatus{ID: declared.ID, Name: declared.Name, Protocol: declared.Protocol, ContainerPort: declared.ContainerPort, Mode: string(exposure.Internal)}
+		status := serviceStatus{ID: declared.ID, Name: declared.Name, Protocol: declared.Protocol, ContainerPort: declared.ContainerPort, Mode: string(exposure.Internal), ModeLabel: "Private"}
 		if record, err := exposure.Get(ctx, a.db, installationID, declared.ID); err == nil {
 			status.Mode, status.HostAddress, status.HostPort = string(record.Mode), record.HostAddress, record.HostPort
 			if record.Mode != exposure.Internal {
 				status.Endpoint = declared.Protocol + "://" + net.JoinHostPort(record.HostAddress, strconv.Itoa(record.HostPort))
 			}
+			status.ModeLabel = exposureLabel(status.Mode)
 		}
 		out = append(out, status)
 	}

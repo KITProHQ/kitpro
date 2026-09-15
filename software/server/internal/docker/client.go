@@ -241,16 +241,33 @@ func (c *Client) HasForeignNetworkMember(network, ownedContainerID string) (bool
 // set; no Docker label is treated as authority.
 func (c *Client) HasForeignNetworkMembers(network string, owned map[string]bool) (bool, error) {
 	networkObject, err := c.InspectNetwork(network)
-	if err != nil { return false, err }
-	if endpoints, ok := networkObject["Containers"].(map[string]any); ok {
-		for id := range endpoints { if !owned[id] { return true, nil } }
+	if err != nil {
+		return false, err
 	}
-	containers, err := c.ListContainers(); if err != nil { return false, err }
+	if endpoints, ok := networkObject["Containers"].(map[string]any); ok {
+		for id := range endpoints {
+			if !owned[id] {
+				return true, nil
+			}
+		}
+	}
+	containers, err := c.ListContainers()
+	if err != nil {
+		return false, err
+	}
 	for _, container := range containers {
-		if owned[container.ID] { continue }
-		observed, inspectErr := c.Inspect(container.ID); if inspectErr != nil { return false, inspectErr }
-		settings, _ := observed["NetworkSettings"].(map[string]any); networks, _ := settings["Networks"].(map[string]any)
-		if _, member := networks[network]; member { return true, nil }
+		if owned[container.ID] {
+			continue
+		}
+		observed, inspectErr := c.Inspect(container.ID)
+		if inspectErr != nil {
+			return false, inspectErr
+		}
+		settings, _ := observed["NetworkSettings"].(map[string]any)
+		networks, _ := settings["Networks"].(map[string]any)
+		if _, member := networks[network]; member {
+			return true, nil
+		}
 	}
 	return false, nil
 }
