@@ -29,7 +29,7 @@ This inventory is preparation material, not a launch script. Canonical stills ar
 | Mobile UI | 390×844 browser capture | Responsive administration | No cleanup expected |
 | Package install | Fresh Debian/Ubuntu/Arch VM | Native package workflow | Hide shell history, IPs, usernames when unnecessary |
 | Platform trio | Debian 13, Ubuntu 26.04, Arch `linux-lts` | Certified operating-system boundary | Show versions, not network inventory |
-| Product page | <https://os.kitpro.us/server> | Public positioning | No authenticated state |
+| Product page | <https://kitpro.us/server> | Public positioning | No authenticated state |
 | GitHub release | <https://github.com/KITProHQ/kitpro/releases> | Packages, checksums, SBOM | Use the actually published release only |
 
 ## Reproducible demo sequence

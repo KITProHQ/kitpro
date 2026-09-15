@@ -27,6 +27,6 @@ Release notes and checksums attached to the prerelease are authoritative for dow
 - [Trusted storage guide](docs/trusted-storage.md)
 - [Hardware acceleration guide](docs/hardware-acceleration.md)
 - [Screenshots and video visual inventory](docs/product/video-broll-inventory.md)
-- [KITPro Server product page](https://os.kitpro.us/server)
+- [KITPro Server product page](https://kitpro.us/server)
 
 The technical implementation entry point is [software/server/README.md](software/server/README.md). KITPro is licensed under the [Apache License 2.0](LICENSE). Future KITPro OS, hardware, and cloud ideas are separate from this Server alpha and are not current features.

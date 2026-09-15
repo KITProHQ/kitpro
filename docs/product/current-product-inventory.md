@@ -12,7 +12,7 @@ Status date: 2026-09-15. This page records shipped source behavior and validated
 | Supported systems | Debian 13 amd64; Ubuntu 26.04 LTS amd64; Arch Linux x86_64 under the documented `linux-lts` boundary |
 | Experimental | Rocky Linux 10 amd64 |
 | Public source | <https://github.com/KITProHQ/kitpro> |
-| Product page | <https://os.kitpro.us/server> |
+| Product page | <https://kitpro.us/server> |
 | Releases | <https://github.com/KITProHQ/kitpro/releases> |
 
 ## Capabilities
