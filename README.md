@@ -12,11 +12,11 @@ Supported hosts are Debian 13 amd64, Ubuntu 26.04 LTS amd64, and fully updated A
 
 ## Get started
 
-1. Download a package from the [GitHub releases page](https://github.com/KITProHQ/kitpro/releases).
+1. Download a package from the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11).
 2. Follow the [public alpha quickstart](docs/release/quickstart.md) for Debian, Ubuntu, or Arch.
 3. Open `http://127.0.0.1:8080/`, create the first local administrator, choose an app, and select its access mode.
 
-The current public release can trail validated development builds. Release notes and checksums on the release page are authoritative for downloaded packages.
+Release notes and checksums attached to the prerelease are authoritative for downloaded packages.
 
 ## Explore
 

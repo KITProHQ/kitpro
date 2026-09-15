@@ -38,7 +38,7 @@ Build packages with the version documented in the release manifest:
 ./packaging/build-arch-package.sh 0.1.0_alpha11
 ```
 
-Do not infer a public release from a source version. Use the [GitHub releases page](https://github.com/KITProHQ/kitpro/releases) for published artifacts.
+Do not infer a public release from a source version. Use the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11) for published artifacts.
 
 ## Contributor references
 

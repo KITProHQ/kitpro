@@ -2,7 +2,7 @@
 
 KITPro Server supports Debian 13 and Ubuntu Server 26.04 LTS on amd64. Both
 distributions use the same `.deb` artifact. Rocky Linux 10 remains experimental.
-Use the filename and checksum from the [current public release](https://github.com/KITProHQ/kitpro/releases).
+Use the filename and checksum from the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11).
 
 ## Prerequisites
 
