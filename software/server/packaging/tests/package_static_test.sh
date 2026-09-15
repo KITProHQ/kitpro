@@ -39,9 +39,16 @@ test "$("$unpack/data/usr/libexec/kitpro-helper" --version | awk '{print $2}')" 
 grep -q '^Depends: adduser, apparmor, systemd$' "$unpack/control/control"
 grep -q 'Environment=KITPRO_API_USER=kitpro-api' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-helper$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+grep -q '^AmbientCapabilities=CAP_CHOWN$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|DAC_READ_SEARCH|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"; then
+    echo "helper gained an unapproved capability" >&2
+    exit 1
+fi
 grep -q '^/usr/libexec/kitpro-helper flags=(attach_disconnected) {$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  deny network inet,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  deny network inet6,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q 'apparmor_parser -r -W -T' "$unpack/control/postinst"
 if grep -R -E '__API_UID__|RestrictSUIDSGID|docker group|0\.0\.0\.0' "$unpack/data/usr/lib/systemd/system" "$unpack/data/etc/default"; then
     echo "unsafe or unresolved package configuration found" >&2

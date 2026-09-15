@@ -104,6 +104,22 @@ func TestCreateContainerPlanUsesOnlyResolvedDevices(t *testing.T) {
 	}
 }
 
+func TestCreateContainerPlanSetsTrustedUser(t *testing.T) {
+	var body map[string]any
+	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader(`{"Id":"container"}`)), Header: make(http.Header)}, nil
+	})}}
+	if _, err := client.CreateContainerPlan(ContainerPlan{Image: "image", Name: "name", Network: "network", User: "1000:1000"}); err != nil {
+		t.Fatal(err)
+	}
+	if body["User"] != "1000:1000" {
+		t.Fatalf("trusted user missing: %#v", body)
+	}
+}
+
 func TestHasForeignNetworkMemberFindsStoppedContainerOmittedFromNetworkInspect(t *testing.T) {
 	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body string

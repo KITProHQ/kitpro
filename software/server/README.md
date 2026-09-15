@@ -8,7 +8,7 @@
 
 KITPro Server is licensed under the [Apache License 2.0](../../LICENSE).
 
-This is a deliberately bounded production implementation. It provides a local API, host/Docker inspection, a typed helper boundary, a local-administrator authentication boundary, and a constrained embedded application catalog. The catalog contains seven single-container applications plus Paperless-ngx as a managed multi-container application. The helper never accepts arbitrary Docker or shell commands.
+This is a deliberately bounded production implementation. It provides a local API, host/Docker inspection, a typed helper boundary, a local-administrator authentication boundary, and a constrained embedded application catalog. The catalog contains fourteen single-container applications plus Paperless-ngx as a managed multi-container application. The helper never accepts arbitrary Docker or shell commands.
 
 Catalog applications are represented by schema-versioned JSON
 catalog manifest resolved into a typed application plan. Manifests are not

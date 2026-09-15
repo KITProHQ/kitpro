@@ -1,0 +1,24 @@
+{
+  "schema_version": 5,
+  "id": "audiobookshelf",
+  "name": "Audiobookshelf",
+  "description": "Organize and stream audiobooks with managed metadata and a read-only library.",
+  "releases": [
+    {"version": "2.36.0", "registry": "ghcr.io", "repository": "advplyr/audiobookshelf", "digest": "sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8", "platform": "linux/amd64"}
+  ],
+  "run_as": {"uid": 1000, "gid": 1000},
+  "storage": [
+    {"id": "config", "container_path": "/config", "persistent": true, "read_only": false, "owner_uid": 1000, "owner_gid": 1000},
+    {"id": "metadata", "container_path": "/metadata", "persistent": true, "read_only": false, "owner_uid": 1000, "owner_gid": 1000}
+  ],
+  "external_storage": [
+    {"id": "audiobooks", "container_path": "/audiobooks", "mode": "read-only", "required": true, "purpose": "Audiobook library"}
+  ],
+  "environment": [
+    {"name": "TZ", "value": "UTC"}
+  ],
+  "services": [
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80}
+  ],
+  "restart": "unless-stopped"
+}

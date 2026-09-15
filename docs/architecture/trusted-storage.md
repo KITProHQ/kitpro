@@ -40,6 +40,10 @@ is never replaced by an automatically created directory.
 - Mount propagation, arbitrary flags, relative paths, and raw bind syntax are
   not representable.
 - Only the component declaring a slot receives the mount.
+- Multiple read-only consumers may share one root. A read-write consumer is
+  exclusive and conflicts with every binding owned by another installation.
+- A trusted schema-v5 runtime identity can own only explicitly declared
+  KITPro-managed directories. Imported-root ownership is never changed.
 
 The helper's AppArmor profile can inspect directory metadata under common data
 trees. It cannot read imported files. Docker performs the bind after helper
@@ -74,3 +78,6 @@ same storage identity.
 | Extra bind is injected | Exact bind-set comparison reports security drift. |
 | Root is deleted while used | Foreign-key ownership and the removal operation reject it. |
 | Restore moves to another host | Identity revalidation marks the root unavailable until reassociated. |
+| Competing writers corrupt imported data | One writer is exclusive; readers and other writers are rejected while it is bound. |
+| Image defaults to root | A trusted numeric primary identity is enforced and reconciled; supplementary groups are unavailable. |
+| Managed storage needs a non-root owner | The helper receives only `CAP_CHOWN`, validates the manifest identity and exact managed path first, and never re-owns imported roots. |

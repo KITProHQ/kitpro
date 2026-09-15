@@ -24,6 +24,7 @@ type ContainerSummary struct {
 }
 type ContainerPlan struct {
 	Image, Name, Network string
+	User                 string
 	Labels               map[string]string
 	Command              []string
 	Environment          []string
@@ -163,6 +164,9 @@ func (c *Client) CreateContainerPlan(p ContainerPlan) (string, error) {
 		endpoint["Aliases"] = p.NetworkAliases
 	}
 	body := map[string]any{"Image": p.Image, "Labels": p.Labels, "HostConfig": host, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{p.Network: endpoint}}}
+	if p.User != "" {
+		body["User"] = p.User
+	}
 	if len(p.PortBindings) > 0 {
 		host["PortBindings"] = p.PortBindings
 	}

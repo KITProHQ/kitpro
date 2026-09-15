@@ -43,6 +43,7 @@ type Request struct {
 	RootName          string                   `json:"root_name,omitempty"`
 	RootPath          string                   `json:"root_path,omitempty"`
 	RootMode          string                   `json:"root_mode,omitempty"`
+	RunAs             *RuntimeIdentity         `json:"run_as,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -55,6 +56,12 @@ type StorageMount struct {
 	ContainerPath string `json:"container_path"`
 	HostPath      string `json:"host_path"`
 	ReadOnly      bool   `json:"read_only,omitempty"`
+	OwnerUID      int    `json:"owner_uid,omitempty"`
+	OwnerGID      int    `json:"owner_gid,omitempty"`
+}
+type RuntimeIdentity struct {
+	UID int `json:"uid"`
+	GID int `json:"gid"`
 }
 type ExternalStorageBinding struct {
 	SlotID string `json:"slot_id"`
@@ -76,6 +83,7 @@ type Component struct {
 	Restart         string                   `json:"restart,omitempty"`
 	Hardware        []HardwareRequirement    `json:"hardware,omitempty"`
 	ExternalStorage []ExternalStorageBinding `json:"external_storage,omitempty"`
+	RunAs           *RuntimeIdentity         `json:"run_as,omitempty"`
 }
 type HardwareRequirement struct {
 	Class       string `json:"class"`

@@ -15,6 +15,7 @@ const SchemaVersion = 1
 const MultiContainerSchemaVersion = 2
 const HardwareSchemaVersion = 3
 const ExternalStorageSchemaVersion = 4
+const RuntimeIdentitySchemaVersion = 5
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -33,6 +34,7 @@ type Manifest struct {
 	Components      []Component       `json:"components,omitempty"`
 	Hardware        []Accelerator     `json:"hardware,omitempty"`
 	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
+	RunAs           *RuntimeIdentity  `json:"run_as,omitempty"`
 }
 type Release struct {
 	Version    string `json:"version"`
@@ -46,6 +48,15 @@ type Storage struct {
 	ContainerPath string `json:"container_path"`
 	Persistent    bool   `json:"persistent"`
 	ReadOnly      bool   `json:"read_only"`
+	OwnerUID      int    `json:"owner_uid,omitempty"`
+	OwnerGID      int    `json:"owner_gid,omitempty"`
+}
+
+// RuntimeIdentity is a trusted numeric primary identity. Supplementary groups,
+// host-name lookup, and user-supplied identities are intentionally absent.
+type RuntimeIdentity struct {
+	UID int `json:"uid"`
+	GID int `json:"gid"`
 }
 
 // ExternalStorage declares a logical imported-data slot. Host paths and bind
@@ -81,6 +92,7 @@ type Component struct {
 	Restart         string            `json:"restart,omitempty"`
 	Hardware        []Accelerator     `json:"hardware,omitempty"`
 	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
+	RunAs           *RuntimeIdentity  `json:"run_as,omitempty"`
 }
 
 // Accelerator names a helper-owned device class. Host paths, groups, Docker
@@ -100,6 +112,7 @@ type Plan struct {
 	ResolvedComponents                                                                []ResolvedComponent
 	Hardware                                                                          []Accelerator
 	ExternalStorage                                                                   []ExternalStorage
+	RunAs                                                                             *RuntimeIdentity
 }
 
 // ResolvedComponent is the helper-facing, digest-pinned component plan. It is
@@ -115,6 +128,7 @@ type ResolvedComponent struct {
 	Restart         string
 	Hardware        []Accelerator
 	ExternalStorage []ExternalStorage
+	RunAs           *RuntimeIdentity
 }
 
 func Parse(data []byte) (Manifest, error) {
@@ -136,7 +150,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion && m.SchemaVersion != RuntimeIdentitySchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -153,6 +167,12 @@ func Validate(m Manifest) error {
 	}
 	if m.SchemaVersion < ExternalStorageSchemaVersion && (len(m.ExternalStorage) != 0 || componentsHaveExternalStorage(m.Components)) {
 		return fmt.Errorf("external storage requires schema version 4")
+	}
+	if m.SchemaVersion < RuntimeIdentitySchemaVersion && (m.RunAs != nil || storageHasOwnership(m.Storage) || componentsHaveRuntimeIdentity(m.Components)) {
+		return fmt.Errorf("runtime identity requires schema version 5")
+	}
+	if err := validateRuntimeIdentity(m.RunAs); err != nil {
+		return err
 	}
 	if err := validateExternalStorage(m.ExternalStorage, m.Storage); err != nil {
 		return err
@@ -185,6 +205,9 @@ func Validate(m Manifest) error {
 			return fmt.Errorf("invalid storage declaration")
 		}
 		seen[s.ID] = true
+		if err := validateStorageOwnership(s); err != nil {
+			return err
+		}
 	}
 	seen = map[string]bool{}
 	for _, e := range m.Environment {
@@ -246,6 +269,9 @@ func Validate(m Manifest) error {
 			return fmt.Errorf("component %s: %w", c.ID, err)
 		}
 		if err := validateExternalStorage(c.ExternalStorage, c.Storage); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
+		if err := validateRuntimeIdentity(c.RunAs); err != nil {
 			return fmt.Errorf("component %s: %w", c.ID, err)
 		}
 	}
@@ -325,6 +351,9 @@ func validateComponentFields(c Component) error {
 			return fmt.Errorf("invalid storage declaration")
 		}
 		seen[s.ID] = true
+		if err := validateStorageOwnership(s); err != nil {
+			return err
+		}
 	}
 	seen = map[string]bool{}
 	for _, e := range c.Environment {
@@ -355,6 +384,44 @@ func validateComponentFields(c Component) error {
 	}
 	return nil
 }
+
+func validateRuntimeIdentity(identity *RuntimeIdentity) error {
+	if identity == nil {
+		return nil
+	}
+	if identity.UID < 1 || identity.UID > 65535 || identity.GID < 1 || identity.GID > 65535 {
+		return fmt.Errorf("runtime identity outside policy")
+	}
+	return nil
+}
+
+func validateStorageOwnership(storage Storage) error {
+	if (storage.OwnerUID == 0) != (storage.OwnerGID == 0) {
+		return fmt.Errorf("managed storage owner requires uid and gid")
+	}
+	if storage.OwnerUID < 0 || storage.OwnerUID > 65535 || storage.OwnerGID < 0 || storage.OwnerGID > 65535 {
+		return fmt.Errorf("managed storage owner outside policy")
+	}
+	return nil
+}
+
+func storageHasOwnership(items []Storage) bool {
+	for _, item := range items {
+		if item.OwnerUID != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func componentsHaveRuntimeIdentity(components []Component) bool {
+	for _, component := range components {
+		if component.RunAs != nil || storageHasOwnership(component.Storage) {
+			return true
+		}
+	}
+	return false
+}
 func Resolve(m Manifest, release string, instance string, network string, dataPath string) (Plan, error) {
 	if err := Validate(m); err != nil {
 		return Plan{}, err
@@ -371,7 +438,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 	if !idPattern.MatchString(instance) || network == "" || strings.ContainsAny(network, "/.\\") || !strings.HasPrefix(dataPath, "/srv/kitpro/apps/") || strings.Contains(dataPath, "..") || strings.ContainsAny(dataPath, "\\\r\n") {
 		return Plan{}, fmt.Errorf("invalid instance paths")
 	}
-	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...)}
+	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...), RunAs: m.RunAs}
 	for _, c := range m.Components {
 		var cr Release
 		for _, candidate := range m.Releases {
@@ -380,7 +447,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 				break
 			}
 		}
-		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart, Hardware: append([]Accelerator(nil), c.Hardware...), ExternalStorage: append([]ExternalStorage(nil), c.ExternalStorage...)}
+		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart, Hardware: append([]Accelerator(nil), c.Hardware...), ExternalStorage: append([]ExternalStorage(nil), c.ExternalStorage...), RunAs: c.RunAs}
 		p.ResolvedComponents = append(p.ResolvedComponents, resolved)
 	}
 	return p, nil

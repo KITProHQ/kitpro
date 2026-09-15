@@ -1,0 +1,21 @@
+{
+  "version": "0.1.0-alpha.11",
+  "status": "prepared-not-published",
+  "source_checkpoint": "4e7ebdf0de5d4d38224e74ba44885a90327b28ef",
+  "artifacts": [
+    {
+      "name": "kitpro-server_0.1.0~alpha11_amd64.deb",
+      "sha256": "9af3b958996e9f1bcffee91879e837c02c651d4d02b738cba8c851a124c5cda2"
+    },
+    {
+      "name": "kitpro-server-0.1.0_alpha11-1-x86_64.pkg.tar.zst",
+      "sha256": "1c020fa7d81ce114a3c712be7a954fc5351bdcc0340deefd4694e3c1d6794ed5"
+    },
+    {
+      "name": "kitpro-server_0.1.0~alpha11_amd64.cdx.json",
+      "sha256": "965d2e81a718db3ede458899012b3ec4f0a66489a6f9012d7bc3727717276849"
+    }
+  ],
+  "reproducibility": "two independent builds were byte-identical",
+  "published": false
+}

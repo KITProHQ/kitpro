@@ -108,6 +108,46 @@ func TestReadWriteRootResolvesOnlyItsExactDirectory(t *testing.T) {
 	}
 }
 
+func TestStorageWriterIsExclusiveButReadersMayShare(t *testing.T) {
+	db := storageTestDB(t)
+	root := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	allowStorageTestRoot(t, root)
+	registered, err := registerStorageRoot(db, protocol.Request{RootName: "Shared", RootPath: root, RootMode: externalstorage.ReadWrite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := registered["id"].(string)
+	read := []manifest.ExternalStorage{{ID: "media", ContainerPath: "/media", Mode: externalstorage.ReadOnly, Required: true, Purpose: "Media"}}
+	write := []manifest.ExternalStorage{{ID: "files", ContainerPath: "/files", Mode: externalstorage.ReadWrite, Required: true, Purpose: "Files"}}
+	selection := func(slot string) []protocol.ExternalStorageBinding {
+		return []protocol.ExternalStorageBinding{{SlotID: slot, RootID: id}}
+	}
+	if err = persistExternalBindings(db, "inst-readerone1", "", 1, read, selection("media")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = resolveExternalMounts(db, "inst-readertwo2", "", 1, read, selection("media")); err != nil {
+		t.Fatalf("second reader rejected: %v", err)
+	}
+	if _, err = resolveExternalMounts(db, "inst-writerone1", "", 1, write, selection("files")); err == nil {
+		t.Fatal("writer admitted beside reader")
+	}
+	if _, err = db.Exec(`DELETE FROM external_storage_bindings`); err != nil {
+		t.Fatal(err)
+	}
+	if err = persistExternalBindings(db, "inst-writerone1", "", 1, write, selection("files")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = resolveExternalMounts(db, "inst-readerone1", "", 1, read, selection("media")); err == nil {
+		t.Fatal("reader admitted beside writer")
+	}
+	if _, err = resolveExternalMounts(db, "inst-writertwo2", "", 1, write, selection("files")); err == nil {
+		t.Fatal("second writer admitted")
+	}
+}
+
 func TestStorageReconciliationRejectsUnexpectedBind(t *testing.T) {
 	db := storageTestDB(t)
 	host := map[string]any{"Binds": []any{"/etc:/host:ro"}}

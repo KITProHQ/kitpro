@@ -1,0 +1,21 @@
+{
+  "schema_version": 5,
+  "id": "sftpgo",
+  "name": "SFTPGo",
+  "description": "Manage files inside one explicitly approved read-write storage location.",
+  "releases": [
+    {"version": "2.7.5", "registry": "ghcr.io", "repository": "drakkan/sftpgo", "digest": "sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e", "platform": "linux/amd64"}
+  ],
+  "run_as": {"uid": 1000, "gid": 1000},
+  "storage": [
+    {"id": "config", "container_path": "/var/lib/sftpgo", "persistent": true, "read_only": false, "owner_uid": 1000, "owner_gid": 1000}
+  ],
+  "external_storage": [
+    {"id": "files", "container_path": "/srv/sftpgo/data", "mode": "read-write", "required": true, "purpose": "Managed files"}
+  ],
+  "services": [
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8080},
+    {"id": "sftp", "name": "SFTP Service", "protocol": "tcp", "container_port": 2022}
+  ],
+  "restart": "unless-stopped"
+}

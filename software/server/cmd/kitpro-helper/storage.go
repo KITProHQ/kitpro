@@ -191,6 +191,18 @@ func resolveExternalMounts(db *sql.DB, installation, component string, generatio
 		if declaration.Mode == externalstorage.ReadWrite && allowed != externalstorage.ReadWrite {
 			return nil, fmt.Errorf("trusted storage root does not allow read-write access")
 		}
+		var conflicts int
+		if declaration.Mode == externalstorage.ReadWrite {
+			err = db.QueryRow(`SELECT COUNT(*) FROM external_storage_bindings WHERE root_id=? AND installation_id<>?`, rootID, installation).Scan(&conflicts)
+		} else {
+			err = db.QueryRow(`SELECT COUNT(*) FROM external_storage_bindings WHERE root_id=? AND installation_id<>? AND access_mode=?`, rootID, installation, externalstorage.ReadWrite).Scan(&conflicts)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if conflicts != 0 {
+			return nil, fmt.Errorf("storage already in use by an incompatible writer")
+		}
 		identity := externalstorage.Identity{CanonicalPath: path, DeviceMajor: major, DeviceMinor: minor, Inode: inode, Filesystem: fs, MountSource: source, MountPoint: point, NetworkBacked: network}
 		if _, err = validateExternalStorage(identity, path); err != nil {
 			return nil, fmt.Errorf("storage unavailable: %s", name)

@@ -43,3 +43,16 @@ explicitly rebind the application.
 Control-plane backups preserve root definitions, policies, and application
 bindings. They do not back up imported media or files; those remain the storage
 owner's responsibility.
+
+## Install media and file applications
+
+- **Navidrome** uses managed `/data` and one read-only music root.
+- **Audiobookshelf** uses managed `/config` and `/metadata` plus one read-only
+  audiobook root. Keep its SQLite config on local storage, not a NAS.
+- **SFTPGo** uses managed configuration and one read-write root. Its first-run
+  page creates the administrator; KITPro ships no default credential.
+
+Two applications may share a root only when both bindings are read-only. A
+read-write binding is exclusive: KITPro rejects a writer beside any other
+installation and rejects readers beside an active writer. Imported data is
+never removed with an application.

@@ -26,8 +26,10 @@ RestrictAddressFamilies=AF_UNIX
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
-CapabilityBoundingSet=
-AmbientCapabilities=
+# Used only for manifest-declared ownership on newly created KITPro-managed
+# storage. Imported roots are never re-owned.
+CapabilityBoundingSet=CAP_CHOWN
+AmbientCapabilities=CAP_CHOWN
 UMask=0077
 ReadWritePaths=/run/kitpro /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro
 Restart=on-failure

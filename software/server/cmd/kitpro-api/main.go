@@ -850,6 +850,7 @@ func catalogCategory(id string) string {
 		"actual-budget": "Finance", "freshrss": "Reading", "home-assistant": "Home automation",
 		"mealie": "Food and recipes", "memos": "Notes", "paperless-ngx": "Documents",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
+		"jellyfin": "Media", "navidrome": "Music", "audiobookshelf": "Media", "sftpgo": "Files",
 	}
 	if category := categories[id]; category != "" {
 		return category
@@ -1118,7 +1119,10 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			q.Environment = append(q.Environment, protocol.EnvVar{Name: x.Name, Value: x.Value, Secret: x.Secret, Generate: x.Generate})
 		}
 		for _, x := range plan.Storage {
-			q.Storage = append(q.Storage, protocol.StorageMount{ID: x.ID, ContainerPath: x.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + x.ID, ReadOnly: x.ReadOnly})
+			q.Storage = append(q.Storage, protocol.StorageMount{ID: x.ID, ContainerPath: x.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + x.ID, ReadOnly: x.ReadOnly, OwnerUID: x.OwnerUID, OwnerGID: x.OwnerGID})
+		}
+		if plan.RunAs != nil {
+			q.RunAs = &protocol.RuntimeIdentity{UID: plan.RunAs.UID, GID: plan.RunAs.GID}
 		}
 		for _, slot := range plan.ExternalStorage {
 			rootID := strings.TrimSpace(r.FormValue("storage_" + slot.ID))
@@ -1132,6 +1136,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, component := range plan.ResolvedComponents {
 			pc := protocol.Component{ID: component.ID, Image: component.ImageDigest, Restart: component.Restart, DependsOn: append([]string(nil), component.DependsOn...)}
+			if component.RunAs != nil {
+				pc.RunAs = &protocol.RuntimeIdentity{UID: component.RunAs.UID, GID: component.RunAs.GID}
+			}
 			for _, item := range component.Hardware {
 				pc.Hardware = append(pc.Hardware, protocol.HardwareRequirement{Class: item.Class, Optional: item.Optional, CPUFallback: item.CPUFallback})
 			}
@@ -1142,7 +1149,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 				pc.Environment = append(pc.Environment, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret, Generate: variable.Generate})
 			}
 			for _, storage := range component.Storage {
-				pc.Storage = append(pc.Storage, protocol.StorageMount{ID: storage.ID, ContainerPath: storage.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + component.ID + "/" + storage.ID, ReadOnly: storage.ReadOnly})
+				pc.Storage = append(pc.Storage, protocol.StorageMount{ID: storage.ID, ContainerPath: storage.ContainerPath, HostPath: "/srv/kitpro/apps/" + plan.ApplicationID + "/" + inst + "/" + component.ID + "/" + storage.ID, ReadOnly: storage.ReadOnly, OwnerUID: storage.OwnerUID, OwnerGID: storage.OwnerGID})
 			}
 			for _, slot := range component.ExternalStorage {
 				rootID := strings.TrimSpace(r.FormValue("storage_" + component.ID + "_" + slot.ID))

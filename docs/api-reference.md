@@ -63,3 +63,8 @@ Application install forms send `storage_<slot>=<root-id>`. They never send a
 host path, container target, bind mode, or Docker option. `DELETE
 /api/v1/storage-roots/{id}` refuses roots that remain attached to an
 installation.
+
+The helper rejects a read-write binding if another installation already uses
+the root, and rejects a reader beside an existing writer. Multiple read-only
+bindings are allowed. Runtime UID/GID and managed-directory ownership are
+trusted manifest data and are never API inputs.

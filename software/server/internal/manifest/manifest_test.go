@@ -79,6 +79,22 @@ func TestGeneratedSecretDeclaration(t *testing.T) {
 		}
 	}
 }
+func TestRuntimeIdentityAndManagedStorageOwnership(t *testing.T) {
+	data := `{"schema_version":5,"id":"media-app","name":"Media app","releases":[{"version":"1","registry":"ghcr.io","repository":"example/media","digest":"sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0","platform":"linux/amd64"}],"run_as":{"uid":1000,"gid":1000},"storage":[{"id":"data","container_path":"/data","persistent":true,"owner_uid":1000,"owner_gid":1000}],"services":[{"id":"web","name":"Web","protocol":"http","container_port":8080}]}`
+	m, err := Parse([]byte(data))
+	if err != nil || m.RunAs == nil || m.RunAs.UID != 1000 || m.Storage[0].OwnerGID != 1000 {
+		t.Fatalf("runtime identity: %v %#v", err, m)
+	}
+	for _, bad := range []string{
+		strings.Replace(data, `"uid":1000`, `"uid":0`, 1),
+		strings.Replace(data, `,"owner_gid":1000`, `,"owner_gid":0`, 1),
+		strings.Replace(data, `"schema_version":5`, `"schema_version":4`, 1),
+	} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Fatal("unsafe runtime identity accepted")
+		}
+	}
+}
 func TestHardwareSchemaIsTypedAndBounded(t *testing.T) {
 	data := strings.Replace(valid, `"schema_version":1`, `"schema_version":3`, 1)
 	data = strings.Replace(data, `"restart":"unless-stopped"`, `"hardware":[{"class":"gpu.nvidia","optional":true,"cpu_fallback":true}],"restart":"unless-stopped"`, 1)

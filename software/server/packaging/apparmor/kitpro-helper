@@ -3,8 +3,10 @@
 /usr/libexec/kitpro-helper flags=(attach_disconnected) {
   #include <abstractions/base>
   /usr/libexec/kitpro-helper rix,
+  capability chown,
   /etc/passwd r,
   /run/kitpro/** rw,
+  /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,
   /srv/kitpro/** rwk,
   # Directory metadata only. The helper validates registered roots but never

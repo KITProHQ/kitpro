@@ -18,3 +18,7 @@ Completed package-platform certifications:
 
 - [Ubuntu Server 26.04 LTS](2026-09-13-ubuntu2604-package-certification.md)
 - [Arch Linux with `linux-lts`](2026-09-14-arch-linux-platform-certification.md)
+
+Current feature-milestone validation:
+
+- [Media and data-heavy catalog expansion](2026-09-15-media-data-heavy-catalog-expansion.md)

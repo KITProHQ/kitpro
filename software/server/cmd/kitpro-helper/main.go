@@ -318,6 +318,9 @@ func validateApplicationPlan(r protocol.Request) error {
 	if !hardwareRequirementsEqual(r.Hardware, entry.Manifest.Hardware) {
 		return fmt.Errorf("trusted hardware requirement mismatch")
 	}
+	if !runtimeIdentityEqual(r.RunAs, entry.Manifest.RunAs) {
+		return fmt.Errorf("trusted runtime identity mismatch")
+	}
 	for i, command := range entry.Manifest.Command {
 		if r.Command[i] != command {
 			return fmt.Errorf("trusted command mismatch")
@@ -330,7 +333,7 @@ func validateApplicationPlan(r protocol.Request) error {
 	}
 	for i, storage := range entry.Manifest.Storage {
 		expectedHost := "/srv/kitpro/apps/" + r.ApplicationID + "/" + r.InstanceID + "/" + storage.ID
-		if r.Storage[i].ID != storage.ID || r.Storage[i].ContainerPath != storage.ContainerPath || r.Storage[i].HostPath != expectedHost || r.Storage[i].ReadOnly != storage.ReadOnly {
+		if r.Storage[i].ID != storage.ID || r.Storage[i].ContainerPath != storage.ContainerPath || r.Storage[i].HostPath != expectedHost || r.Storage[i].ReadOnly != storage.ReadOnly || r.Storage[i].OwnerUID != storage.OwnerUID || r.Storage[i].OwnerGID != storage.OwnerGID {
 			return fmt.Errorf("trusted storage mismatch")
 		}
 	}
@@ -402,6 +405,13 @@ func hardwareRequirementsEqual(got []protocol.HardwareRequirement, want []manife
 		}
 	}
 	return true
+}
+
+func runtimeIdentityEqual(got *protocol.RuntimeIdentity, want *manifest.RuntimeIdentity) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return got.UID == want.UID && got.GID == want.GID
 }
 
 func externalBindingsEqual(got []protocol.ExternalStorageBinding, want []manifest.ExternalStorage) bool {
@@ -611,6 +621,9 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 		if !externalBindingsEqual(got.ExternalStorage, want.ExternalStorage) {
 			return fmt.Errorf("component %s external storage mismatch", got.ID)
 		}
+		if !runtimeIdentityEqual(got.RunAs, want.RunAs) {
+			return fmt.Errorf("component %s runtime identity mismatch", got.ID)
+		}
 		for j, arg := range want.Command {
 			if got.Command[j] != arg || arg == "/bin/sh" || arg == "/bin/bash" || arg == "-c" || arg == "" {
 				return fmt.Errorf("component %s command mismatch", got.ID)
@@ -623,7 +636,7 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 		}
 		for j, s := range want.Storage {
 			expected := "/srv/kitpro/apps/" + r.ApplicationID + "/" + r.InstanceID + "/" + got.ID + "/" + s.ID
-			if got.Storage[j].ID != s.ID || got.Storage[j].ContainerPath != s.ContainerPath || got.Storage[j].HostPath != expected || got.Storage[j].ReadOnly != s.ReadOnly {
+			if got.Storage[j].ID != s.ID || got.Storage[j].ContainerPath != s.ContainerPath || got.Storage[j].HostPath != expected || got.Storage[j].ReadOnly != s.ReadOnly || got.Storage[j].OwnerUID != s.OwnerUID || got.Storage[j].OwnerGID != s.OwnerGID {
 				return fmt.Errorf("component %s storage mismatch", got.ID)
 			}
 		}
@@ -750,6 +763,10 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 			return
 		}
+		if s.OwnerUID != 0 && os.Chown(s.HostPath, s.OwnerUID, s.OwnerGID) != nil {
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "managed storage ownership failed"})
+			return
+		}
 	}
 	networkCreated := false
 	if _, e := d.CreateNetwork(r.NetworkName, labels); e != nil {
@@ -772,7 +789,11 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		proto, _ := exposure.DockerProtocol(r.ServiceProtocol)
 		bindings[fmt.Sprintf("%d/%s", r.ContainerPort, proto)] = []docker.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
 	}
-	id, e := d.CreateContainerPlan(docker.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests})
+	user := ""
+	if r.RunAs != nil {
+		user = strconv.Itoa(r.RunAs.UID) + ":" + strconv.Itoa(r.RunAs.GID)
+	}
+	id, e := d.CreateContainerPlan(docker.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests})
 	if e == nil {
 		e = d.Start(id)
 	}
@@ -934,6 +955,11 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
 				return
 			}
+			if storage.OwnerUID != 0 && os.Chown(storage.HostPath, storage.OwnerUID, storage.OwnerGID) != nil {
+				cleanup()
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "managed storage ownership failed"})
+				return
+			}
 		}
 		envs, secretErr := resolvedEnvironment(db, r.InstanceID, component.ID, component.Environment)
 		if secretErr != nil {
@@ -961,7 +987,11 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			}
 		}
 		name := "kitpro-" + r.ApplicationID + "-" + r.InstanceID + "-" + component.ID + "-g" + strconv.Itoa(r.RuntimeGeneration)
-		id, ce := d.CreateContainerPlan(docker.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Devices: hw.Devices, DeviceRequests: hw.Requests})
+		user := ""
+		if component.RunAs != nil {
+			user = strconv.Itoa(component.RunAs.UID) + ":" + strconv.Itoa(component.RunAs.GID)
+		}
+		id, ce := d.CreateContainerPlan(docker.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Devices: hw.Devices, DeviceRequests: hw.Requests})
 		if ce == nil {
 			ce = d.Start(id)
 		}
@@ -1071,12 +1101,16 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 				summary = "component identity drift"
 				break
 			}
+			application, _ := labels["com.kitpro.application"].(string)
+			if !trustedRuntimeIdentityMatches(application, componentID, cfg) {
+				classification, summary = "security_drift", "runtime identity drift"
+				break
+			}
 			host, _ := observed["HostConfig"].(map[string]any)
 			if he := validateHardwareObservation(db, r.InstanceID, componentID, host); he != nil {
 				classification, summary = "security_drift", he.Error()
 				break
 			}
-			application, _ := labels["com.kitpro.application"].(string)
 			if se := validateStorageObservation(db, r.InstanceID, componentID, application, host); se != nil {
 				classification, summary = "security_drift", se.Error()
 				break
@@ -1130,11 +1164,14 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 			cfg, _ := got["Config"].(map[string]any)
 			labels, _ := cfg["Labels"].(map[string]any)
 			if labels[ownership.LabelManaged] == "true" && labels[ownership.LabelInstance] == r.InstanceID && cfg["Image"] == image {
+				application, _ := labels["com.kitpro.application"].(string)
+				if !trustedRuntimeIdentityMatches(application, "", cfg) {
+					classification, summary = "security_drift", "runtime identity drift"
+				}
 				host, _ := got["HostConfig"].(map[string]any)
 				if he := validateHardwareObservation(db, r.InstanceID, "", host); he != nil {
 					classification, summary = "security_drift", he.Error()
 				}
-				application, _ := labels["com.kitpro.application"].(string)
 				if se := validateStorageObservation(db, r.InstanceID, "", application, host); se != nil {
 					classification, summary = "security_drift", se.Error()
 				}
@@ -1157,6 +1194,32 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 	}
 	_, _ = db.Exec("INSERT OR REPLACE INTO reconciliation VALUES(?,?,?,?)", r.InstanceID, classification, time.Now().UTC().Format(time.RFC3339Nano), summary)
 	protocol.Write(c, protocol.Response{OK: classification == "exact", RequestID: r.ID, Result: map[string]string{"classification": classification, "summary": summary}})
+}
+
+func trustedRuntimeIdentityMatches(applicationID, componentID string, config map[string]any) bool {
+	entries, err := catalog.Load()
+	if err != nil {
+		return false
+	}
+	entry, ok := entries[applicationID]
+	if !ok {
+		return false
+	}
+	want := entry.Manifest.RunAs
+	if componentID != "" {
+		want = nil
+		for _, component := range entry.Manifest.Components {
+			if component.ID == componentID {
+				want = component.RunAs
+				break
+			}
+		}
+	}
+	if want == nil {
+		return true
+	}
+	got, _ := config["User"].(string)
+	return got == strconv.Itoa(want.UID)+":"+strconv.Itoa(want.GID)
 }
 func remove(c net.Conn, db *sql.DB, r protocol.Request) {
 	var componentCount int

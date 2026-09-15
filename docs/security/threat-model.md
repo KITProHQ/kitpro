@@ -13,6 +13,22 @@ inode identity, and accepts only dedicated children of `/mnt`, `/media`,
 missing or has changed identity blocks start and recreation. An extra bind,
 wrong target, or read-only bind changed to read-write is security drift.
 
+Schema v5 adds a numeric primary runtime identity only for trusted catalog
+content. The API cannot choose it, supplementary groups remain unavailable,
+and the helper changes ownership only on exact KITPro-managed storage
+directories. It never changes an imported root's owner. Reconciliation treats
+an unexpected container identity as security drift.
+
+This ownership operation is the helper's sole Linux capability: `CAP_CHOWN`.
+The systemd bounding set excludes broader filesystem and device capabilities,
+AppArmor confines writes to the managed namespace, and package tests reject
+powerful alternatives such as `CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`.
+
+Writable imported roots use a single-writer policy. A writer conflicts with
+every binding from another installation, and a reader conflicts with an active
+writer. This prevents two independent applications from silently mutating the
+same personal data while retaining safe read-only sharing.
+
 ## 1. Purpose
 
 This document defines the security threats KITPro Server addresses. It turns [ADR-0018](../decisions/0018-security-boundaries.md), the [privileged-helper protocol](../decisions/0003-privileged-helper-protocol.md), the [Docker integration](../decisions/0004-docker-integration.md), the [durable state and reconciliation model](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0019](../decisions/0019-helper-mandatory-access-control.md) into concrete attacker paths, implemented controls, and unresolved questions.

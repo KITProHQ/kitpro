@@ -5,6 +5,32 @@ constrained application definitions, not Docker Compose. Unknown fields,
 duplicate keys, oversized documents, unknown schema versions, and invalid
 values are rejected before a helper request is created.
 
+## Runtime identity and managed ownership (schema version 5)
+
+Schema version 5 lets a trusted manifest run a container under one numeric
+primary UID/GID and assign that same bounded ownership to KITPro-managed
+storage. The values must be 1–65535 and must be declared together. The helper
+creates the exact managed directory, changes only that directory's ownership,
+and revalidates the identity before creating the container.
+
+```json
+{
+  "schema_version": 5,
+  "run_as": {"uid": 1000, "gid": 1000},
+  "storage": [{
+    "id": "data",
+    "container_path": "/data",
+    "persistent": true,
+    "owner_uid": 1000,
+    "owner_gid": 1000
+  }]
+}
+```
+
+The schema cannot declare user names, supplementary groups, capabilities, an
+identity for an imported root, or an ownership change outside KITPro-managed
+storage. Runtime identity drift is security drift.
+
 ## External storage (schema version 4)
 
 `external_storage` declares imported-data slots. It never contains a host path.

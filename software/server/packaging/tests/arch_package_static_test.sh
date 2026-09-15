@@ -13,6 +13,12 @@ grep -Fxq "options=('!debug' '!strip')" "$arch_dir/PKGBUILD"
 grep -Fq 'local public_version=${pkgver/_alpha/-alpha.}' "$arch_dir/PKGBUILD"
 grep -q 'EnvironmentFile=-/etc/conf.d/kitpro-server' "$server_dir/packaging/systemd/kitpro-api.service"
 grep -q 'EnvironmentFile=-/etc/conf.d/kitpro-server' "$server_dir/packaging/systemd/kitpro-helper.service"
+grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$server_dir/packaging/systemd/kitpro-helper.service"
+grep -q '^AmbientCapabilities=CAP_CHOWN$' "$server_dir/packaging/systemd/kitpro-helper.service"
+if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|DAC_READ_SEARCH|MKNOD)' "$server_dir/packaging/systemd/kitpro-helper.service"; then
+    printf 'helper gained an unapproved capability\n' >&2
+    exit 1
+fi
 grep -q 'aa-enabled' "$arch_dir/kitpro-server.install"
 grep -q 'apparmor_parser -r -W -T' "$arch_dir/kitpro-server.install"
 grep -q 'prepare-upgrade' "$arch_dir/kitpro-server.install"

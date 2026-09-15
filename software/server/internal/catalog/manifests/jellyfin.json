@@ -13,6 +13,9 @@
   "external_storage": [
     {"id": "media", "container_path": "/media", "mode": "read-only", "required": true, "purpose": "Media library"}
   ],
+  "hardware": [
+    {"class": "gpu.nvidia", "optional": true, "cpu_fallback": true}
+  ],
   "services": [
     {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8096}
   ],

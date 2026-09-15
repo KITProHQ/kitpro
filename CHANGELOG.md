@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.11 (unreleased)
+
+- Add Navidrome and Audiobookshelf with administrator-approved read-only media libraries.
+- Add SFTPGo as the first exclusive imported read-write consumer, with browser-based first administrator setup and no default credential.
+- Run trusted images under bounded numeric identities and assign ownership only to their KITPro-managed storage directories.
+- Prevent mixed readers and writers on one trusted root while allowing safe read-only sharing.
+- Mark Jellyfin as optional NVIDIA acceleration with CPU fallback.
+
 ## 0.1.0-alpha.10 (unreleased)
 
 - Add administrator-approved trusted storage roots with canonical path and filesystem identity checks; see the [trusted storage guide](docs/trusted-storage.md).

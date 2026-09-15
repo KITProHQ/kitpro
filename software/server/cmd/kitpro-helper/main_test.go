@@ -298,6 +298,17 @@ func TestGeneratedEnvironmentSecretPersistsAndIsNotReturnedAsMetadata(t *testing
 	}
 }
 
+func TestTrustedRuntimeIdentityRejectsDrift(t *testing.T) {
+	if !trustedRuntimeIdentityMatches("navidrome", "", map[string]any{"User": "1000:1000"}) {
+		t.Fatal("trusted identity rejected")
+	}
+	for _, user := range []string{"", "0:0", "1000:44", "65534:65534"} {
+		if trustedRuntimeIdentityMatches("navidrome", "", map[string]any{"User": user}) {
+			t.Fatalf("identity drift accepted: %q", user)
+		}
+	}
+}
+
 func TestHardwareRequirementsAreExactAndComponentScoped(t *testing.T) {
 	want := []manifest.Accelerator{{Class: "video.vaapi", Optional: true, CPUFallback: true}}
 	if !hardwareRequirementsEqual([]protocol.HardwareRequirement{{Class: "video.vaapi", Optional: true, CPUFallback: true}}, want) {

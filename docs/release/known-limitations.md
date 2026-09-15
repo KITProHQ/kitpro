@@ -5,7 +5,11 @@
 - Arbitrary USB, input, TTY, KVM, disk, memory, and other host devices remain unsupported. There is no raw device escape hatch.
 - Ollama's trusted image supports CPU and optional NVIDIA. AMD ROCm and Intel image variants are future catalog work.
 - AMD device scoping has live local evidence, but AMD compute and Intel accelerated workloads remain unvalidated.
-- Jellyfin supports one administrator-approved read-only media root. Multiple libraries, write-enabled metadata changes, and GPU transcoding are not certified yet.
+- Jellyfin supports one administrator-approved read-only media root. Multiple libraries and write-enabled media changes are not supported. NVIDIA transcoding is not certified until the application-level live test completes.
+- Immich is not admitted: shared component secrets, health-gated dependencies, bounded database shared memory, and database-aware rollback are not yet trusted primitives.
+- Syncthing is not admitted. UDP publication alone does not fix the upstream-documented LAN discovery limitation under Docker bridge networking, and KITPro does not allow host networking.
+- The archived original File Browser is not admitted. SFTPGo is the maintained, first-run-authenticated read-write catalog choice.
+- Read-write trusted roots are exclusive. KITPro does not merge concurrent writers or provide file-level locking.
 - KITPro registers existing local or host-mounted network storage; it does not mount NFS/SMB shares or manage their credentials.
 - Imported data is not included in KITPro control-plane backups. Root reassociation after restore is explicit.
 - LocalAI is excluded because its official image fetches an unsigned mutable backend during model installation; pinning only the outer image is not sufficient provenance.

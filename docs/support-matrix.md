@@ -19,7 +19,7 @@ GPU support is not universal. It requires visible vendor hardware, its host driv
 The validated NVIDIA device was an RTX A2000 12GB passed through exclusively to
 one test VM at a time. AMD compute and Intel acceleration are not certified.
 
-Ollama is the only shipped GPU-aware application in this release. No additional candidate passed the complete immutable-image, immutable-backend, bounded-storage, typed-device, and network-security review. This is an intentional catalog boundary, not an implication that every NVIDIA container is supported.
+Ollama and Jellyfin declare optional NVIDIA access. Ollama inference is live-certified. Jellyfin transcoding requires separate application-level certification and is not claimed solely because its container can see the GPU.
 
 ## Trusted external storage
 
@@ -28,6 +28,12 @@ Ollama is the only shipped GPU-aware application in this release. No additional 
 | Debian 13 amd64 | Validated | Filesystem detection implemented; disposable live NAS unavailable | Validated with read-only media, drift, recreation, and reboot |
 | Ubuntu 26.04 LTS amd64 | Validated smoke | Same host-mounted model | Validated smoke |
 | Arch Linux x86_64 | Validated smoke | Same host-mounted model | Validated smoke under the existing `linux-lts` boundary |
+
+Navidrome and Audiobookshelf use read-only imported libraries. SFTPGo is the
+first read-write consumer and requires an exclusive root. Navidrome and SFTPGo
+passed live authenticated install, exact-mount, private-exposure, and reboot
+smoke tests on Debian, Ubuntu, and Arch. Audiobookshelf received full Debian
+acceptance with the same packaged schema and helper boundary.
 
 KITPro does not mount or credential network shares. The operating system must
 mount them first. Missing or changed mount identity fails closed.

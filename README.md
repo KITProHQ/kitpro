@@ -31,7 +31,7 @@ The public alpha lets a user:
 2. Open its local dashboard.
 3. View detected host information.
 4. Deploy a supported application, including Paperless-ngx's managed components.
-5. Register an approved local or host-mounted storage location and attach it to Jellyfin read-only.
+5. Register approved media or file storage and attach it read-only or as an exclusive read-write location where the trusted app requires it.
 6. View the application's runtime health.
 7. Start and stop the application.
 8. Update the application safely.
@@ -61,8 +61,9 @@ Architecture experiments and development-only host tooling live under [`prototyp
 - [`docs/application-catalog.md`](docs/application-catalog.md) lists the supported applications, pinned releases, and catalog limitations.
 - [`docs/hardware-acceleration.md`](docs/hardware-acceleration.md) explains CPU fallback, Ollama, and accelerator troubleshooting.
 - [`docs/trusted-storage.md`](docs/trusted-storage.md) explains approved external storage and Jellyfin media setup.
+- [`docs/media-data-apps.md`](docs/media-data-apps.md) shows how to install Navidrome, Audiobookshelf, and SFTPGo safely.
 - [`docs/architecture/gpu-device-access.md`](docs/architecture/gpu-device-access.md) defines typed device classes and helper enforcement.
-- [`docs/application-manifest.md`](docs/application-manifest.md) covers schema v4 hardware and external-storage declarations.
+- [`docs/application-manifest.md`](docs/application-manifest.md) covers hardware, external storage, and schema v5 runtime identities.
 - [`docs/roadmap.md`](docs/roadmap.md) divides Phase 1 into small, gated milestones.
 - [`docs/api-reference.md`](docs/api-reference.md) describes the supported authenticated API surface.
 - [`docs/release/known-limitations.md`](docs/release/known-limitations.md) records honest alpha constraints.

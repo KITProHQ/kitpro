@@ -33,8 +33,11 @@ bindings. Service exposure is an installation policy and defaults to internal.
 | IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 | Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
+| Navidrome | 0.64.0 | `docker.io/deluan/navidrome@sha256:1a64cbb2603cec5d2615c3a27e91442436b2229583408a55cdc8d85705b95e65` | managed `/data`; trusted read-only `/music` | HTTP 4533 | GPL-3.0 |
+| Audiobookshelf | 2.36.0 | `ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8` | managed `/config` and `/metadata`; trusted read-only `/audiobooks` | HTTP 80 | GPL-3.0 |
+| SFTPGo | 2.7.5 | `ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e` | managed config; exclusive trusted read-write `/srv/sftpgo/data` | HTTP 8080; internal SFTP 2022/TCP | AGPL-3.0-only |
 
-The eleven single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The fourteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -72,6 +75,24 @@ Open WebUI and Ollama remain independent installations. KITPro installation netw
 | InvokeAI | REJECT FOR CURRENT MODEL | Official GPU container tags track main/commit builds rather than a stable release identity suitable for the trusted catalog. |
 
 ## Candidate decision
+
+For the media and data-heavy expansion, Navidrome and Audiobookshelf are
+accepted as non-root, read-only media consumers. SFTPGo is accepted as the
+first imported read-write consumer; its first-run administrator setup avoids a
+known default password, and its imported root is exclusive while writable.
+
+Immich 3.2.0 is rejected for the current model. Its official deployment has
+Immich Server, PostgreSQL with VectorChord, Valkey, and machine learning. A
+faithful release needs shared component secrets, health-gated dependencies,
+bounded PostgreSQL shared memory, atomic multi-component updates, and
+database-aware backup/rollback. KITPro does not substitute SQLite or omit ML.
+
+The original File Browser 2.63.23 is rejected because upstream archived the
+repository and ended fixes, including security fixes. Syncthing remains
+rejected: its official container needs 22000/TCP+UDP and 21027/UDP, and
+upstream documents that bridge networking prevents correct local address
+discovery. Typed UDP alone would not make the topology correct without host
+networking, which KITPro prohibits.
 
 For the storage and media milestone, Jellyfin is **accepted** with one required
 read-only trusted media root. Syncthing 2.1.5 is **rejected for the current
