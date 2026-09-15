@@ -14,7 +14,7 @@ KITPro Server `v0.1.0-alpha.11` is the authoritative product release for the Kee
 | Public KITPro clean history | `d1d0763f846301b7eb27f5bff866d4cff4334d9b` | Public-safe documentation is synchronized in a separate clean-history commit |
 | `kitpro-site` | `f15b706aaac09910da38990f6fcb2a07d1a07065` | Factual screenshot/alt-text correction deployed |
 | `kitpro-os-site` | `40b6b36495c285b7ec7a5d3faeb28c4b8cd040a6` | No change required |
-| Demo automation | `e3af564b48382fdf479012844a87a370b1959811` | Reusable VM/SSH recorder and screenshot correction pushed |
+| Demo automation | `b8831fe5960b75e2f9a5fbb6e13957f80a73e815` | Reusable VM/SSH recorder and screenshot correction pushed |
 
 The private and public KITPro repositories intentionally use separate histories. The audited private and public checkpoints were clean and aligned with their intended remotes before this documentation freeze. Site and automation commits were pushed without force.
 

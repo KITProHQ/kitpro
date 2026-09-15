@@ -15,7 +15,7 @@ Factual claims in the KeepItTechie KITPro Server launch video must be checked ag
 | Public clean-history checkpoint | `d1d0763f846301b7eb27f5bff866d4cff4334d9b` |
 | KITPro site | `f15b706aaac09910da38990f6fcb2a07d1a07065` |
 | KITPro OS site | `40b6b36495c285b7ec7a5d3faeb28c4b8cd040a6` |
-| Demo automation | `e3af564b48382fdf479012844a87a370b1959811` |
+| Demo automation | `b8831fe5960b75e2f9a5fbb6e13957f80a73e815` |
 | Canonical product URL | <https://kitpro.us/server> |
 | Public source | <https://github.com/KITProHQ/kitpro> |
 | Release | <https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11> |
