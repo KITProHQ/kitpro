@@ -4,7 +4,7 @@ KITPro Server is a local-first control panel for installing and operating a trus
 
 The public alpha includes 15 reviewed applications: FreshRSS, Uptime Kuma, Mealie, Memos, Actual Budget, Vaultwarden, Home Assistant, Paperless-ngx, Open WebUI, IT-Tools, Ollama, Jellyfin, Navidrome, Audiobookshelf, and SFTPGo. Images are pinned by digest; applications start private; persistent data survives runtime recreation.
 
-Supported hosts are Debian 13 amd64, Ubuntu 26.04 LTS amd64, and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor. Rocky Linux 10 remains experimental. NVIDIA acceleration is live-certified with an RTX A2000 12GB for Ollama; CPU fallback is supported. Administrator-approved local or host-mounted NFS/CIFS storage can be attached through typed read-only or exclusive read-write slots. KITPro does not accept arbitrary Docker configuration, devices, or host bind mounts.
+The public host baseline is Debian 13 amd64 and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor. Ubuntu has development validation evidence but is not part of the current public support baseline. Rocky Linux 10 and the Podman path remain Experimental. NVIDIA acceleration is live-certified with an RTX A2000 12GB for Ollama; CPU fallback is supported. Administrator-approved local or host-mounted NFS/CIFS storage can be attached through typed read-only or exclusive read-write slots. KITPro does not accept arbitrary Docker configuration, devices, or host bind mounts.
 
 > KITPro Server is alpha software. Read the [support matrix](docs/support-matrix.md) and [known limitations](docs/release/known-limitations.md) before relying on it for important data.
 
@@ -13,7 +13,7 @@ Supported hosts are Debian 13 amd64, Ubuntu 26.04 LTS amd64, and fully updated A
 ## Get started
 
 1. Download the current public prerelease, [`v0.1.0-alpha.11`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11).
-2. Follow the [public alpha quickstart](docs/release/quickstart.md) for Debian, Ubuntu, or Arch.
+2. Follow the [public alpha quickstart](docs/release/quickstart.md) for Debian or Arch.
 3. Open `http://127.0.0.1:8080/`, create the first local administrator, choose an app, and select its access mode.
 
 Release notes, the release manifest, and checksums on the release page are authoritative for downloaded packages.
@@ -31,3 +31,7 @@ Release notes, the release manifest, and checksums on the release page are autho
 - [KITPro Server product page](https://kitpro.us/server)
 
 The technical implementation entry point is [software/server/README.md](software/server/README.md). KITPro is licensed under the [Apache License 2.0](LICENSE). Future KITPro OS, hardware, and cloud ideas are separate from this Server alpha and are not current features.
+
+## Development transparency
+
+KITPro uses AI-assisted development tools as part of a human-directed engineering workflow. Project ownership, architecture, security decisions, review, and release approval remain human responsibilities; code is reviewed and tested against the documented release gates. The source is available in this repository, and problems can be reported through the project's public issue tracker. Contributor expectations are documented in [CONTRIBUTING.md](CONTRIBUTING.md).

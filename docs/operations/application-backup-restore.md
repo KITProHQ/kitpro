@@ -1,7 +1,9 @@
 # Back up and restore an application
 
 KITPro application backups protect one installed application's managed state.
-The same archive format works with the Docker and Podman backends.
+The public Debian and Arch baseline uses Docker. The same archive format has an
+Experimental Podman implementation for Rocky Linux, but that does not expand
+the public support promise.
 
 This workflow is separate from `/api/v1/backup`. That older endpoint backs up
 the KITPro control and helper databases. It does not back up application data.
@@ -87,10 +89,24 @@ tree, restores generated secrets in one database transaction, and starts the
 components. KITPro deletes the rollback tree only after every previously
 running component reports a running runtime state.
 
+Before the first path swap, the helper creates a durable restore journal that
+records the fencing token, exact device/inode identity, active, staged, and
+rollback paths, prior and restored secret sets, prior running components, and
+each prepared, dispatched, and confirmed swap. Other lifecycle mutations for
+the installation are blocked while that journal needs recovery.
+
 If activation fails, KITPro moves the failed restored tree to a path with the
 suffix `.kitpro-restore-failed-<operation-id>`. It restores the prior managed
 tree and generated secrets, then tries to restart the prior runtime state. The
 API reports failure even when rollback succeeds.
+
+After a helper or host restart, KITPro inspects the journal and exact path
+identities. It completes a proven forward state, restores a proven prior state,
+or records cleanup debt. If the tree layout is mixed or identity cannot be
+proved, the restore becomes `action_required`; KITPro does not guess which tree
+is authoritative. Failed restored trees can remain under
+`.kitpro-restore-failed-<operation-id>` for investigation and require an
+explicit retention or cleanup decision.
 
 ## Verify a restore
 
@@ -102,7 +118,7 @@ sudo journalctl -u kitpro-helper.service --since "10 minutes ago"
 ```
 
 On Docker hosts, inspect the application's containers with `docker ps`. On
-Rocky hosts, use `podman ps` and check the generated Quadlet units with
+Experimental Rocky hosts use `podman ps` and check the generated Quadlet units with
 `systemctl status 'kitpro-*'`.
 
 Open the application and verify the restored record, file, or upload. A running
@@ -158,4 +174,5 @@ for the per-application strategy.
 | `backup is incompatible with target installation` | Identity, release, generation, or strategy changed. | Restore the matching installation state. Format version 1 does not migrate releases. |
 | `backup topology does not match target installation` | Components, managed storage, or imported bindings differ. | Restore or reassociate the original topology before retrying. |
 | `SQLite verification failed` | A staged database failed integrity or foreign-key checks. | Preserve the archive and application logs. Do not overwrite the current application. |
-| `application runtime did not become healthy` | A component did not return to the running state. | Inspect the helper journal and the runtime logs. Verify application data before another restore. |
+| `application runtime did not become healthy` | The current error string means a component did not return to the running runtime state; it does not prove application readiness. | Inspect the helper journal and runtime logs. Verify application data before another restore. |
+| `RestoreRecoveryRequired` | A prior restore journal has not reached a safe terminal state. | Stop issuing lifecycle mutations. Inspect helper logs and follow the [lifecycle recovery runbook](lifecycle-recovery.md). |

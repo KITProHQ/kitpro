@@ -2,7 +2,7 @@
 
 Download the package and matching `SHA256SUMS` from the [current GitHub release](https://github.com/KITProHQ/kitpro/releases). Use the version and filename from that release; development release notes do not mean a package was published.
 
-## Debian 13 or Ubuntu 26.04 LTS
+## Debian 13
 
 Requirements: amd64, rootful Docker, systemd, and an enforcing AppArmor kernel/userspace setup.
 
@@ -38,4 +38,6 @@ Reboot into `linux-lts` after installing or changing the kernel/AppArmor boundar
 
 Managed data lives under `/srv/kitpro/apps/<application>/<installation>/` and survives runtime recreation. Imported data stays at the administrator-approved root and is not deleted or backed up by KITPro. Package migrations and trusted app updates protect control state, not the complete external library.
 
-See the [Debian/Ubuntu guide](../install-debian-package.md), [Arch guide](../install-arch-package.md), [support matrix](../support-matrix.md), and [known limitations](known-limitations.md).
+Ubuntu 26.04 has development validation evidence but is not in the current public support baseline. Rocky Linux and Podman remain Experimental.
+
+See the [Debian guide](../install-debian-package.md), [Arch guide](../install-arch-package.md), [support matrix](../support-matrix.md), and [known limitations](known-limitations.md).

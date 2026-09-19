@@ -4,9 +4,10 @@ KITPro Server is a Go control plane and narrowly privileged helper for trusted s
 
 ## Supported production boundary
 
-- Debian 13 amd64 and Ubuntu 26.04 LTS amd64: `.deb`, rootful Docker, enforcing AppArmor.
+- Debian 13 amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Arch Linux x86_64: native package, `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor.
-- Rocky Linux 10 amd64: experimental RPM path, rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; clean-host matrix not certified.
+- Ubuntu 26.04 LTS amd64: development-validated `.deb` path, not part of the current public support baseline.
+- Rocky Linux 10 amd64: Experimental RPM and Podman path using Quadlet, crun, SELinux Enforcing, and firewalld; not part of the public support baseline.
 
 See the definitive [support matrix](../../docs/support-matrix.md).
 
@@ -17,7 +18,9 @@ See the definitive [support matrix](../../docs/support-matrix.md).
 - Services begin internal-only and may be published only on loopback or one configured LAN address. Wildcard publication and host networking are rejected.
 - Hardware requests use bounded device classes. NVIDIA acceleration is certified for Ollama on the published test boundary; CPU fallback remains available.
 - External data uses administrator-registered trusted roots and manifest-declared slots. Bind sources and targets are resolved by the helper; imported data is never deleted with an app.
-- App updates use trusted release pairs, preserve identity and storage, and back up control state. Imported data and full application-data disaster recovery remain administrator responsibilities.
+- App updates use trusted release pairs and staged runtime generations. The helper commits a new generation only after exact runtime verification, retains the prior stopped generation for recovery, and records cleanup debt separately.
+- Durable semantic operation IDs, canonical request hashing, installation-scoped leases, and fencing prevent conflicting replay and concurrent lifecycle mutation. Unknown outcomes reconcile against fresh runtime observations instead of blindly repeating work.
+- Application backup and restore preserve managed storage through a durable restore journal. Imported data and full bare-host disaster recovery remain administrator responsibilities.
 
 ## Build and test
 

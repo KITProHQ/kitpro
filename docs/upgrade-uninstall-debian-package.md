@@ -15,10 +15,18 @@ sudo apt install ./kitpro-server_<new-version>_amd64.deb
 
 Backups remain in `/var/lib/kitpro-api/backups` and
 `/var/lib/kitpro-helper/backups` with the trust ownership of their source
-database. Post-installation runs sequential production migrations and reloads
-AppArmor before restarting services. If pre-upgrade backup fails, unpack is
+database. Post-installation runs sequential production migrations, reloads
+AppArmor and the systemd manager configuration, and then restarts services. If pre-upgrade backup fails, unpack is
 aborted and the previous services are restarted. Universal rollback after an
 incompatible database migration is not promised.
+
+The lifecycle release candidate migrates both databases from the public
+alpha.11 schema 7 through schema 13. It preserves legacy `receipts`,
+`ownership`, and `component_ownership` as migration and forensic evidence while
+adding helper operations, leases, generations, component progress,
+reconciliation state, control projections, and restore journals. Do not delete
+the pre-upgrade backups until post-upgrade reconciliation and an application
+smoke test pass.
 
 Root-local recovery tooling can verify a restored copy without opening the live
 database:

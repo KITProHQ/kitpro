@@ -1,12 +1,14 @@
-# Install KITPro Server on Debian 13 or Ubuntu 26.04 LTS
+# Install KITPro Server on Debian 13
 
-KITPro Server supports Debian 13 and Ubuntu Server 26.04 LTS on amd64. Both
-distributions use the same `.deb` artifact. Rocky Linux 10 remains experimental.
+KITPro Server's current public `.deb` baseline supports Debian 13 on amd64.
+Ubuntu Server 26.04 LTS has development validation evidence and uses the same
+`.deb` format, but it is not currently part of the public support baseline.
+Rocky Linux 10 remains Experimental.
 Use the filename and checksum from the [current public release](https://github.com/KITProHQ/kitpro/releases).
 
 ## Prerequisites
 
-- Debian 13 or Ubuntu Server 26.04 LTS on amd64, with systemd and AppArmor enabled
+- Debian 13 on amd64, with systemd and AppArmor enabled
 - a compatible rootful Docker Engine that is running and exposes its local Unix
   socket
 - root or sudo access for package installation
@@ -84,13 +86,14 @@ Check embedded build metadata with:
 /usr/libexec/kitpro-helper --version
 ```
 
-## Ubuntu firewall note
+## Ubuntu development-evidence note
 
-Ubuntu 26.04 certification used the same package, Docker Engine 29.8.0, and an
+Ubuntu 26.04 validation used the same package, Docker Engine 29.8.0, and an
 inactive UFW policy. Exact-address loopback and LAN publications produced
 exact-address Docker nftables DNAT rules and no wildcard binding. Docker warns
 that published container traffic can bypass UFW's normal INPUT/OUTPUT chains,
 so administrators must not treat UFW alone as the policy boundary for a
 KITPro-published application. KITPro's Phase 1 boundary is the exact bind
 address and assigned port; hosts with custom UFW or nftables policy require a
-separate compatibility check before enabling LAN exposure.
+separate compatibility check before enabling LAN exposure. This evidence does
+not make Ubuntu a supported public platform.

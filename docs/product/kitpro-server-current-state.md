@@ -101,15 +101,16 @@ not promised.
 | Platform | Status | Exact boundary |
 | --- | --- | --- |
 | Debian 13 amd64 | Supported | Rootful Docker and enforcing AppArmor |
-| Ubuntu 26.04 LTS amd64 | Supported | Rootful Docker and enforcing AppArmor |
 | Arch Linux x86_64 | Supported | Fully updated official repositories, `linux-lts`, rootful Docker, and enforcing AppArmor; no partial upgrades |
-| Rocky Linux 10 amd64 | Experimental, promotion-ready | Rootful Podman 5 and Quadlet; clean SELinux/firewalld/RPM and application backup/restore acceptance passed, with support designation and publication still pending |
+| Ubuntu 26.04 LTS amd64 | Development validated | Rootful Docker and enforcing AppArmor; not in the public baseline |
+| Rocky Linux 10 amd64 | Experimental | Rootful Podman 5 and Quadlet; development acceptance does not promote public support |
 
 The [support matrix](../support-matrix.md) is definitive for platform-specific capability certification.
 
 ## Package formats
 
-- Debian and Ubuntu: `.deb`
+- Debian: supported `.deb`
+- Ubuntu: development-validated `.deb` format, not public baseline
 - Arch Linux: `.pkg.tar.zst`
 - Rocky Linux 10: experimental `.rpm` inputs exist; no RPM is published
 

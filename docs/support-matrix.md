@@ -3,19 +3,19 @@
 | Platform | Status | Boundary |
 | --- | --- | --- |
 | Debian 13 amd64 | Supported | Rootful Docker, enforcing AppArmor |
-| Ubuntu 26.04 LTS amd64 | Supported | Rootful Docker, enforcing AppArmor |
 | Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor; no partial upgrades |
-| Rocky Linux 10 amd64 | Experimental, promotion-ready | Rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; clean-host and application backup/restore acceptance passed, but no supported Rocky release is published yet |
+| Ubuntu 26.04 LTS amd64 | Development validated, not public baseline | `.deb`, rootful Docker, enforcing AppArmor; no current public support promise |
+| Rocky Linux 10 amd64 | Experimental | Rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; development acceptance does not promote this path into the public baseline |
 
 ## Capability matrix
 
 | Capability | Debian 13 | Ubuntu 26.04 LTS | Arch Linux `linux-lts` | Rocky Linux 10 |
 | --- | --- | --- | --- | --- |
-| Basic KITPro | Certified | Certified | Certified | Acceptance passed; promotion pending |
-| Mandatory access control | AppArmor required and certified | AppArmor required and certified | AppArmor required and certified | SELinux Enforcing acceptance passed |
-| Container runtime | Rootful Docker certified | Rootful Docker certified | Rootful Docker certified | Rootful Podman 5 and Quadlet acceptance passed |
-| 15-app trusted catalog | Certified | Certified | Certified | Acceptance passed |
-| Multi-container Paperless-ngx | Certified | Certified | Certified | Acceptance passed, including backup/restore |
+| Basic KITPro | Certified | Development evidence only | Certified | Experimental acceptance evidence |
+| Mandatory access control | AppArmor required and certified | AppArmor development evidence | AppArmor required and certified | Experimental SELinux Enforcing evidence |
+| Container runtime | Rootful Docker certified | Rootful Docker development evidence | Rootful Docker certified | Experimental rootful Podman 5 and Quadlet evidence |
+| 15-app trusted catalog | Certified | Development evidence only | Certified | Experimental acceptance evidence |
+| Multi-container Paperless-ngx | Certified | Development evidence only | Certified | Experimental acceptance evidence, including backup/restore |
 | Trusted external storage | Certified | Smoke certified | Smoke certified | Local read-only/read-write acceptance passed; NAS not exercised |
 | Ollama CPU | Certified | Certified | Certified | Acceptance passed |
 | NVIDIA Ollama inference | Certified: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Not certified |
@@ -52,8 +52,9 @@ Ollama and Jellyfin declare optional NVIDIA access. Ollama inference is live-cer
 Navidrome and Audiobookshelf use read-only imported libraries. SFTPGo is the
 first read-write consumer and requires an exclusive root. Navidrome and SFTPGo
 passed live authenticated install, exact-mount, private-exposure, and reboot
-smoke tests on Debian, Ubuntu, and Arch. Audiobookshelf received full Debian
-acceptance with the same packaged schema and helper boundary.
+smoke tests on Debian and Arch. Ubuntu results remain development evidence.
+Audiobookshelf received full Debian acceptance with the same packaged schema
+and helper boundary.
 
 KITPro does not mount or credential network shares. The operating system must
 mount them first. Missing or changed mount identity fails closed.
