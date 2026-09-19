@@ -76,6 +76,34 @@ func TestReconciliationDistinguishesExactStoppedMissingDriftAndRuntimeUnavailabl
 	}
 }
 
+func TestReconciliationClassifiesExactUnstableRuntimeAsDegraded(t *testing.T) {
+	for _, state := range []containers.RuntimeState{containers.RuntimeState("restarting"), containers.RuntimeState("paused")} {
+		t.Run(string(state), func(t *testing.T) {
+			h := newHarness(t, true)
+			finishHarnessOperation(t, h)
+			observed := h.runtime.containers["old-id"]
+			observed.State = state
+			h.runtime.containers["old-id"] = observed
+			result, err := (Reconciler{Runtime: h.runtime, Store: Store{DB: h.db}}).Reconcile(context.Background(), "inst-one")
+			if err != nil || result.State != ReconciliationDegraded || result.RuntimeState != string(state) || result.RecommendedAction != RepairNone || !hasMismatch(result, MismatchActiveContainerUnstable) {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestReconciliationBlocksUnclassifiedRuntimeState(t *testing.T) {
+	h := newHarness(t, true)
+	finishHarnessOperation(t, h)
+	observed := h.runtime.containers["old-id"]
+	observed.State = containers.RuntimeUnknown
+	h.runtime.containers["old-id"] = observed
+	result, err := (Reconciler{Runtime: h.runtime, Store: Store{DB: h.db}}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationActionRequired || result.RuntimeState != "unknown" || result.RecommendedAction != RepairNone || !hasMismatch(result, MismatchRuntimeStateUnknown) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestExactStoppedRepairKeepsGenerationAndExactReplayDoesNotMutate(t *testing.T) {
 	h := newHarness(t, true)
 	finishHarnessOperation(t, h)

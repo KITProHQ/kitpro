@@ -278,6 +278,9 @@ func (r Runner) verifyStoredGeneration(ctx context.Context, generation Generatio
 	if _, ok := observed.Networks[generation.NetworkName]; !ok {
 		return observed, errors.New("container network mismatch")
 	}
+	if generation.Status == "verification_required" && generation.Component.ConfigurationHash == "" {
+		return observed, errors.New("migrated container configuration is not verified")
+	}
 	if generation.Component.ConfigurationHash != "" && observationHash(observed) != generation.Component.ConfigurationHash {
 		return observed, errors.New("container configuration hash mismatch")
 	}
@@ -466,6 +469,27 @@ func verifyCandidate(plan Plan, network containers.NetworkObservation, observed 
 		return errors.New("candidate mounts, ports, or devices mismatch")
 	}
 	return nil
+}
+
+// VerifyMigratedConfiguration compares a legacy runtime observation with a
+// plan reconstructed exclusively from helper-owned state and the trusted
+// catalog. Image defaults may add environment entries, so required values are
+// matched as a subset while all helper-controlled fields remain exact.
+func VerifyMigratedConfiguration(plan containers.ContainerPlan, observed containers.ContainerObservation) error {
+	if observed.User != plan.User || observed.NetworkMode != plan.Network || !equalJSON(observed.Labels, plan.Labels) || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.RestartPolicy) || (len(plan.Command) > 0 && !equalJSON(observed.Command, plan.Command)) || !containsStrings(observed.Environment, plan.Environment) {
+		return errors.New("migrated runtime configuration mismatch")
+	}
+	if !equalJSON(normalizeMounts(observed.Mounts), normalizeExpectedMounts(plan)) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.DeviceRequests)) {
+		return errors.New("migrated runtime mounts, ports, or devices mismatch")
+	}
+	return nil
+}
+
+// ConfigurationHash records the exact post-verification runtime
+// configuration. Callers must first prove the observation against trusted
+// configuration; this function does not confer trust by itself.
+func ConfigurationHash(observed containers.ContainerObservation) string {
+	return observationHash(observed)
 }
 func normalizePortBindings(values map[string][]containers.PortBinding) map[string][]containers.PortBinding {
 	if len(values) == 0 {

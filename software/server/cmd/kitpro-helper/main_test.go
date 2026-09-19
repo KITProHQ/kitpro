@@ -208,6 +208,75 @@ func TestAlpha11LegacyMultiBackfillsAndReconcilesAtStartup(t *testing.T) {
 	}
 }
 
+func migratedBusyBoxRuntime(restart string) *startupLifecycleRuntime {
+	installation := "inst-busybox01"
+	network := "kitpro-net-" + installation + "-g1"
+	labels := map[string]string{
+		ownership.LabelManaged:          "true",
+		ownership.LabelInstance:         installation,
+		ownership.LabelResource:         "application",
+		"com.kitpro.application":        "busybox",
+		"com.kitpro.release":            "1.37.0",
+		"com.kitpro.runtime-generation": "1",
+	}
+	return &startupLifecycleRuntime{
+		networks: map[string]containers.NetworkObservation{network: {Exists: true, ID: "busybox-network", Name: network}},
+		containers: map[string]containers.ContainerObservation{
+			"busybox-runtime": {
+				Exists: true, ID: "busybox-runtime", Name: "kitpro-busybox-inst-busybox01-g1",
+				ImageID: "sha256:busybox", ImageReference: "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0",
+				State: containers.RuntimeRestarting, Labels: labels, RestartPolicy: restart,
+				Mounts:   []containers.MountObservation{{Source: "/srv/kitpro/apps/busybox/inst-busybox01/data", Destination: "/data"}},
+				Networks: map[string]containers.NetworkAttachment{network: {NetworkID: "busybox-network"}}, NetworkMode: network,
+				PortBindings: map[string][]containers.PortBinding{},
+			},
+		},
+	}
+}
+
+func TestMigratedSingleConfigurationIsTrustedBeforeHashRecording(t *testing.T) {
+	t.Run("exact restarting runtime", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "exact-single.db")
+		runtime := migratedBusyBoxRuntime("unless-stopped")
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err != nil {
+			t.Fatal(err)
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash == "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), "inst-busybox01")
+		if err != nil || result.State != lifecycle.ReconciliationDegraded || result.RuntimeState != "restarting" || result.RecommendedAction != lifecycle.RepairNone || !hasLifecycleMismatch(result, lifecycle.MismatchActiveContainerUnstable) {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	})
+
+	t.Run("configuration drift", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "drifted-single.db")
+		runtime := migratedBusyBoxRuntime("always")
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err == nil {
+			t.Fatal("drifted migrated runtime was trusted")
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash != "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), "inst-busybox01")
+		if err != nil || result.State != lifecycle.ReconciliationActionRequired || !hasLifecycleMismatch(result, lifecycle.MismatchConfiguration) {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	})
+}
+
+func hasLifecycleMismatch(result lifecycle.ReconciliationResult, want lifecycle.MismatchCode) bool {
+	for _, code := range result.MismatchCodes {
+		if code == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAlpha11AmbiguousLegacyMultiBecomesActionRequired(t *testing.T) {
 	db := openAlpha11HelperFixture(t, "ambiguous.db")
 	if _, err := db.Exec(`UPDATE component_ownership SET image_digest='docker.io/example/mismatch@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE installation_id='inst-paperless1' AND component_id='web'`); err != nil {

@@ -52,10 +52,12 @@ type RuntimeIdentityProvider interface {
 type RuntimeState string
 
 const (
-	RuntimeUnknown RuntimeState = "unknown"
-	RuntimeMissing RuntimeState = "missing"
-	RuntimeStopped RuntimeState = "stopped"
-	RuntimeRunning RuntimeState = "running"
+	RuntimeUnknown    RuntimeState = "unknown"
+	RuntimeMissing    RuntimeState = "missing"
+	RuntimeStopped    RuntimeState = "stopped"
+	RuntimeRunning    RuntimeState = "running"
+	RuntimeRestarting RuntimeState = "restarting"
+	RuntimePaused     RuntimeState = "paused"
 )
 
 type ImageObservation struct {

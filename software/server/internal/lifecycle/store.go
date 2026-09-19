@@ -58,6 +58,20 @@ func (s Store) PromoteMigrated(ctx context.Context, generation Generation, netwo
 	return s.PromoteMigratedState(ctx, generation, networkID, imageID, configurationHash, "running", "", 0)
 }
 
+func (s Store) RecordMigratedConfiguration(ctx context.Context, installation string, generation int, configurationHash string) error {
+	if configurationHash == "" {
+		return errors.New("migrated configuration hash is required")
+	}
+	result, err := s.DB.ExecContext(ctx, `UPDATE runtime_components SET configuration_hash=? WHERE installation_id=? AND runtime_generation=? AND component_id='app' AND configuration_hash='' AND EXISTS (SELECT 1 FROM runtime_generations g WHERE g.installation_id=runtime_components.installation_id AND g.runtime_generation=runtime_components.runtime_generation AND g.status='verification_required' AND g.topology_hash='')`, configurationHash, installation, generation)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("migrated configuration expectation is not recordable")
+	}
+	return nil
+}
+
 func (s Store) PromoteMigratedState(ctx context.Context, generation Generation, networkID, imageID, configurationHash, runtimeState, operationID string, token int64) error {
 	now := s.now()
 	tx, err := s.DB.BeginTx(ctx, nil)

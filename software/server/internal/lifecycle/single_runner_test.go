@@ -41,6 +41,13 @@ func setSingleState(t *testing.T, h harness, state containers.RuntimeState) {
 	}
 }
 
+func markSingleMigrated(t *testing.T, h harness) {
+	t.Helper()
+	if _, err := h.db.Exec(`UPDATE runtime_generations SET status='verification_required',observed_network_id='',verified_at=NULL,committed_at=NULL WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSingleStateStartStopAndIdempotence(t *testing.T) {
 	for _, test := range []struct {
 		name, operation, action string
@@ -193,4 +200,66 @@ func TestSingleOperationRejectsStaleFenceMissingAndDrift(t *testing.T) {
 			t.Fatalf("drift err=%v", err)
 		}
 	})
+	t.Run("unverified migrated configuration", func(t *testing.T) {
+		h := newHarness(t, true)
+		markSingleMigrated(t, h)
+		if _, err := h.db.Exec(`UPDATE runtime_components SET configuration_hash='' WHERE installation_id='inst-one' AND runtime_generation=1 AND component_id='app'`); err != nil {
+			t.Fatal(err)
+		}
+		request, token := beginSingleOperation(t, h, "StopApplication")
+		if _, err := singleRunner(h).Operate(context.Background(), request.InstanceID, request.OperationID, token, "stop"); err == nil || !strings.Contains(err.Error(), "not verified") || len(h.runtime.mutations) != 0 {
+			t.Fatalf("unverified migration err=%v mutations=%v", err, h.runtime.mutations)
+		}
+	})
+}
+
+func TestSingleStopAllowsExactOwnedUnstableRuntime(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		state    containers.RuntimeState
+		migrated bool
+	}{
+		{name: "migrated restarting", state: containers.RuntimeState("restarting"), migrated: true},
+		{name: "migrated paused", state: containers.RuntimeState("paused"), migrated: true},
+		{name: "native restarting", state: containers.RuntimeState("restarting")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t, true)
+			if test.migrated {
+				markSingleMigrated(t, h)
+			}
+			observed := h.runtime.containers["old-id"]
+			observed.State = test.state
+			h.runtime.containers["old-id"] = observed
+			request, token := beginSingleOperation(t, h, "StopApplication")
+			result, err := singleRunner(h).Operate(context.Background(), request.InstanceID, request.OperationID, token, "stop")
+			if err != nil || result.RuntimeState != "stopped" {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if got := strings.Join(h.runtime.mutations, ","); got != "stop:old-id" {
+				t.Fatalf("mutations=%q", got)
+			}
+			var generationStatus, componentState, configurationHash string
+			if err = h.db.QueryRow(`SELECT g.status,c.state,c.configuration_hash FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id='inst-one' AND g.runtime_generation=1`).Scan(&generationStatus, &componentState, &configurationHash); err != nil {
+				t.Fatal(err)
+			}
+			if generationStatus != "active" || componentState != "stopped" || configurationHash == "" {
+				t.Fatalf("generation=%q component=%q hash=%q", generationStatus, componentState, configurationHash)
+			}
+		})
+	}
+}
+
+func TestMigratedExactRunningAndStoppedRemainLifecycleEligible(t *testing.T) {
+	for _, state := range []containers.RuntimeState{containers.RuntimeRunning, containers.RuntimeStopped} {
+		t.Run(string(state), func(t *testing.T) {
+			h := newHarness(t, true)
+			markSingleMigrated(t, h)
+			setSingleState(t, h, state)
+			request, token := beginSingleOperation(t, h, "StopApplication")
+			if _, err := singleRunner(h).Operate(context.Background(), request.InstanceID, request.OperationID, token, "stop"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }

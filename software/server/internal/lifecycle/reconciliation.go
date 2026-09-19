@@ -32,6 +32,7 @@ const (
 	MismatchActiveContainerMissing    MismatchCode = "active_container_missing"
 	MismatchActiveContainerStopped    MismatchCode = "active_container_stopped"
 	MismatchActiveContainerRunning    MismatchCode = "active_container_unexpectedly_running"
+	MismatchActiveContainerUnstable   MismatchCode = "active_container_unstable"
 	MismatchImage                     MismatchCode = "image_mismatch"
 	MismatchConfiguration             MismatchCode = "configuration_mismatch"
 	MismatchNetwork                   MismatchCode = "network_mismatch"
@@ -44,6 +45,7 @@ const (
 	MismatchCleanupPending            MismatchCode = "cleanup_pending"
 	MismatchControlProjectionStale    MismatchCode = "control_projection_stale"
 	MismatchRuntimeUnreachable        MismatchCode = "runtime_unreachable"
+	MismatchRuntimeStateUnknown       MismatchCode = "runtime_state_unclassified"
 	MismatchOwnershipAmbiguous        MismatchCode = "ownership_ambiguous"
 )
 
@@ -242,7 +244,9 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		if !network.Exists || (generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchNetwork)
 		}
-		if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash {
+		if generation.Status == "verification_required" && generation.TopologyHash == "" && len(generation.Components) == 1 && component.ConfigurationHash == "" {
+			finding.MismatchCodes = append(finding.MismatchCodes, MismatchConfiguration)
+		} else if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchConfiguration)
 		}
 		if role == "active" && expected == "running" && observed.State == containers.RuntimeStopped {
@@ -250,6 +254,12 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		}
 		if role == "active" && expected == "stopped" && observed.State == containers.RuntimeRunning {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchActiveContainerRunning)
+		}
+		if role == "active" && (observed.State == containers.RuntimeRestarting || observed.State == containers.RuntimePaused) {
+			finding.MismatchCodes = append(finding.MismatchCodes, MismatchActiveContainerUnstable)
+		}
+		if role == "active" && observed.State == containers.RuntimeUnknown {
+			finding.MismatchCodes = append(finding.MismatchCodes, MismatchRuntimeStateUnknown)
 		}
 		if role == "retained" && observed.State == containers.RuntimeRunning {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchRetainedGenerationRunning)
@@ -283,6 +293,12 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		runtimeState = "stopped"
 	case states["missing"] == len(generation.Components):
 		runtimeState = "missing"
+	case states[string(containers.RuntimeRestarting)] == len(generation.Components):
+		runtimeState = string(containers.RuntimeRestarting)
+	case states[string(containers.RuntimePaused)] == len(generation.Components):
+		runtimeState = string(containers.RuntimePaused)
+	case states[string(containers.RuntimeUnknown)] == len(generation.Components):
+		runtimeState = string(containers.RuntimeUnknown)
 	default:
 		runtimeState = "degraded"
 	}
@@ -358,12 +374,16 @@ func (r *ReconciliationResult) finish() {
 	switch {
 	case has(MismatchRuntimeUnreachable):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationRuntimeUnknown, RepairNone, "container runtime unavailable"
+	case has(MismatchRuntimeStateUnknown):
+		r.State, r.RecommendedAction, r.Summary = ReconciliationActionRequired, RepairNone, "runtime state cannot be safely classified"
 	case has(MismatchOwnershipAmbiguous) || has(MismatchImage) || has(MismatchConfiguration) || has(MismatchNetwork) || has(MismatchRetainedGenerationRunning) || has(MismatchActiveContainerRunning):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationActionRequired, RepairNone, "runtime identity or configuration differs from helper authority"
 	case has(MismatchActiveContainerMissing) || has(MismatchComponentMissing):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationRuntimeMissing, RepairRecreateGeneration, "active runtime resources are missing"
 	case has(MismatchDependencyState) || has(MismatchComponentStateMixed):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationDegraded, RepairStartActive, "active components are in a mixed dependency state"
+	case has(MismatchActiveContainerUnstable):
+		r.State, r.RecommendedAction, r.Summary = ReconciliationDegraded, RepairNone, "exact active runtime is unstable; bounded lifecycle actions remain available"
 	case has(MismatchActiveContainerStopped):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationRepairable, RepairStartActive, "exact active runtime is stopped"
 	case has(MismatchCandidateOrphaned) || has(MismatchCleanupPending):

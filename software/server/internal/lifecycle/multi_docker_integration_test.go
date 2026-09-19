@@ -297,3 +297,106 @@ func TestDockerSingleStateOperationsPreserveStorage(t *testing.T) {
 		t.Fatalf("runtime-only removal changed persistent data: %q err=%v", contents, readErr)
 	}
 }
+
+func TestDockerMigratedRestartLoopReconcilesAndStopsExactlyOnce(t *testing.T) {
+	if os.Getenv("KITPRO_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set KITPRO_DOCKER_INTEGRATION=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(ctx, db, true); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &recordingLifecycleRuntime{LifecycleRuntime: docker.New()}
+	coordinator := helperops.Coordinator{DB: db}
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	installation := "inst-loop" + suffix[len(suffix)-8:]
+	networkName := "kitpro-loop-contract-" + suffix
+	containerName := networkName + "-g1"
+	image := "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+	dataRoot := t.TempDir()
+	marker := filepath.Join(dataRoot, "preserve.txt")
+	if err = os.WriteFile(marker, []byte("persistent"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: installation, ownership.LabelResource: "application", "com.kitpro.runtime-generation": "1"}
+	if err = runtime.PullImage(ctx, image); err != nil {
+		t.Fatal(err)
+	}
+	network, err := runtime.CreateLifecycleNetwork(ctx, networkName, labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := containers.ContainerPlan{Image: image, Name: containerName, Network: networkName, Labels: labels, Command: []string{"sh", "-c", "exit 1"}, RestartPolicy: "always", Storage: []containers.StorageMount{{HostPath: dataRoot, ContainerPath: "/kitpro-data"}}}
+	containerID, err := runtime.CreateLifecycleContainer(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = runtime.StopContainer(context.Background(), containerID)
+		_ = runtime.RemoveContainer(context.Background(), containerID)
+		_ = runtime.RemoveLifecycleNetwork(context.Background(), networkName)
+	})
+	if err = runtime.StartContainer(ctx, containerID); err != nil {
+		t.Fatal(err)
+	}
+	var observed containers.ContainerObservation
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		observed, err = runtime.ObserveContainer(ctx, containerID)
+		if err == nil && observed.State == containers.RuntimeRestarting {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil || observed.State != containers.RuntimeRestarting {
+		t.Fatalf("restart loop not observed: %#v err=%v", observed, err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES(?,1,'legacy-migration','docker-contract','fixture','verification_required',?,?,'legacy',?,'internal',?,'not_required')`, installation, networkName, network.ID, dataRoot, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at) VALUES(?,1,'app',?,?,?,?,?,'unknown',?)`, installation, containerName, containerID, image, observed.ImageID, observationHash(observed), now); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := (Reconciler{Runtime: runtime, Store: Store{DB: db}}).Reconcile(ctx, installation)
+	if err != nil || reconciliation.State != ReconciliationDegraded || reconciliation.RuntimeState != "restarting" || reconciliation.RecommendedAction != RepairNone {
+		t.Fatalf("reconciliation=%#v err=%v", reconciliation, err)
+	}
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "StopApplication", OperationRevision: 1, InstanceID: installation, RuntimeGeneration: 1}
+	decision, err := coordinator.Begin(ctx, request, 0, installation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.AuthorizeMutation(ctx, request.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runtime.events)
+	result, err := (SingleRunner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Operate(ctx, installation, request.OperationID, decision.FencingToken, "stop")
+	if err != nil || result.RuntimeState != "stopped" {
+		t.Fatalf("stop result=%#v err=%v", result, err)
+	}
+	if _, err = coordinator.Complete(ctx, request.OperationID, decision.FencingToken, protocol.Response{OK: true, Result: result}); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := runtime.ObserveContainer(ctx, containerID)
+	if err != nil || stopped.State != containers.RuntimeStopped {
+		t.Fatalf("post-stop observation=%#v err=%v", stopped, err)
+	}
+	replay, err := coordinator.Begin(ctx, request, 0, installation)
+	if err != nil || replay.Execute || !replay.Response.OK || len(runtime.events) != before+1 {
+		t.Fatalf("replay=%#v events=%v err=%v", replay, runtime.events[before:], err)
+	}
+	var status, componentState string
+	if err = db.QueryRow(`SELECT g.status,c.state FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.runtime_generation=1`, installation).Scan(&status, &componentState); err != nil || status != "active" || componentState != "stopped" {
+		t.Fatalf("status=%q component=%q err=%v", status, componentState, err)
+	}
+	if contents, readErr := os.ReadFile(marker); readErr != nil || string(contents) != "persistent" {
+		t.Fatalf("persistent data changed: %q err=%v", contents, readErr)
+	}
+}

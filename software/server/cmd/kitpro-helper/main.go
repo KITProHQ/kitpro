@@ -85,6 +85,9 @@ func main() {
 		if _, backfillErr := backfillLegacyMultiAtStartup(context.Background(), db); backfillErr != nil {
 			fatal(backfillErr.Error())
 		}
+		if verificationErr := prepareAllMigratedSingleConfigurations(context.Background(), db, lifecycleRuntime); verificationErr != nil {
+			fatal(verificationErr.Error())
+		}
 		if recovered, recoverErr := lifecycle.RecoverInterrupted(context.Background(), lifecycle.Store{DB: db}, lifecycleRuntime); recoverErr != nil {
 			fatal(recoverErr.Error())
 		} else if recovered > 0 {
@@ -428,6 +431,7 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: "reconciliation requires the supported Docker lifecycle runtime"})
 			return
 		}
+		_ = prepareMigratedSingleConfiguration(context.Background(), db, runtime, r.InstanceID)
 		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), r.InstanceID)
 		if err != nil {
 			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
@@ -440,6 +444,7 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: "repair requires the supported Docker lifecycle runtime"})
 			return
 		}
+		_ = prepareMigratedSingleConfiguration(context.Background(), db, runtime, r.InstanceID)
 		result, err := (lifecycle.Repairer{Runtime: runtime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Repair(context.Background(), r.InstanceID, r.OperationID, fencingToken, r.RepairAction)
 		if err != nil {
 			var unknown lifecycle.UnknownOutcomeError
@@ -999,6 +1004,7 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "staged replacement requires the supported Docker lifecycle runtime"})
 		return
 	}
+	_ = prepareMigratedSingleConfiguration(context.Background(), db, lifecycleRuntime, r.InstanceID)
 	hw, e := resolveHardware(d, r.Hardware)
 	if e != nil {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
@@ -1426,6 +1432,7 @@ func changeApplicationState(c io.Writer, db *sql.DB, request protocol.Request, c
 		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "single-component lifecycle requires the supported Docker lifecycle runtime"})
 		return
 	}
+	_ = prepareMigratedSingleConfiguration(context.Background(), db, runtime, request.InstanceID)
 	if (action == "start" || action == "restart") && validateInstallationStorageAvailable(db, request.InstanceID) != nil {
 		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "storage unavailable"})
 		return

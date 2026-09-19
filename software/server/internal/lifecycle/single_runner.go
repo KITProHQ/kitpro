@@ -40,17 +40,21 @@ func (r SingleRunner) Operate(ctx context.Context, installation, operationID str
 		return Result{}, err
 	}
 	if generation.Status == "verification_required" {
-		if observed.State != containers.RuntimeRunning && observed.State != containers.RuntimeStopped {
+		if !singleRuntimeStateClassifiable(observed.State) {
 			return Result{}, errors.New("migrated runtime state is not safely classifiable")
 		}
-		if err = r.Store.PromoteMigratedState(ctx, generation, network.ID, observed.ImageID, observationHash(observed), string(observed.State), operationID, fencingToken); err != nil {
+		persistedState := string(observed.State)
+		if observed.State == containers.RuntimeRestarting || observed.State == containers.RuntimePaused {
+			persistedState = string(containers.RuntimeUnknown)
+		}
+		if err = r.Store.PromoteMigratedState(ctx, generation, network.ID, observed.ImageID, observationHash(observed), persistedState, operationID, fencingToken); err != nil {
 			return Result{}, err
 		}
 		generation.Status = "active"
 		generation.NetworkID = network.ID
 		generation.Component.ImageID = observed.ImageID
 		generation.Component.ConfigurationHash = observationHash(observed)
-		generation.Component.State = string(observed.State)
+		generation.Component.State = persistedState
 	}
 	if generation.Status != "active" {
 		return Result{}, errors.New("active single-component generation unavailable")
@@ -73,8 +77,11 @@ func (r SingleRunner) Operate(ctx context.Context, installation, operationID str
 			}
 			return r.Evidence.RecordPhase(ctx, operationID, fencingToken, "single_"+mutation, "confirmed", map[string]string{"runtime_id": component.ContainerID, "idempotent": "true"})
 		}
-		if current.State != containers.RuntimeRunning && current.State != containers.RuntimeStopped {
-			return errors.New("active runtime state is not safely mutable")
+		if mutation == "start" && current.State != containers.RuntimeStopped {
+			return errors.New("active runtime must be stopped before it can be started")
+		}
+		if mutation == "stop" && !singleRuntimeStateStoppable(current.State) {
+			return errors.New("active runtime state is not safely stoppable")
 		}
 		if err := mutator.mutateExisting(ctx, plan, component, mutation, want); err != nil {
 			return err
@@ -99,7 +106,7 @@ func (r SingleRunner) Operate(ctx context.Context, installation, operationID str
 			err = apply("start", containers.RuntimeRunning)
 		}
 	case "remove":
-		if observed.State == containers.RuntimeRunning {
+		if singleRuntimeStateStoppable(observed.State) {
 			err = apply("stop", containers.RuntimeStopped)
 		}
 		if err == nil {
@@ -131,6 +138,14 @@ func (r SingleRunner) Operate(ctx context.Context, installation, operationID str
 	return Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: state, ContainerName: component.ContainerName, ContainerID: component.ContainerID, NetworkName: generation.NetworkName, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort}, nil
 }
 
+func singleRuntimeStateClassifiable(state containers.RuntimeState) bool {
+	return state == containers.RuntimeRunning || state == containers.RuntimeStopped || state == containers.RuntimeRestarting || state == containers.RuntimePaused
+}
+
+func singleRuntimeStateStoppable(state containers.RuntimeState) bool {
+	return state == containers.RuntimeRunning || state == containers.RuntimeRestarting || state == containers.RuntimePaused
+}
+
 func (r SingleRunner) observeExact(ctx context.Context, generation Generation) (containers.ContainerObservation, containers.NetworkObservation, error) {
 	observed, err := r.Runtime.ObserveContainer(ctx, generation.Component.ContainerID)
 	if err != nil {
@@ -151,6 +166,9 @@ func (r SingleRunner) observeExact(ctx context.Context, generation Generation) (
 	}
 	if generation.Component.ImageID != "" && observed.ImageID != generation.Component.ImageID {
 		return observed, containers.NetworkObservation{}, errors.New("active runtime image identity changed")
+	}
+	if generation.Status == "verification_required" && generation.Component.ConfigurationHash == "" {
+		return observed, containers.NetworkObservation{}, errors.New("migrated runtime configuration is not verified")
 	}
 	if generation.Component.ConfigurationHash != "" && observationHash(observed) != generation.Component.ConfigurationHash {
 		return observed, containers.NetworkObservation{}, errors.New("active runtime configuration changed")

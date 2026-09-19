@@ -31,8 +31,10 @@ func TestTypedLifecycleObservations(t *testing.T) {
 			body = `{"Id":"running","Name":"/app","Image":"sha256:image","Config":{"Image":"repo/app@sha256:digest","Labels":{"managed":"true"},"User":"1000:1000","Cmd":["serve"],"Env":["A=B"]},"State":{"Running":true,"Status":"running","Health":{"Status":"healthy"}},"HostConfig":{"NetworkMode":"network","RestartPolicy":{"Name":"unless-stopped"},"PortBindings":{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"20000"}]}},"Mounts":[{"Source":"/data","Destination":"/data","RW":true}],"NetworkSettings":{"Networks":{"network":{"NetworkID":"network-id","Aliases":["app"]}}}}`
 		case "/containers/stopped/json":
 			body = `{"Id":"stopped","Name":"/stopped","Config":{"Image":"repo/app@sha256:digest"},"State":{"Running":false,"Status":"exited"},"HostConfig":{},"NetworkSettings":{"Networks":{}}}`
-		case "/containers/unknown/json":
-			body = `{"Id":"unknown","Name":"/unknown","Config":{"Image":"repo/app@sha256:digest"},"State":{"Running":false,"Status":"restarting"},"HostConfig":{},"NetworkSettings":{"Networks":{}}}`
+		case "/containers/restarting/json":
+			body = `{"Id":"restarting","Name":"/restarting","Config":{"Image":"repo/app@sha256:digest"},"State":{"Running":true,"Status":"restarting"},"HostConfig":{},"NetworkSettings":{"Networks":{}}}`
+		case "/containers/paused/json":
+			body = `{"Id":"paused","Name":"/paused","Config":{"Image":"repo/app@sha256:digest"},"State":{"Running":true,"Status":"paused"},"HostConfig":{},"NetworkSettings":{"Networks":{}}}`
 		case "/containers/missing/json":
 			status = http.StatusNotFound
 		case "/images/repo%2Fapp@sha256:digest/json":
@@ -61,9 +63,13 @@ func TestTypedLifecycleObservations(t *testing.T) {
 	if err != nil || missing.State != containers.RuntimeMissing || missing.Exists {
 		t.Fatalf("missing=%#v err=%v", missing, err)
 	}
-	unknown, err := client.ObserveContainer(context.Background(), "unknown")
-	if err != nil || unknown.State != containers.RuntimeUnknown {
-		t.Fatalf("unknown=%#v err=%v", unknown, err)
+	restarting, err := client.ObserveContainer(context.Background(), "restarting")
+	if err != nil || restarting.State != containers.RuntimeState("restarting") {
+		t.Fatalf("restarting=%#v err=%v", restarting, err)
+	}
+	paused, err := client.ObserveContainer(context.Background(), "paused")
+	if err != nil || paused.State != containers.RuntimeState("paused") {
+		t.Fatalf("paused=%#v err=%v", paused, err)
 	}
 	image, err := client.ObserveImage(context.Background(), "repo/app@sha256:digest")
 	if err != nil || !image.Exists || image.RepoDigests[0] != "repo/app@sha256:digest" {

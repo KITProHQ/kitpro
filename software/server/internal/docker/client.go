@@ -351,7 +351,11 @@ func (c *Client) ObserveContainer(ctx context.Context, id string) (containers.Co
 		return containers.ContainerObservation{}, err
 	}
 	state := containers.RuntimeUnknown
-	if raw.State.Running && raw.State.Status == "running" {
+	if raw.State.Status == "restarting" {
+		state = containers.RuntimeRestarting
+	} else if raw.State.Status == "paused" {
+		state = containers.RuntimePaused
+	} else if raw.State.Running && raw.State.Status == "running" {
 		state = containers.RuntimeRunning
 	} else if !raw.State.Running && (raw.State.Status == "created" || raw.State.Status == "exited") {
 		state = containers.RuntimeStopped
