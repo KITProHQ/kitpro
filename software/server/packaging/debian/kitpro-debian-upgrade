@@ -1,0 +1,233 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+readonly approval_format=1
+readonly alpha11_version='0.1.0~alpha11'
+readonly embedded_package_sha256='@KITPRO_PACKAGE_SHA256@'
+readonly embedded_package_version='@KITPRO_PACKAGE_VERSION@'
+
+die() {
+    printf 'KITPro upgrade aborted: %s\n' "$1" >&2
+    exit 1
+}
+
+test_mode=false
+root_prefix=
+systemctl_command=/usr/bin/systemctl
+runuser_command=/usr/sbin/runuser
+apt_get_command=/usr/bin/apt-get
+dpkg_deb_command=/usr/bin/dpkg-deb
+dpkg_query_command=/usr/bin/dpkg-query
+mv_command=/usr/bin/mv
+sync_command=/usr/bin/sync
+
+if [[ ${KITPRO_UPGRADE_TESTING:-} == 1 ]]; then
+    (( EUID != 0 )) || die 'test overrides are not accepted when running as root.'
+    test_mode=true
+    root_prefix=${KITPRO_TEST_ROOT:?KITPRO_TEST_ROOT is required in test mode}
+    systemctl_command=${KITPRO_TEST_SYSTEMCTL:?KITPRO_TEST_SYSTEMCTL is required in test mode}
+    runuser_command=${KITPRO_TEST_RUNUSER:?KITPRO_TEST_RUNUSER is required in test mode}
+    apt_get_command=${KITPRO_TEST_APT_GET:?KITPRO_TEST_APT_GET is required in test mode}
+    dpkg_deb_command=${KITPRO_TEST_DPKG_DEB:?KITPRO_TEST_DPKG_DEB is required in test mode}
+    dpkg_query_command=${KITPRO_TEST_DPKG_QUERY:?KITPRO_TEST_DPKG_QUERY is required in test mode}
+    mv_command=${KITPRO_TEST_MV:-/usr/bin/mv}
+    sync_command=${KITPRO_TEST_SYNC:-/usr/bin/sync}
+elif (( EUID != 0 )); then
+    die 'run this upgrade command with sudo.'
+fi
+
+path_in_root() {
+    printf '%s%s\n' "$root_prefix" "$1"
+}
+
+approval_path() {
+    path_in_root /run/kitpro/debian-upgrade-approved
+}
+
+run_api() {
+    if [[ "$test_mode" == true ]]; then
+        "$runuser_command" "$@"
+    else
+        "$runuser_command" -u kitpro-api -- "$@"
+    fi
+}
+
+restore_preflight_services() {
+    [[ ${helper_was_active:-false} != true ]] || "$systemctl_command" start kitpro-helper.service 2>/dev/null || true
+    [[ ${socket_was_active:-false} != true ]] || "$systemctl_command" start kitpro-helper.socket 2>/dev/null || true
+    [[ ${api_was_active:-false} != true ]] || "$systemctl_command" start kitpro-api.service 2>/dev/null || true
+}
+
+cleanup_preflight() {
+    local path
+    for path in "${control_stage:-}" "${helper_stage:-}"; do
+        [[ -n "$path" && -d "$path" ]] || continue
+        find "$path" -mindepth 1 -maxdepth 1 -type f -delete 2>/dev/null || true
+        rmdir -- "$path" 2>/dev/null || true
+    done
+    if [[ ${preflight_succeeded:-false} != true && ${control_promoted:-false} == true && -n ${control_final:-} ]]; then
+        rm -f -- "$control_final"
+    fi
+    if [[ ${preflight_succeeded:-false} != true && ${helper_promoted:-false} == true && -n ${helper_final:-} ]]; then
+        rm -f -- "$helper_final"
+    fi
+}
+
+one_backup_in() {
+    local directory=$1
+    local -a files
+    shopt -s nullglob
+    files=("$directory"/*.db)
+    shopt -u nullglob
+    (( ${#files[@]} == 1 )) || die "upgrade staging did not produce exactly one database backup: $directory"
+    [[ -s ${files[0]} ]] || die "upgrade staging produced an empty database backup: ${files[0]}"
+    printf '%s\n' "${files[0]}"
+}
+
+preflight() {
+    local api_binary=$1 helper_binary=$2 target_version=$3 old_version=$4 package_sha256=$5
+    local config_path set_id approval approval_temporary
+
+    [[ -x "$api_binary" ]] || die "installed API binary is unavailable: $api_binary"
+    [[ -x "$helper_binary" ]] || die "installed helper binary is unavailable: $helper_binary"
+    [[ "$target_version" =~ ^[0-9A-Za-z.+:~_-]{1,64}$ ]] || die 'target package version is invalid.'
+    [[ "$old_version" =~ ^[0-9A-Za-z.+:~_-]{1,64}$ ]] || die 'installed package version is invalid.'
+    [[ "$package_sha256" == internal || "$package_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'package SHA-256 is invalid.'
+
+    config_path=$(path_in_root /etc/default/kitpro-server)
+    if [[ -r "$config_path" ]]; then
+        # This root-owned package configuration contains assignments only.
+        # shellcheck disable=SC1090
+        source "$config_path"
+    fi
+    KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-$(path_in_root /var/lib/kitpro-api/control.db)}
+    KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-$(path_in_root /var/lib/kitpro-helper/helper.db)}
+    KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-api/backups)}
+    KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-helper/backups)}
+    export KITPRO_CONTROL_DB KITPRO_HELPER_DB KITPRO_CONTROL_BACKUP_DIR KITPRO_HELPER_BACKUP_DIR
+
+    [[ -f "$KITPRO_CONTROL_DB" ]] || die "existing control database is missing: $KITPRO_CONTROL_DB"
+    [[ -f "$KITPRO_HELPER_DB" ]] || die "existing helper database is missing: $KITPRO_HELPER_DB"
+
+    api_was_active=false
+    helper_was_active=false
+    socket_was_active=false
+    "$systemctl_command" is-active --quiet kitpro-api.service && api_was_active=true || true
+    "$systemctl_command" is-active --quiet kitpro-helper.service && helper_was_active=true || true
+    "$systemctl_command" is-active --quiet kitpro-helper.socket && socket_was_active=true || true
+    "$systemctl_command" stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+
+    preflight_succeeded=false
+    control_promoted=false
+    helper_promoted=false
+    trap 'cleanup_preflight; if [[ $preflight_succeeded != true ]]; then rm -f -- "$(approval_path)"; restore_preflight_services; printf "KITPro upgrade aborted: existing state failed complete backup-set validation. The installed package and databases were left unchanged.\nRecovery: /usr/share/doc/kitpro-server/README.Debian\n" >&2; fi' EXIT HUP INT TERM
+
+    # Validate every source before either component is allowed to create a
+    # backup. Public alpha.11 already provides these maintenance modes.
+    if ! run_api env KITPRO_CONTROL_DB="$KITPRO_CONTROL_DB" "$api_binary" --verify-database; then
+        die "control database failed integrity validation: $KITPRO_CONTROL_DB"
+    fi
+    if ! env KITPRO_HELPER_DB="$KITPRO_HELPER_DB" "$helper_binary" --verify-database; then
+        die "helper database failed integrity validation: $KITPRO_HELPER_DB"
+    fi
+
+    set_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+    control_stage="$KITPRO_CONTROL_BACKUP_DIR/.kitpro-upgrade-$set_id.partial"
+    helper_stage="$KITPRO_HELPER_BACKUP_DIR/.kitpro-upgrade-$set_id.partial"
+    install -d -m 0750 -o "$(stat -c '%u' "$KITPRO_CONTROL_DB")" -g "$(stat -c '%g' "$KITPRO_CONTROL_DB")" "$KITPRO_CONTROL_BACKUP_DIR"
+    install -d -m 0700 "$KITPRO_HELPER_BACKUP_DIR"
+    install -d -m 0700 -o "$(stat -c '%u' "$KITPRO_CONTROL_DB")" -g "$(stat -c '%g' "$KITPRO_CONTROL_DB")" "$control_stage"
+    install -d -m 0700 "$helper_stage"
+
+    run_api env KITPRO_CONTROL_DB="$KITPRO_CONTROL_DB" KITPRO_CONTROL_BACKUP_DIR="$control_stage" \
+        "$api_binary" --prepare-upgrade "$target_version"
+    env KITPRO_HELPER_DB="$KITPRO_HELPER_DB" KITPRO_HELPER_BACKUP_DIR="$helper_stage" \
+        "$helper_binary" --prepare-upgrade "$target_version"
+
+    control_staged=$(one_backup_in "$control_stage")
+    helper_staged=$(one_backup_in "$helper_stage")
+    run_api env KITPRO_CONTROL_DB="$control_staged" "$api_binary" --verify-database
+    env KITPRO_HELPER_DB="$helper_staged" "$helper_binary" --verify-database
+
+    control_final="$KITPRO_CONTROL_BACKUP_DIR/pre-upgrade-control-set-$set_id-to-$target_version.db"
+    helper_final="$KITPRO_HELPER_BACKUP_DIR/pre-upgrade-helper-set-$set_id-to-$target_version.db"
+    [[ ! -e "$control_final" && ! -e "$helper_final" ]] || die "upgrade backup set already exists: $set_id"
+    "$mv_command" -- "$control_staged" "$control_final"
+    control_promoted=true
+    if ! "$mv_command" -- "$helper_staged" "$helper_final"; then
+        rm -f -- "$control_final"
+        control_promoted=false
+        die 'helper backup promotion failed; the incomplete control backup was removed.'
+    fi
+    helper_promoted=true
+    "$sync_command" "$control_final" "$helper_final"
+    "$sync_command" -f "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"
+    rmdir -- "$control_stage" "$helper_stage"
+
+    approval=$(approval_path)
+    install -d -m 0755 "$(dirname -- "$approval")"
+    approval_temporary=$(mktemp "${approval}.partial.XXXXXX")
+    chmod 0600 "$approval_temporary"
+    printf 'format=%s\nold_version=%s\ntarget_version=%s\npackage_sha256=%s\nbackup_set_id=%s\ncreated_at=%s\napi_was_active=%s\nhelper_was_active=%s\nsocket_was_active=%s\n' \
+        "$approval_format" "$old_version" "$target_version" "$package_sha256" "$set_id" "$(date +%s)" \
+        "$api_was_active" "$helper_was_active" "$socket_was_active" > "$approval_temporary"
+    "$mv_command" -- "$approval_temporary" "$approval"
+    preflight_succeeded=true
+    trap - EXIT HUP INT TERM
+    printf 'KITPro Debian upgrade preflight completed successfully. Backup set: %s\n' "$set_id"
+}
+
+installed_version() {
+    # dpkg-query expands this field expression; the shell must not.
+    # shellcheck disable=SC2016
+    "$dpkg_query_command" -W -f='${Version}' kitpro-server 2>/dev/null
+}
+
+case ${1:-} in
+    --preflight-installed)
+        (( $# == 3 )) || die 'invalid installed-preflight arguments.'
+        [[ "$3" != "$alpha11_version" ]] || die 'alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper.'
+        preflight \
+            "$(path_in_root /usr/bin/kitpro-api)" \
+            "$(path_in_root /usr/libexec/kitpro-helper)" \
+            "$2" "$3" internal
+        ;;
+    '')
+        die 'a Debian package path is required.'
+        ;;
+    *)
+        (( $# == 1 )) || die 'exactly one Debian package path is required.'
+        package=$1
+        [[ -f "$package" ]] || die "package does not exist: $package"
+        package=$(readlink -f -- "$package")
+        expected_package_sha256=$embedded_package_sha256
+        expected_package_version=$embedded_package_version
+        if [[ "$test_mode" == true ]]; then
+            expected_package_sha256=${KITPRO_TEST_EXPECTED_PACKAGE_SHA256:?KITPRO_TEST_EXPECTED_PACKAGE_SHA256 is required in test mode}
+            expected_package_version=${KITPRO_TEST_EXPECTED_PACKAGE_VERSION:?KITPRO_TEST_EXPECTED_PACKAGE_VERSION is required in test mode}
+        fi
+        [[ "$expected_package_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'this is not a package-bound KITPro Debian upgrade wrapper.'
+        actual_package_sha256=$(sha256sum "$package" | awk '{print $1}')
+        [[ "$actual_package_sha256" == "$expected_package_sha256" ]] || die 'package SHA-256 does not match this upgrade wrapper.'
+        target_name=$($dpkg_deb_command -f "$package" Package)
+        target_version=$($dpkg_deb_command -f "$package" Version)
+        target_architecture=$($dpkg_deb_command -f "$package" Architecture)
+        [[ "$target_name" == kitpro-server ]] || die "package is not kitpro-server: $target_name"
+        [[ "$target_version" == "$expected_package_version" ]] || die "package version does not match this upgrade wrapper: $target_version"
+        [[ "$target_architecture" == amd64 ]] || die "package architecture is not supported by this wrapper: $target_architecture"
+        old_version=$(installed_version || true)
+        [[ "$old_version" == "$alpha11_version" ]] || die "this wrapper requires installed KITPro $alpha11_version; found: ${old_version:-not installed}"
+
+        preflight \
+            "$(path_in_root /usr/bin/kitpro-api)" \
+            "$(path_in_root /usr/libexec/kitpro-helper)" \
+            "$target_version" "$old_version" "$actual_package_sha256"
+        wrapper_succeeded=false
+        trap 'if [[ $wrapper_succeeded != true ]]; then rm -f -- "$(approval_path)"; restore_preflight_services; fi' EXIT HUP INT TERM
+        "$apt_get_command" install -- "$package"
+        [[ $(installed_version) == "$target_version" ]] || die 'package manager returned success without installing the expected version.'
+        [[ ! -e $(approval_path) ]] || die 'package manager returned success without completing KITPro configuration.'
+        wrapper_succeeded=true
+        trap - EXIT HUP INT TERM
+        ;;
+esac

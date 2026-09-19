@@ -20,28 +20,53 @@ if [ ! -S /run/docker.sock ] && [ ! -S /var/run/docker.sock ]; then
 fi
 
 if [ "$action" = upgrade ] && [ -x /usr/bin/kitpro-api ] && [ -x /usr/libexec/kitpro-helper ]; then
-    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
-    rollback_services=true
-    trap 'if [ "$rollback_services" = true ]; then systemctl start kitpro-helper.socket kitpro-api.service 2>/dev/null || true; fi' EXIT HUP INT TERM
-
-    if [ -r /etc/default/kitpro-server ]; then
-        # The file is root-owned package configuration and contains assignments only.
-        # shellcheck disable=SC1091
-        . /etc/default/kitpro-server
+    if [ "$old_version" = '0.1.0~alpha11' ]; then
+        approval=/run/kitpro/debian-upgrade-approved
+        [ -f "$approval" ] || {
+            echo 'kitpro-server: alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper' >&2
+            exit 1
+        }
+        [ "$(stat -c '%u:%a' "$approval")" = '0:600' ] || {
+            echo 'kitpro-server: Debian upgrade approval has unsafe ownership or permissions' >&2
+            exit 1
+        }
+        approved_old=$(sed -n 's/^old_version=//p' "$approval")
+        approved_target=$(sed -n 's/^target_version=//p' "$approval")
+        approved_format=$(sed -n 's/^format=//p' "$approval")
+        approved_sha256=$(sed -n 's/^package_sha256=//p' "$approval")
+        backup_set_id=$(sed -n 's/^backup_set_id=//p' "$approval")
+        approved_at=$(sed -n 's/^created_at=//p' "$approval")
+        case $approved_sha256 in *[!0-9a-f]*|'') approved_sha256=invalid ;; esac
+        case $backup_set_id in *[!0-9TZ-]*|'') backup_set_id=invalid ;; esac
+        case $approved_at in *[!0-9]*|'') approved_at=0 ;; esac
+        approval_age=$(($(date +%s) - approved_at))
+        [ "$approved_format" = 1 ] && [ "$approved_old" = "$old_version" ] && [ "$approved_target" = "$package_version" ] \
+            && [ "${#approved_sha256}" -eq 64 ] && [ "$backup_set_id" != invalid ] \
+            && [ "$approval_age" -ge 0 ] && [ "$approval_age" -le 900 ] || {
+            echo 'kitpro-server: Debian upgrade approval does not match this transition' >&2
+            exit 1
+        }
+        if [ -r /etc/default/kitpro-server ]; then
+            # shellcheck disable=SC1091
+            . /etc/default/kitpro-server
+        fi
+        KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}
+        KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}
+        control_backup="$KITPRO_CONTROL_BACKUP_DIR/pre-upgrade-control-set-$backup_set_id-to-$package_version.db"
+        helper_backup="$KITPRO_HELPER_BACKUP_DIR/pre-upgrade-helper-set-$backup_set_id-to-$package_version.db"
+        [ -s "$control_backup" ] && [ -s "$helper_backup" ] || {
+            echo 'kitpro-server: Debian upgrade approval has no complete backup pair' >&2
+            exit 1
+        }
+        runuser -u kitpro-api -- env KITPRO_CONTROL_DB="$control_backup" /usr/bin/kitpro-api --verify-database
+        env KITPRO_HELPER_DB="$helper_backup" /usr/libexec/kitpro-helper --verify-database
+    else
+        [ -x /usr/libexec/kitpro-debian-upgrade ] || {
+            echo 'kitpro-server: installed Debian upgrade gate is unavailable' >&2
+            exit 1
+        }
+        /usr/libexec/kitpro-debian-upgrade --preflight-installed "$package_version" "$old_version"
     fi
-    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
-    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
-    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}"
-    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}"
-
-    if [ -f "$KITPRO_CONTROL_DB" ]; then
-        runuser -u kitpro-api -- /usr/bin/kitpro-api --prepare-upgrade "$package_version"
-    fi
-    if [ -f "$KITPRO_HELPER_DB" ]; then
-        /usr/libexec/kitpro-helper --prepare-upgrade "$package_version"
-    fi
-    rollback_services=false
-    trap - EXIT HUP INT TERM
 fi
 
 exit 0

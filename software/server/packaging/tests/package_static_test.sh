@@ -27,6 +27,9 @@ tar -xJf "$unpack/data.tar.xz" -C "$unpack/data"
 
 test -x "$unpack/data/usr/bin/kitpro-api"
 test -x "$unpack/data/usr/libexec/kitpro-helper"
+test -x "$unpack/data/usr/libexec/kitpro-debian-upgrade"
+test -x "$first/kitpro-debian-upgrade"
+test "$(sha256sum "$first/kitpro-debian-upgrade" | awk '{print $1}')" = "$(sha256sum "$second/kitpro-debian-upgrade" | awk '{print $1}')"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-helper "$unpack/control/conffiles"
@@ -68,11 +71,13 @@ for script in preinst postinst prerm postrm; do
     sh -n "$unpack/control/$script"
 done
 grep -q '^set -eu$' "$unpack/control/preinst"
-grep -q 'runuser -u kitpro-api -- /usr/bin/kitpro-api --prepare-upgrade' "$unpack/control/preinst"
-grep -q '^        /usr/libexec/kitpro-helper --prepare-upgrade' "$unpack/control/preinst"
-if grep -E 'prepare-upgrade.*\|\| true|prepare-upgrade.*&& true' "$unpack/control/preinst"; then
-    echo "Debian preinst suppresses a mandatory backup failure" >&2
-    exit 1
-fi
+grep -Fq 'alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper' "$unpack/control/preinst"
+grep -Fq '/usr/libexec/kitpro-debian-upgrade --preflight-installed' "$unpack/control/preinst"
+grep -Fq 'abort-upgrade|abort-install|abort-remove|abort-deconfigure)' "$unpack/control/postinst"
+grep -Fq 'Never migrate with code that was' "$unpack/control/postinst"
+grep -Fq 'package SHA-256 does not match this upgrade wrapper' "$first/kitpro-debian-upgrade"
+grep -Fq "embedded_package_version='0.1.0~alpha3'" "$first/kitpro-debian-upgrade"
+grep -Fq "embedded_package_sha256='$(sha256sum "$one" | awk '{print $1}')'" "$first/kitpro-debian-upgrade"
+grep -Fq 'kitpro-debian-upgrade wrapper' "$unpack/data/usr/share/doc/kitpro-server/README.Debian"
 
 echo "package static tests: PASS"

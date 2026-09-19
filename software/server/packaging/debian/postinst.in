@@ -1,6 +1,33 @@
 #!/bin/sh
 set -eu
 
+approval=/run/kitpro/debian-upgrade-approved
+
+restore_previous_services() {
+    [ -f "$approval" ] || return 0
+    api_was_active=$(sed -n 's/^api_was_active=//p' "$approval")
+    helper_was_active=$(sed -n 's/^helper_was_active=//p' "$approval")
+    socket_was_active=$(sed -n 's/^socket_was_active=//p' "$approval")
+    [ "$helper_was_active" != true ] || systemctl start kitpro-helper.service 2>/dev/null || true
+    [ "$socket_was_active" != true ] || systemctl start kitpro-helper.socket 2>/dev/null || true
+    [ "$api_was_active" != true ] || systemctl start kitpro-api.service 2>/dev/null || true
+    rm -f -- "$approval"
+}
+
+case ${1:-} in
+    abort-upgrade|abort-install|abort-remove|abort-deconfigure)
+        # The old package is being restored. Never migrate with code that was
+        # not successfully installed, especially after a failed preflight.
+        restore_previous_services
+        exit 0
+        ;;
+    configure)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
 if ! getent group kitpro-api >/dev/null; then
     addgroup --system kitpro-api >/dev/null
 fi
@@ -46,5 +73,6 @@ deb-systemd-helper enable kitpro-helper.socket kitpro-api.service >/dev/null
 systemctl daemon-reload
 deb-systemd-invoke restart kitpro-helper.socket
 deb-systemd-invoke restart kitpro-api.service
+rm -f -- "$approval"
 
 exit 0

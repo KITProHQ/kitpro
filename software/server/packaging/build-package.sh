@@ -55,6 +55,9 @@ install -m 0644 "$script_dir/tmpfiles/kitpro.conf" "$root/usr/lib/tmpfiles.d/"
 install -m 0644 "$script_dir/apparmor/kitpro-helper" "$root/etc/apparmor.d/usr.libexec.kitpro-helper"
 install -m 0644 "$script_dir/apparmor/kitpro-helper" "$root/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 install -m 0644 "$script_dir/debian/kitpro-server.default" "$root/etc/default/kitpro-server"
+sed -e "s/@KITPRO_PACKAGE_VERSION@/$version/g" \
+    "$script_dir/debian/kitpro-debian-upgrade" > "$root/usr/libexec/kitpro-debian-upgrade"
+chmod 0755 "$root/usr/libexec/kitpro-debian-upgrade"
 install -m 0644 "$script_dir/debian/README.Debian" "$root/usr/share/doc/kitpro-server/"
 install -m 0644 "$script_dir/debian/copyright" "$root/usr/share/doc/kitpro-server/"
 install -m 0644 "$script_dir/debian/lintian-overrides" "$root/usr/share/lintian/overrides/kitpro-server"
@@ -96,6 +99,13 @@ else
 fi
 
 (cd "$output_dir" && sha256sum "$(basename "$package")" > "$(basename "$package").sha256")
+package_sha256=$(sha256sum "$package" | awk '{print $1}')
+upgrade_wrapper="$output_dir/kitpro-debian-upgrade"
+sed -e "s/@KITPRO_PACKAGE_SHA256@/$package_sha256/g" \
+    -e "s/@KITPRO_PACKAGE_VERSION@/$version/g" \
+    "$script_dir/debian/kitpro-debian-upgrade" > "$upgrade_wrapper"
+chmod 0755 "$upgrade_wrapper"
+(cd "$output_dir" && sha256sum "$(basename "$upgrade_wrapper")" > "$(basename "$upgrade_wrapper").sha256")
 cat > "$package.build.json" <<EOF
 {
   "package": "kitpro-server",
