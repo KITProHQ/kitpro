@@ -79,7 +79,10 @@ install -m 0644 "$package" "$output_dir/$(basename "$package")"
 (cd "$output_dir" && sha256sum "$(basename "$package")" > "$(basename "$package").sha256")
 upgrade_wrapper="$output_dir/kitpro-server-${pkgver}-${pkgrel}-upgrade.sh"
 package_sha256=$(sha256sum "$package" | awk '{print $1}')
-sed "s/@KITPRO_PACKAGE_SHA256@/$package_sha256/" "$arch_dir/kitpro-arch-upgrade" > "$upgrade_wrapper"
+package_version="${pkgver}-${pkgrel}"
+sed -e "s/@KITPRO_PACKAGE_SHA256@/$package_sha256/" \
+    -e "s/@KITPRO_PACKAGE_VERSION@/$package_version/" \
+    "$arch_dir/kitpro-arch-upgrade" > "$upgrade_wrapper"
 chmod 0755 "$upgrade_wrapper"
 (cd "$output_dir" && sha256sum "$(basename "$upgrade_wrapper")" > "$(basename "$upgrade_wrapper").sha256")
 cat > "$output_dir/$(basename "$package").build.json" <<EOF

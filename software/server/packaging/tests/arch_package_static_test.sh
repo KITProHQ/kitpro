@@ -32,8 +32,17 @@ grep -q 'usr/libexec/kitpro-arch-upgrade' "$arch_dir/PKGBUILD"
 grep -q 'usr/share/libalpm/hooks/90-kitpro-server-upgrade.hook' "$arch_dir/PKGBUILD"
 grep -q 'kitpro-server-${pkgver}-${pkgrel}-upgrade.sh' "$server_dir/packaging/build-arch-package.sh"
 grep -q '@KITPRO_PACKAGE_SHA256@' "$upgrade_script"
+grep -q '@KITPRO_PACKAGE_VERSION@' "$upgrade_script"
 grep -Fq 's/@KITPRO_PACKAGE_SHA256@/$package_sha256/' "$server_dir/packaging/build-arch-package.sh"
+grep -Fq 's/@KITPRO_PACKAGE_VERSION@/$package_version/' "$server_dir/packaging/build-arch-package.sh"
 grep -q 'package SHA-256 does not match this upgrade wrapper' "$upgrade_script"
+grep -q 'package metadata .PKGINFO is missing or unreadable' "$upgrade_script"
+grep -Fq '"$bsdtar_command" -xOf "$package" .PKGINFO' "$upgrade_script"
+forbidden_option='--print-''format'
+if grep -R -F -- "$forbidden_option" "$upgrade_script" "$server_dir/packaging/tests"; then
+    printf 'Arch wrapper still relies on the unsupported pacman formatting option\n' >&2
+    exit 1
+fi
 grep -q -- '--preflight-extracted' "$upgrade_script"
 grep -q -- '--hookdir' "$upgrade_script"
 grep -q 'AbortOnFail' "$upgrade_script"

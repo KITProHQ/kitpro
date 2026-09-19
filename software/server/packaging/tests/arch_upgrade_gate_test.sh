@@ -140,6 +140,12 @@ fake_bsdtar="$work_dir/bsdtar"
 cat > "$fake_bsdtar" <<'EOF'
 #!/usr/bin/env bash
 set -eu
+printf '%s\n' "$*" >> "${KITPRO_FAKE_BSDTAR_LOG:?}"
+if [[ ${1:-} == -xOf ]]; then
+    [[ ${KITPRO_FAKE_PKGINFO_MISSING:-0} != 1 ]] || exit 1
+    cat "${KITPRO_FAKE_PKGINFO:?}"
+    exit 0
+fi
 destination=
 while (($#)); do
     if [[ $1 == -C ]]; then
@@ -158,6 +164,7 @@ fake_pacman="$work_dir/pacman"
 cat > "$fake_pacman" <<'EOF'
 #!/usr/bin/env bash
 set -eu
+printf '%s\n' "$*" >> "${KITPRO_FAKE_PACMAN_LOG:?}"
 case ${1:-} in
     -Q)
         printf 'kitpro-server %s\n' "$(cat "$KITPRO_FAKE_PACKAGE_VERSION")"
@@ -183,6 +190,14 @@ case ${1:-} in
 esac
 EOF
 chmod 0755 "$fake_pacman"
+valid_pkginfo="$work_dir/valid.PKGINFO"
+cat > "$valid_pkginfo" <<'EOF'
+pkgname = kitpro-server
+pkgver = 0.1.0_alpha12-1
+arch = x86_64
+EOF
+pacman_log="$work_dir/pacman.log"
+bsdtar_log="$work_dir/bsdtar.log"
 if KITPRO_UPGRADE_TESTING=1 \
     KITPRO_TEST_ROOT="$transaction_root" \
     KITPRO_TEST_SYSTEMCTL="$fake_systemctl" \
@@ -190,16 +205,81 @@ if KITPRO_UPGRADE_TESTING=1 \
     KITPRO_TEST_PACMAN="$fake_pacman" \
     KITPRO_TEST_BSDTAR="$fake_bsdtar" \
     KITPRO_TEST_EXPECTED_PACKAGE_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
+    KITPRO_TEST_EXPECTED_PACKAGE_VERSION=0.1.0_alpha12-1 \
     KITPRO_TEST_SERVICE_LOG="$transaction_root/service.log" \
     KITPRO_FAKE_BINARY_ROOT="$binary_root" \
     KITPRO_FAKE_PACKAGE_VERSION="$transaction_root/package-version" \
+    KITPRO_FAKE_PKGINFO="$valid_pkginfo" \
+    KITPRO_FAKE_BSDTAR_LOG="$bsdtar_log" \
+    KITPRO_FAKE_PACMAN_LOG="$pacman_log" \
         "$upgrade_script" "$fake_package" >"$transaction_root/hash-output.log" 2>&1; then
     printf 'mismatched package SHA-256 passed bootstrap wrapper validation\n' >&2
     exit 1
 fi
 grep -Fq 'package SHA-256 does not match this upgrade wrapper.' "$transaction_root/hash-output.log"
 test "$(cat "$transaction_root/package-version")" = 0.1.0_alpha11-1
+test ! -e "$bsdtar_log"
+test ! -e "$pacman_log"
 
+assert_metadata_rejected() {
+    local label=$1 expected_error=$2 pkginfo=$3 missing=${4:-0}
+    : > "$pacman_log"
+    : > "$bsdtar_log"
+    if KITPRO_UPGRADE_TESTING=1 \
+        KITPRO_TEST_ROOT="$transaction_root" \
+        KITPRO_TEST_SYSTEMCTL="$fake_systemctl" \
+        KITPRO_TEST_RUNUSER="$fake_runuser" \
+        KITPRO_TEST_PACMAN="$fake_pacman" \
+        KITPRO_TEST_BSDTAR="$fake_bsdtar" \
+        KITPRO_TEST_EXPECTED_PACKAGE_SHA256="$(sha256sum "$fake_package" | awk '{print $1}')" \
+        KITPRO_TEST_EXPECTED_PACKAGE_VERSION=0.1.0_alpha12-1 \
+        KITPRO_TEST_SERVICE_LOG="$transaction_root/service.log" \
+        KITPRO_FAKE_BINARY_ROOT="$binary_root" \
+        KITPRO_FAKE_PACKAGE_VERSION="$transaction_root/package-version" \
+        KITPRO_FAKE_PKGINFO="$pkginfo" \
+        KITPRO_FAKE_PKGINFO_MISSING="$missing" \
+        KITPRO_FAKE_BSDTAR_LOG="$bsdtar_log" \
+        KITPRO_FAKE_PACMAN_LOG="$pacman_log" \
+            "$upgrade_script" "$fake_package" >"$transaction_root/$label.log" 2>&1; then
+        printf '%s package metadata was accepted\n' "$label" >&2
+        exit 1
+    fi
+    grep -Fq "$expected_error" "$transaction_root/$label.log"
+    test ! -s "$pacman_log"
+}
+
+wrong_name_pkginfo="$work_dir/wrong-name.PKGINFO"
+printf 'pkgname = another-package\npkgver = 0.1.0_alpha12-1\n' > "$wrong_name_pkginfo"
+assert_metadata_rejected wrong-name 'package is not kitpro-server' "$wrong_name_pkginfo"
+
+wrong_version_pkginfo="$work_dir/wrong-version.PKGINFO"
+printf 'pkgname = kitpro-server\npkgver = 0.1.0_alpha13-1\n' > "$wrong_version_pkginfo"
+assert_metadata_rejected wrong-version 'package version does not match this upgrade wrapper' "$wrong_version_pkginfo"
+
+assert_metadata_rejected missing-pkginfo 'package metadata .PKGINFO is missing or unreadable' "$valid_pkginfo" 1
+
+missing_name_pkginfo="$work_dir/missing-name.PKGINFO"
+printf 'pkgver = 0.1.0_alpha12-1\n' > "$missing_name_pkginfo"
+assert_metadata_rejected missing-name 'package metadata must contain exactly one pkgname' "$missing_name_pkginfo"
+
+missing_version_pkginfo="$work_dir/missing-version.PKGINFO"
+printf 'pkgname = kitpro-server\n' > "$missing_version_pkginfo"
+assert_metadata_rejected missing-version 'package metadata must contain exactly one pkgver' "$missing_version_pkginfo"
+
+malformed_pkginfo="$work_dir/malformed.PKGINFO"
+printf 'pkgname=kitpro-server\npkgver = 0.1.0_alpha12-1\n' > "$malformed_pkginfo"
+assert_metadata_rejected malformed 'package metadata contains a malformed pkgname' "$malformed_pkginfo"
+
+duplicate_pkginfo="$work_dir/duplicate.PKGINFO"
+printf 'pkgname = kitpro-server\npkgname = kitpro-server\npkgver = 0.1.0_alpha12-1\n' > "$duplicate_pkginfo"
+assert_metadata_rejected duplicate 'package metadata must contain exactly one pkgname' "$duplicate_pkginfo"
+
+oversized_pkginfo="$work_dir/oversized.PKGINFO"
+dd if=/dev/zero of="$oversized_pkginfo" bs=65537 count=1 status=none
+assert_metadata_rejected oversized 'package metadata .PKGINFO has an invalid size' "$oversized_pkginfo"
+
+: > "$pacman_log"
+: > "$bsdtar_log"
 if KITPRO_UPGRADE_TESTING=1 \
     KITPRO_TEST_ROOT="$transaction_root" \
     KITPRO_TEST_SYSTEMCTL="$fake_systemctl" \
@@ -207,9 +287,13 @@ if KITPRO_UPGRADE_TESTING=1 \
     KITPRO_TEST_PACMAN="$fake_pacman" \
     KITPRO_TEST_BSDTAR="$fake_bsdtar" \
     KITPRO_TEST_EXPECTED_PACKAGE_SHA256="$(sha256sum "$fake_package" | awk '{print $1}')" \
+    KITPRO_TEST_EXPECTED_PACKAGE_VERSION=0.1.0_alpha12-1 \
     KITPRO_TEST_SERVICE_LOG="$transaction_root/service.log" \
     KITPRO_FAKE_BINARY_ROOT="$binary_root" \
     KITPRO_FAKE_PACKAGE_VERSION="$transaction_root/package-version" \
+    KITPRO_FAKE_PKGINFO="$valid_pkginfo" \
+    KITPRO_FAKE_BSDTAR_LOG="$bsdtar_log" \
+    KITPRO_FAKE_PACMAN_LOG="$pacman_log" \
         "$upgrade_script" "$fake_package" >"$transaction_root/output.log" 2>&1; then
     printf 'corrupt database did not abort the simulated package transaction\n' >&2
     exit 1
@@ -220,5 +304,7 @@ test "$transaction_db_before" = "$(sha256sum "$transaction_root/var/lib/kitpro-h
 test ! -e "$transaction_root/run/kitpro/upgrade-approved"
 test ! -d "$transaction_root/var/lib/kitpro-api/backups"
 grep -Fq 'KITPro upgrade aborted: existing state failed integrity/backup validation.' "$transaction_root/output.log"
+grep -Fq -- '--hookdir' "$pacman_log"
+grep -Fq -- '-xOf' "$bsdtar_log"
 
 printf 'Arch fail-closed upgrade gate tests: PASS\n'

@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 readonly approval_version=1
 readonly embedded_package_sha256='@KITPRO_PACKAGE_SHA256@'
+readonly embedded_package_version='@KITPRO_PACKAGE_VERSION@'
+readonly maximum_pkginfo_size=65536
 
 die() {
     printf 'KITPro upgrade aborted: %s\n' "$1" >&2
@@ -150,6 +152,75 @@ installed_version() {
     "$pacman_command" -Q kitpro-server 2>/dev/null | awk 'NF >= 2 {print $2}'
 }
 
+read_package_metadata() {
+    local package=$1 metadata_file metadata_size line value metadata_error=''
+    local archive_status reader_status
+    local -a pipeline_status
+    local pkgname_count=0 pkgver_count=0
+    metadata_file=$(mktemp)
+    set +e
+    "$bsdtar_command" -xOf "$package" .PKGINFO | head -c "$((maximum_pkginfo_size + 1))" > "$metadata_file"
+    pipeline_status=("${PIPESTATUS[@]}")
+    set -e
+    archive_status=${pipeline_status[0]}
+    reader_status=${pipeline_status[1]}
+    metadata_size=$(stat -c '%s' "$metadata_file")
+    if (( metadata_size > maximum_pkginfo_size )); then
+        rm -f -- "$metadata_file"
+        die 'package metadata .PKGINFO has an invalid size.'
+    fi
+    if (( archive_status != 0 || reader_status != 0 )); then
+        rm -f -- "$metadata_file"
+        die 'package metadata .PKGINFO is missing or unreadable.'
+    fi
+    if (( metadata_size == 0 )); then
+        rm -f -- "$metadata_file"
+        die 'package metadata .PKGINFO has an invalid size.'
+    fi
+
+    target_name=
+    target_version=
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if (( ${#line} > 4096 )) || [[ "$line" == *$'\r'* ]]; then
+            metadata_error='package metadata .PKGINFO is malformed.'
+            break
+        fi
+        case "$line" in
+            'pkgname = '*)
+                (( pkgname_count += 1 ))
+                value=${line#'pkgname = '}
+                if [[ ! "$value" =~ ^[a-z0-9@._+-]{1,128}$ ]]; then
+                    metadata_error='package metadata contains an invalid pkgname.'
+                    break
+                fi
+                target_name=$value
+                ;;
+            pkgname*)
+                metadata_error='package metadata contains a malformed pkgname.'
+                break
+                ;;
+            'pkgver = '*)
+                (( pkgver_count += 1 ))
+                value=${line#'pkgver = '}
+                if [[ ! "$value" =~ ^[0-9A-Za-z._+~:-]{1,128}$ ]]; then
+                    metadata_error='package metadata contains an invalid pkgver.'
+                    break
+                fi
+                target_version=$value
+                ;;
+            pkgver*)
+                metadata_error='package metadata contains a malformed pkgver.'
+                break
+                ;;
+        esac
+    done < "$metadata_file"
+    rm -f -- "$metadata_file"
+    [[ -z "$metadata_error" ]] || die "$metadata_error"
+
+    (( pkgname_count == 1 )) || die 'package metadata must contain exactly one pkgname.'
+    (( pkgver_count == 1 )) || die 'package metadata must contain exactly one pkgver.'
+}
+
 case ${1:-} in
     --preflight-installed)
         old_version=$(installed_version)
@@ -172,15 +243,18 @@ case ${1:-} in
         [[ -f "$package" ]] || die "package does not exist: $package"
         package=$(readlink -f -- "$package")
         expected_package_sha256=$embedded_package_sha256
+        expected_package_version=$embedded_package_version
         if [[ "$test_mode" == true ]]; then
             expected_package_sha256=${KITPRO_TEST_EXPECTED_PACKAGE_SHA256:?KITPRO_TEST_EXPECTED_PACKAGE_SHA256 is required in test mode}
+            expected_package_version=${KITPRO_TEST_EXPECTED_PACKAGE_VERSION:?KITPRO_TEST_EXPECTED_PACKAGE_VERSION is required in test mode}
         fi
         [[ "$expected_package_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'this is not a package-bound KITPro upgrade wrapper.'
+        [[ "$expected_package_version" =~ ^[0-9A-Za-z._+~:-]{1,128}$ ]] || die 'this wrapper has no valid target package version.'
         actual_package_sha256=$(sha256sum "$package" | awk '{print $1}')
         [[ "$actual_package_sha256" == "$expected_package_sha256" ]] || die 'package SHA-256 does not match this upgrade wrapper.'
-        target_name=$("$pacman_command" -Qp --print-format '%n' "$package")
-        target_version=$("$pacman_command" -Qp --print-format '%v' "$package")
+        read_package_metadata "$package"
         [[ "$target_name" == kitpro-server ]] || die "package is not kitpro-server: $target_name"
+        [[ "$target_version" == "$expected_package_version" ]] || die "package version does not match this upgrade wrapper: $target_version"
 
         old_version=$(installed_version || true)
         if [[ -z "$old_version" ]]; then
