@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/kitpro/kitpro/software/server/internal/auth"
 	"github.com/kitpro/kitpro/software/server/internal/backup"
@@ -52,6 +53,9 @@ type app struct {
 	catalog       map[string]catalog.Entry
 	helperCall    func(protocol.Request) (protocol.Response, error)
 	allocatePort  func(map[int]bool, string) (int, error)
+	// beforeControlProjection is a deterministic fault-injection seam. A nil
+	// hook has no production effect.
+	beforeControlProjection func() error
 }
 
 type internalDispatchKey struct{}
@@ -78,6 +82,55 @@ type storageSlotView struct {
 type installedStorageView struct {
 	Purpose, RootName, Mode, Path string
 	Available                     bool
+}
+
+// committedLifecycleResult is the control-plane projection of the helper's
+// authoritative application-generation commit. The API must not project
+// request intent as active state.
+type committedLifecycleResult struct {
+	Generation   int    `json:"runtime_generation"`
+	ReleaseID    string `json:"release_id"`
+	RuntimeState string `json:"runtime_state"`
+	ExposureMode string `json:"exposure_mode"`
+	ServiceID    string `json:"service_id"`
+	HostAddress  string `json:"host_address"`
+	HostPort     int    `json:"host_port"`
+}
+
+type reconciliationResult struct {
+	InstallationID    string                    `json:"installation_id"`
+	CheckedGeneration int                       `json:"checked_generation"`
+	State             string                    `json:"reconciliation_state"`
+	RuntimeState      string                    `json:"runtime_state"`
+	ObservedAt        string                    `json:"observed_at"`
+	MismatchCodes     []string                  `json:"mismatch_codes"`
+	RecommendedAction string                    `json:"recommended_action"`
+	Projection        *committedLifecycleResult `json:"committed_projection"`
+}
+
+func decodeReconciliationResult(value any) (reconciliationResult, error) {
+	var result reconciliationResult
+	encoded, err := json.Marshal(value)
+	if err == nil {
+		err = json.Unmarshal(encoded, &result)
+	}
+	if err != nil || result.InstallationID == "" || result.State == "" || result.ObservedAt == "" {
+		return reconciliationResult{}, errors.New("helper returned no reconciliation result")
+	}
+	return result, nil
+}
+
+func decodeCommittedLifecycleResult(value any) (committedLifecycleResult, error) {
+	var result committedLifecycleResult
+	encoded, err := json.Marshal(value)
+	if err == nil {
+		err = json.Unmarshal(encoded, &result)
+	}
+	validState := result.RuntimeState == "running" || result.RuntimeState == "stopped" || result.RuntimeState == "runtime_removed"
+	if err != nil || result.Generation < 1 || result.ReleaseID == "" || !validState || result.ExposureMode == "" {
+		return committedLifecycleResult{}, errors.New("helper returned no committed lifecycle result")
+	}
+	return result, nil
 }
 
 func main() {
@@ -136,7 +189,6 @@ func main() {
 	http.HandleFunc("/api/v1/hardware", a.guard(a.hardware))
 	http.HandleFunc("/api/v1/storage-roots", a.guard(a.storageRoots))
 	http.HandleFunc("/api/v1/storage-roots/", a.guard(a.storageRoots))
-	http.HandleFunc("/api/v1/reconcile/", a.guard(a.reconcile))
 	http.HandleFunc("/api/v1/backup", a.guard(a.backup))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
 	http.ListenAndServe(env("KITPRO_API_ADDR", "127.0.0.1:8080"), nil)
@@ -407,14 +459,7 @@ func (a *app) backup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, e.Error(), 500)
 		return
 	}
-	c, e := net.Dial("unix", a.helper)
-	if e != nil {
-		http.Error(w, e.Error(), 503)
-		return
-	}
-	defer c.Close()
-	protocol.Write(c, protocol.Request{Version: 1, ID: id, Operation: "BackupHelperState"})
-	resp, e := protocol.ReadResponse(c)
+	resp, e := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: id, Operation: "BackupHelperState", OperationRevision: 1})
 	if e != nil || !resp.OK {
 		http.Error(w, "helper backup failed", 503)
 		return
@@ -467,14 +512,22 @@ func (a *app) storageRoots(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		request.Operation, request.RootName, request.RootPath, request.RootMode = "RegisterStorageRoot", strings.TrimSpace(r.FormValue("name")), strings.TrimSpace(r.FormValue("path")), r.FormValue("mode")
+		request.Version, request.ID, request.OperationID, request.OperationRevision = 2, operations.NewRequestID(), operations.NewID(), 1
 	case http.MethodDelete:
 		request.Operation = "RemoveStorageRoot"
 		request.RootID = strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/storage-roots/"), "/")
+		request.Version, request.ID, request.OperationID, request.OperationRevision = 2, operations.NewRequestID(), operations.NewID(), 1
 	default:
 		http.Error(w, "method denied", http.StatusMethodNotAllowed)
 		return
 	}
-	response, err := a.callHelper(request)
+	var response protocol.Response
+	var err error
+	if request.OperationID != "" {
+		response, err = a.callHelperOperation(request)
+	} else {
+		response, err = a.callHelper(request)
+	}
 	if err != nil {
 		http.Error(w, "storage helper unavailable", 503)
 		return
@@ -485,49 +538,6 @@ func (a *app) storageRoots(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response.Result)
-}
-func (a *app) reconcile(w http.ResponseWriter, r *http.Request) {
-	inst := strings.TrimPrefix(r.URL.Path, "/api/v1/reconcile/")
-	if inst == "" {
-		http.Error(w, "instance required", 400)
-		return
-	}
-	var desired string
-	if e := a.db.QueryRowContext(r.Context(), "SELECT desired_state FROM installations WHERE installation_id=?", inst).Scan(&desired); e == nil && desired == "runtime_removed" {
-		json.NewEncoder(w).Encode(protocol.Response{OK: true, RequestID: operations.NewID(), Result: map[string]string{"classification": "runtime_removed", "summary": "runtime intentionally removed; installation and data retained"}})
-		return
-	}
-	c, e := net.Dial("unix", a.helper)
-	if e != nil {
-		http.Error(w, e.Error(), 503)
-		return
-	}
-	defer c.Close()
-	id := operations.NewID()
-	q := protocol.Request{Version: 1, ID: id, Operation: "ReconcileTestWorkload", InstanceID: inst}
-	var appID string
-	if err := a.db.QueryRowContext(r.Context(), "SELECT application_id FROM installations WHERE installation_id=?", inst).Scan(&appID); err == nil {
-		if entry, ok := a.catalog[appID]; ok {
-			for _, service := range entry.Manifest.Services {
-				if record, err := exposure.Get(r.Context(), a.db, inst, service.ID); err == nil {
-					q.ServiceID = service.ID
-					q.ExposureMode = string(record.Mode)
-					q.HostAddress = record.HostAddress
-					q.HostPort = record.HostPort
-					q.ContainerPort = service.ContainerPort
-					q.ServiceProtocol = service.Protocol
-					break
-				}
-			}
-		}
-	}
-	protocol.Write(c, q)
-	resp, e := protocol.ReadResponse(c)
-	if e != nil {
-		http.Error(w, e.Error(), 503)
-		return
-	}
-	json.NewEncoder(w).Encode(resp)
 }
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	type appView struct {
@@ -882,7 +892,7 @@ func componentLabel(id string) string {
 func statePresentation(state string) (string, string) {
 	switch state {
 	case "running":
-		return "Healthy", "badge-success"
+		return "Running", "badge-success"
 	case "stopped":
 		return "Stopped", "badge-warning"
 	case "runtime_removed":
@@ -907,7 +917,7 @@ func operationTitle(operationType string) string {
 	titles := map[string]string{
 		"InstallApplication": "Application installed", "UpdateApplication": "Application updated",
 		"ConfigureServiceExposure": "Access changed", "RecreateApplication": "Runtime recreated",
-		"StartApplication": "Application started", "StopApplication": "Application stopped",
+		"StartApplication": "Application started", "StopApplication": "Application stopped", "RestartApplication": "Application restarted",
 		"RemoveApplication": "Runtime removed",
 	}
 	if title := titles[operationType]; title != "" {
@@ -945,6 +955,29 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		if x.Status == "accepted" || x.Status == "helper_succeeded_projection_pending" {
+			if helper, helperErr := a.callHelper(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: x.ID, Operation: "GetOperation"}); helperErr == nil && helper.ErrorCode != "OperationNotFound" {
+				switch helper.State {
+				case "succeeded":
+					x.Status, x.Summary = "succeeded", "privileged operation completed"
+					if isCommittedLifecycleOperation(x.Type) {
+						if projectionErr := a.repairCommittedProjection(r.Context(), x.InstanceID, x.ID, helper.Result, true); projectionErr != nil {
+							x.Status, x.Summary = "helper_succeeded_projection_pending", "privileged operation completed; control projection repair pending"
+						}
+					}
+					if x.Type == "ReconcileInstallation" || x.Type == "RepairInstallation" {
+						if _, projectionErr := a.projectReconciliation(r.Context(), x.ID, helper.Result); projectionErr != nil {
+							x.Status, x.Summary = "accepted", "privileged operation completed; reconciliation projection pending"
+						}
+					}
+				case "failed", "action_required", "cancelled", "superseded":
+					x.Status, x.Summary = "failed", "privileged operation requires review"
+				default:
+					x.Summary = "privileged operation continues in helper"
+				}
+				_ = operations.Update(r.Context(), a.db, x.ID, x.Status, x.Summary)
+			}
+		}
 		json.NewEncoder(w).Encode(x)
 		return
 	}
@@ -955,57 +988,6 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != "POST" {
 		http.Error(w, "method", 405)
-		return
-	}
-	if strings.HasSuffix(r.URL.Path, "/stop") || strings.HasSuffix(r.URL.Path, "/start") || strings.HasSuffix(r.URL.Path, "/remove") {
-		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		if len(parts) < 4 {
-			http.Error(w, "invalid operation path", 400)
-			return
-		}
-		prior, e := operations.Get(r.Context(), a.db, parts[3])
-		if e != nil {
-			http.NotFound(w, r)
-			return
-		}
-		id := operations.NewID()
-		typ := "StopApplication"
-		if strings.HasSuffix(r.URL.Path, "/start") {
-			typ = "StartApplication"
-		}
-		if strings.HasSuffix(r.URL.Path, "/remove") {
-			typ = "RemoveApplication"
-		}
-		if e = operations.Insert(r.Context(), a.db, id, typ, prior.InstanceID); e == nil {
-			c, de := net.Dial("unix", a.helper)
-			if de == nil {
-				defer c.Close()
-				protocol.Write(c, protocol.Request{Version: 1, ID: id, Operation: typ, InstanceID: prior.InstanceID})
-				var resp protocol.Response
-				resp, de = protocol.ReadResponse(c)
-				if de == nil && !resp.OK {
-					de = fmt.Errorf("helper: %s", resp.Error)
-				}
-			}
-			e = de
-		}
-		status, summary := "succeeded", "helper accepted"
-		if e != nil {
-			status, summary = "failed", e.Error()
-		}
-		operations.Update(r.Context(), a.db, id, status, summary)
-		if e == nil {
-			desired := "stopped"
-			if typ == "StartApplication" {
-				desired = "running"
-			}
-			if typ == "RemoveApplication" {
-				desired = "runtime_removed"
-			}
-			_, _ = a.db.ExecContext(r.Context(), "UPDATE installations SET desired_state=?,updated_at=? WHERE installation_id=?", desired, time.Now().UTC().Format(time.RFC3339Nano), prior.InstanceID)
-		}
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"id": id, "status": status})
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/install") {
@@ -1073,23 +1055,18 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if existing == "" {
-		_, e := a.db.ExecContext(r.Context(), "INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", inst, plan.ApplicationID, plan.ReleaseID, "running", gen, now, now)
+		_, e := a.db.ExecContext(r.Context(), "INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", inst, plan.ApplicationID, plan.ReleaseID, "runtime_removed", 0, now, now)
 		if e != nil {
 			operations.Update(r.Context(), a.db, id, "failed", e.Error())
 			http.Error(w, "installation state failed", 500)
 			return
 		}
-		for _, service := range plan.Services {
-			if _, e = exposure.Upsert(r.Context(), a.db, inst, service.ID, exposure.Assignment{Mode: exposure.Internal}, env("KITPRO_LAN_BIND_ADDRESS", "")); e != nil {
-				operations.Update(r.Context(), a.db, id, "failed", e.Error())
-				http.Error(w, "service state failed", 500)
-				return
-			}
-		}
 	}
 	var e error
 	helperRejected := false
+	helperPending := false
 	var helperRequest protocol.Request
+	var helperResponse protocol.Response
 	{
 		helperOperation := "InstallApplication"
 		if opType == "ConfigureServiceExposure" {
@@ -1097,7 +1074,8 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		} else if opType == "UpdateApplication" {
 			helperOperation = "UpdateApplication"
 		}
-		q := protocol.Request{Version: 1, ID: id, Operation: helperOperation, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
+		q := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: id, Operation: helperOperation, OperationRevision: 1, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
+		q.RepairAction = r.URL.Query().Get("repair_action")
 		helperRequest = q
 		for _, item := range plan.Hardware {
 			q.Hardware = append(q.Hardware, protocol.HardwareRequirement{Class: item.Class, Optional: item.Optional, CPUFallback: item.CPUFallback})
@@ -1166,10 +1144,13 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		{
 			helperRequest = q
 			var resp protocol.Response
-			resp, e = a.callHelper(q)
+			resp, e = a.callHelperOperation(q)
+			helperResponse = resp
 			if e == nil && !resp.OK {
 				helperRejected = true
 				e = fmt.Errorf("helper: %s", resp.Error)
+			} else if e == nil {
+				helperPending = helperStatePending(resp.State)
 			}
 		}
 	}
@@ -1186,6 +1167,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			// generation 1 rather than inventing a discarded runtime generation.
 			_, _ = a.db.ExecContext(r.Context(), "UPDATE installations SET desired_state='runtime_removed',runtime_generation=0,updated_at=? WHERE installation_id=?", now, inst)
 		}
+	} else if helperPending {
+		status = "accepted"
+		summary = "privileged operation continues in helper"
 	} else {
 		for _, binding := range helperRequest.ExternalStorage {
 			_, _ = a.db.ExecContext(r.Context(), `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,'',?,?)`, inst, binding.SlotID, binding.RootID)
@@ -1196,19 +1180,70 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if e == nil && existing != "" {
-		updateSQL := "UPDATE installations SET desired_state='running',runtime_generation=?,updated_at=?"
-		args := []any{gen, now}
-		if opType == "UpdateApplication" {
-			updateSQL += ",release_id=?"
-			args = append(args, plan.ReleaseID)
+	if e == nil && !helperPending {
+		committed := committedLifecycleResult{Generation: gen, ReleaseID: plan.ReleaseID, RuntimeState: "running", ExposureMode: helperRequest.ExposureMode, ServiceID: helperRequest.ServiceID, HostAddress: helperRequest.HostAddress, HostPort: helperRequest.HostPort}
+		if helperResponse.State != "" {
+			committed, e = decodeCommittedLifecycleResult(helperResponse.Result)
+			if e != nil {
+				status, summary = "failed", "helper result could not be projected"
+			}
 		}
-		updateSQL += " WHERE installation_id=?"
-		args = append(args, inst)
-		if _, updateErr := a.db.ExecContext(r.Context(), updateSQL, args...); updateErr != nil {
-			status = "failed"
-			summary = updateErr.Error()
-			e = updateErr
+		if e != nil {
+			operations.Update(r.Context(), a.db, id, status, summary)
+			http.Error(w, summary, http.StatusBadGateway)
+			return
+		}
+		var projectionErr error
+		if a.beforeControlProjection != nil {
+			projectionErr = a.beforeControlProjection()
+		}
+		var projectionTx *sql.Tx
+		if projectionErr == nil {
+			projectionTx, projectionErr = a.db.BeginTx(r.Context(), nil)
+		}
+		if projectionErr != nil {
+			status, summary = "helper_succeeded_projection_pending", "privileged operation completed; control projection repair pending"
+		} else {
+			defer projectionTx.Rollback()
+			updateSQL := "UPDATE installations SET desired_state=?,runtime_state=?,runtime_generation=?,updated_at=?,projection_source_operation_id=?"
+			args := []any{committed.RuntimeState, committed.RuntimeState, committed.Generation, now, id}
+			if opType == "UpdateApplication" || len(helperRequest.Components) == 0 {
+				updateSQL += ",release_id=?"
+				args = append(args, committed.ReleaseID)
+			}
+			updateSQL += " WHERE installation_id=?"
+			args = append(args, inst)
+			if _, updateErr := projectionTx.ExecContext(r.Context(), updateSQL, args...); updateErr != nil {
+				e = updateErr
+			}
+			if e == nil && existing == "" {
+				for _, service := range plan.Services {
+					assignment := exposure.Assignment{Mode: exposure.Internal}
+					if service.ID == committed.ServiceID && committed.ExposureMode != "" {
+						assignment.Mode = exposure.Mode(committed.ExposureMode)
+						assignment.Address = committed.HostAddress
+						assignment.Port = committed.HostPort
+					}
+					if updateErr := upsertExposureProjection(r.Context(), projectionTx, inst, service.ID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), now); updateErr != nil {
+						e = updateErr
+						break
+					}
+				}
+			} else if e == nil && opType == "ConfigureServiceExposure" {
+				assignment := exposure.Assignment{Mode: exposure.Mode(committed.ExposureMode), Address: committed.HostAddress, Port: committed.HostPort}
+				if updateErr := upsertExposureProjection(r.Context(), projectionTx, inst, committed.ServiceID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), now); updateErr != nil {
+					e = updateErr
+				}
+			}
+			if e == nil {
+				e = projectionTx.Commit()
+			} else {
+				_ = projectionTx.Rollback()
+			}
+			if e != nil {
+				status, summary = "helper_succeeded_projection_pending", "privileged operation completed; control projection repair pending"
+				e = nil
+			}
 		}
 	}
 	if opType == "ConfigureServiceExposure" {
@@ -1218,6 +1253,8 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			if failureCategory == "port_collision" {
 				event = "exposure_collision"
 			}
+		} else if status == "helper_succeeded_projection_pending" {
+			event = "exposure_projection_pending"
 		} else if r.URL.Query().Get("exposure_mode") == string(exposure.Internal) {
 			event = "exposure_disabled"
 		}
@@ -1234,6 +1271,101 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	operations.Update(r.Context(), a.db, id, status, summary)
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": status})
+}
+
+func upsertExposureProjection(ctx context.Context, tx *sql.Tx, installationID, serviceID string, assignment exposure.Assignment, configuredLAN, now string) error {
+	if err := exposure.Validate(assignment, configuredLAN); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO installation_service_exposure(installation_id,service_id,mode,host_address,host_port,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(installation_id,service_id) DO UPDATE SET mode=excluded.mode,host_address=excluded.host_address,host_port=excluded.host_port,updated_at=excluded.updated_at`, installationID, serviceID, assignment.Mode, assignment.Address, assignment.Port, now, now)
+	return err
+}
+
+func (a *app) repairCommittedProjection(ctx context.Context, installationID, sourceOperation string, value any, updateDesired bool) error {
+	committed, err := decodeCommittedLifecycleResult(value)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var current int
+	if err = tx.QueryRowContext(ctx, `SELECT runtime_generation FROM installations WHERE installation_id=?`, installationID).Scan(&current); err != nil {
+		return err
+	}
+	if current > committed.Generation {
+		return errors.New("control projection is newer than helper generation")
+	}
+	query := `UPDATE installations SET runtime_generation=?,release_id=?,runtime_state=?,projection_repaired_at=?,projection_source_operation_id=?,updated_at=?`
+	args := []any{committed.Generation, committed.ReleaseID, committed.RuntimeState, now, sourceOperation, now}
+	if updateDesired {
+		query += `,desired_state=?`
+		args = append(args, committed.RuntimeState)
+	}
+	query += ` WHERE installation_id=? AND runtime_generation<=?`
+	args = append(args, installationID, committed.Generation)
+	updated, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if changed, _ := updated.RowsAffected(); changed != 1 {
+		return errors.New("control projection repair lost")
+	}
+	if committed.ServiceID != "" && committed.ExposureMode != "" {
+		assignment := exposure.Assignment{Mode: exposure.Mode(committed.ExposureMode), Address: committed.HostAddress, Port: committed.HostPort}
+		if err = upsertExposureProjection(ctx, tx, installationID, committed.ServiceID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (a *app) projectReconciliation(ctx context.Context, sourceOperation string, value any) (reconciliationResult, error) {
+	result, err := decodeReconciliationResult(value)
+	if err != nil {
+		return result, err
+	}
+	codes, err := json.Marshal(result.MismatchCodes)
+	if err != nil {
+		return result, err
+	}
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback()
+	updated, err := tx.ExecContext(ctx, `UPDATE installations SET runtime_state=?,reconciliation_state=?,reconciliation_codes_json=?,reconciled_at=?,updated_at=? WHERE installation_id=?`, result.RuntimeState, result.State, string(codes), result.ObservedAt, time.Now().UTC().Format(time.RFC3339Nano), result.InstallationID)
+	if err != nil {
+		return result, err
+	}
+	if changed, _ := updated.RowsAffected(); changed != 1 {
+		return result, errors.New("reconciliation projection installation mismatch")
+	}
+	if result.Projection != nil {
+		var current int
+		if err = tx.QueryRowContext(ctx, `SELECT runtime_generation FROM installations WHERE installation_id=?`, result.InstallationID).Scan(&current); err != nil {
+			return result, err
+		}
+		if current > result.Projection.Generation {
+			return result, errors.New("control projection is newer than helper generation")
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE installations SET runtime_generation=?,release_id=?,projection_repaired_at=?,projection_source_operation_id=? WHERE installation_id=?`, result.Projection.Generation, result.Projection.ReleaseID, result.ObservedAt, sourceOperation, result.InstallationID); err != nil {
+			return result, err
+		}
+		if result.Projection.ServiceID != "" && result.Projection.ExposureMode != "" {
+			assignment := exposure.Assignment{Mode: exposure.Mode(result.Projection.ExposureMode), Address: result.Projection.HostAddress, Port: result.Projection.HostPort}
+			if err = upsertExposureProjection(ctx, tx, result.InstallationID, result.Projection.ServiceID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), result.ObservedAt); err != nil {
+				return result, err
+			}
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func operationErrorCategory(err error) string {
@@ -1328,33 +1460,52 @@ func (a *app) runInstallationLifecycle(w http.ResponseWriter, r *http.Request, i
 		http.NotFound(w, r)
 		return
 	}
-	operationType := map[string]string{"start": "StartApplication", "stop": "StopApplication", "remove": "RemoveApplication"}[action]
-	desired := map[string]string{"start": "running", "stop": "stopped", "remove": "runtime_removed"}[action]
+	operationType := map[string]string{"start": "StartApplication", "stop": "StopApplication", "restart": "RestartApplication", "remove": "RemoveApplication"}[action]
+	desired := map[string]string{"start": "running", "stop": "stopped", "restart": "running", "remove": "runtime_removed"}[action]
 	operationID := operations.NewID()
 	if err := operations.Insert(r.Context(), a.db, operationID, operationType, installationID); err != nil {
 		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
 		return
 	}
-	response, err := a.callHelper(protocol.Request{Version: 1, ID: operationID, Operation: operationType, InstanceID: installationID, RuntimeGeneration: generation})
+	response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operationID, Operation: operationType, OperationRevision: 1, InstanceID: installationID, RuntimeGeneration: generation})
 	if err == nil && !response.OK {
 		err = fmt.Errorf("helper rejected operation")
 	}
 	status, summary := "succeeded", "helper accepted"
 	if err != nil {
 		status, summary = "failed", safeOperationSummary(operationErrorCategory(err))
+	} else if helperStatePending(response.State) {
+		status, summary = "accepted", "privileged operation continues in helper"
 	}
-	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
 	if err != nil {
+		_ = operations.Update(r.Context(), a.db, operationID, status, summary)
 		http.Error(w, "KITPro could not complete the lifecycle operation", http.StatusServiceUnavailable)
 		return
 	}
-	_, _ = a.db.ExecContext(r.Context(), "UPDATE installations SET desired_state=?,updated_at=? WHERE installation_id=?", desired, time.Now().UTC().Format(time.RFC3339Nano), installationID)
+	if status == "succeeded" {
+		if response.State != "" {
+			if projectionErr := a.repairCommittedProjection(r.Context(), installationID, operationID, response.Result, true); projectionErr != nil {
+				status, summary = "helper_succeeded_projection_pending", "privileged operation completed; control projection repair pending"
+			}
+		} else {
+			_, _ = a.db.ExecContext(r.Context(), "UPDATE installations SET desired_state=?,runtime_state=?,updated_at=? WHERE installation_id=?", desired, desired, time.Now().UTC().Format(time.RFC3339Nano), installationID)
+		}
+	}
+	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "status": status})
 }
 
 func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/installations/"), "/"), "/")
+	if len(parts) == 2 && parts[1] == "reconciliation" {
+		a.installationReconciliation(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "repair" {
+		a.installationRepair(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && (parts[1] == "backup" || parts[1] == "restore") {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method", http.StatusMethodNotAllowed)
@@ -1363,7 +1514,7 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		a.applicationBackupOperation(w, r, parts[0], parts[1])
 		return
 	}
-	if len(parts) == 2 && (parts[1] == "start" || parts[1] == "stop" || parts[1] == "remove") {
+	if len(parts) == 2 && (parts[1] == "start" || parts[1] == "stop" || parts[1] == "restart" || parts[1] == "remove") {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
@@ -1587,11 +1738,6 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 				slog.Default().Info("service exposure port allocated", "event", "exposure_allocated", "installation_id", inst, "service_id", service, "mode", in.Mode, "host_address", addr, "host_port", port, "result", "allocated")
 			}
 		}
-		if _, err := exposure.Upsert(r.Context(), a.db, inst, service, exposure.Assignment{Mode: exposure.Mode(in.Mode), Address: addr, Port: port}, env("KITPRO_LAN_BIND_ADDRESS", "")); err != nil {
-			slog.Default().Warn("service exposure persistence failed", "event", "exposure_failed", "installation_id", inst, "service_id", service, "mode", in.Mode, "host_address", addr, "host_port", port, "result", "failed", "error_category", "state")
-			http.Error(w, "exposure state conflict", 409)
-			return
-		}
 		q := r.URL.Query()
 		q.Set("installation_id", inst)
 		q.Set("service_id", service)
@@ -1641,6 +1787,121 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	a.ops(w, r)
 }
 
+func (a *app) installationReconciliation(w http.ResponseWriter, r *http.Request, installationID string) {
+	if r.Method == http.MethodGet {
+		response, err := a.callHelper(protocol.Request{Version: 2, ID: operations.NewRequestID(), Operation: "GetReconciliation", InstanceID: installationID})
+		if err != nil || !response.OK {
+			http.Error(w, "reconciliation state unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response.Result)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var exists int
+	if err := a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM installations WHERE installation_id=?`, installationID).Scan(&exists); err != nil || exists != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	operationID := operations.NewID()
+	if err := operations.Insert(r.Context(), a.db, operationID, "ReconcileInstallation", installationID); err != nil {
+		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
+		return
+	}
+	response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operationID, Operation: "ReconcileInstallation", OperationRevision: 1, InstanceID: installationID})
+	if err == nil && !response.OK {
+		err = errors.New("helper rejected reconciliation")
+	}
+	status, summary := "succeeded", "installation reconciled"
+	if err == nil && helperStatePending(response.State) {
+		status, summary = "accepted", "reconciliation continues in helper"
+	} else if err == nil {
+		_, err = a.projectReconciliation(r.Context(), operationID, response.Result)
+	}
+	if err != nil {
+		status, summary = "failed", "installation reconciliation failed"
+	}
+	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
+	if err != nil {
+		http.Error(w, summary, http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": operationID, "status": status, "result": response.Result})
+}
+
+func (a *app) installationRepair(w http.ResponseWriter, r *http.Request, installationID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		Action string `json:"action"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.Action == "" {
+		http.Error(w, "repair action is required", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if input.Action == "recreate_generation" {
+		observed, err := a.callHelper(protocol.Request{Version: 2, ID: operations.NewRequestID(), Operation: "GetReconciliation", InstanceID: installationID})
+		if err != nil || !observed.OK {
+			http.Error(w, "reconciliation state unavailable", http.StatusConflict)
+			return
+		}
+		result, err := decodeReconciliationResult(observed.Result)
+		if err != nil || result.RecommendedAction != "recreate_generation" {
+			http.Error(w, "installation is not eligible for controlled recreation", http.StatusConflict)
+			return
+		}
+		query := r.URL.Query()
+		query.Set("repair_action", input.Action)
+		r.URL.Path = "/api/v1/installations/" + installationID + "/recreate"
+		r.URL.RawQuery = query.Encode()
+		a.installations(w, r)
+		return
+	}
+	if input.Action != "start_active" && input.Action != "cleanup_resources" && input.Action != "acknowledge_retained_missing" {
+		http.Error(w, "unsupported repair action", http.StatusBadRequest)
+		return
+	}
+	operationID := operations.NewID()
+	if err := operations.Insert(r.Context(), a.db, operationID, "RepairInstallation", installationID); err != nil {
+		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
+		return
+	}
+	response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operationID, Operation: "RepairInstallation", OperationRevision: 1, InstanceID: installationID, RepairAction: input.Action})
+	if err == nil && !response.OK {
+		err = errors.New("helper rejected repair")
+	}
+	status, summary := "succeeded", "installation repair completed"
+	if err == nil && helperStatePending(response.State) {
+		status, summary = "accepted", "installation repair continues in helper"
+	} else if err == nil {
+		_, err = a.projectReconciliation(r.Context(), operationID, response.Result)
+	}
+	if err != nil {
+		status, summary = "failed", "installation repair failed"
+	}
+	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
+	if err != nil {
+		http.Error(w, summary, http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": operationID, "status": status, "result": response.Result})
+}
+
 func (a *app) applicationBackupOperation(w http.ResponseWriter, r *http.Request, installationID, action string) {
 	var applicationID, releaseID string
 	var generation int
@@ -1654,7 +1915,8 @@ func (a *app) applicationBackupOperation(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	operationType := "CreateApplicationBackup"
-	request := protocol.Request{Version: 1, ID: operations.NewID(), Operation: operationType, InstanceID: installationID, ApplicationID: applicationID, ReleaseID: releaseID, RuntimeGeneration: generation}
+	operationID := operations.NewID()
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operationID, Operation: operationType, OperationRevision: 1, InstanceID: installationID, ApplicationID: applicationID, ReleaseID: releaseID, RuntimeGeneration: generation}
 	if action == "restore" {
 		operationType = "RestoreApplicationBackup"
 		request.Operation = operationType
@@ -1674,19 +1936,21 @@ func (a *app) applicationBackupOperation(w http.ResponseWriter, r *http.Request,
 		}
 		request.BackupID = input.BackupID
 	}
-	if err := operations.Insert(r.Context(), a.db, request.ID, operationType, installationID); err != nil {
+	if err := operations.Insert(r.Context(), a.db, operationID, operationType, installationID); err != nil {
 		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
 		return
 	}
-	response, err := a.callHelper(request)
+	response, err := a.callHelperOperation(request)
 	if err == nil && !response.OK {
 		err = fmt.Errorf("helper rejected application backup operation")
 	}
 	status, summary := "succeeded", "application backup operation completed"
 	if err != nil {
 		status, summary = "failed", "application backup operation failed"
+	} else if helperStatePending(response.State) {
+		status, summary = "accepted", "application backup operation continues in helper"
 	}
-	_ = operations.Update(r.Context(), a.db, request.ID, status, summary)
+	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
 	if err != nil {
 		http.Error(w, "KITPro could not complete the application backup operation", http.StatusServiceUnavailable)
 		return
@@ -1731,15 +1995,87 @@ func (a *app) callHelper(request protocol.Request) (protocol.Response, error) {
 	if a.helperCall != nil {
 		return a.helperCall(request)
 	}
-	connection, err := net.Dial("unix", a.helper)
+	connectTimeout := helperDuration("KITPRO_HELPER_CONNECT_TIMEOUT", 2*time.Second)
+	writeTimeout := helperDuration("KITPRO_HELPER_WRITE_TIMEOUT", 10*time.Second)
+	// Pulls and application backups can legitimately run for a long time. This
+	// bounded, configurable wait limits the API transport only; expiry never
+	// cancels helper execution.
+	responseTimeout := helperDuration("KITPRO_HELPER_RESPONSE_TIMEOUT", 30*time.Minute)
+	dialer := net.Dialer{Timeout: connectTimeout}
+	connection, err := dialer.Dial("unix", a.helper)
 	if err != nil {
-		return protocol.Response{}, err
+		return protocol.Response{}, helperTransportError{cause: err, acceptancePossible: false}
 	}
 	defer connection.Close()
+	if request.Deadline == "" {
+		request.Deadline = time.Now().Add(responseTimeout).UTC().Format(time.RFC3339Nano)
+	}
+	if err = connection.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return protocol.Response{}, helperTransportError{cause: err, acceptancePossible: false}
+	}
 	if err = protocol.Write(connection, request); err != nil {
+		return protocol.Response{}, helperTransportError{cause: err, acceptancePossible: true}
+	}
+	if err = connection.SetReadDeadline(time.Now().Add(responseTimeout)); err != nil {
+		return protocol.Response{}, helperTransportError{cause: err, acceptancePossible: true}
+	}
+	response, err := protocol.ReadResponse(connection)
+	if err != nil {
+		return protocol.Response{}, helperTransportError{cause: err, acceptancePossible: true}
+	}
+	return response, nil
+}
+
+type helperTransportError struct {
+	cause              error
+	acceptancePossible bool
+}
+
+func (e helperTransportError) Error() string { return e.cause.Error() }
+func (e helperTransportError) Unwrap() error { return e.cause }
+
+// callHelperOperation resolves a lost mutation response by semantic operation
+// ID. If both transports are unavailable, it preserves an accepted projection:
+// absence of a response is not evidence that privileged execution failed.
+func (a *app) callHelperOperation(request protocol.Request) (protocol.Response, error) {
+	response, err := a.callHelper(request)
+	if err == nil {
+		return response, nil
+	}
+	lookup, lookupErr := a.callHelper(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: request.OperationID, Operation: "GetOperation"})
+	if lookupErr == nil && lookup.ErrorCode != "OperationNotFound" {
+		return lookup, nil
+	}
+	var transport helperTransportError
+	if errors.As(err, &transport) && !transport.acceptancePossible {
 		return protocol.Response{}, err
 	}
-	return protocol.ReadResponse(connection)
+	return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "accepted", Phase: "transport_outcome_unknown"}, nil
+}
+
+func helperStatePending(state string) bool {
+	return state == "accepted" || state == "executing" || state == "reconciling"
+}
+
+func isCommittedLifecycleOperation(operation string) bool {
+	switch operation {
+	case "InstallApplication", "UpdateApplication", "ConfigureServiceExposure", "RecreateApplication", "StartApplication", "StopApplication", "RestartApplication", "RemoveApplication":
+		return true
+	default:
+		return false
+	}
+}
+
+func helperDuration(name string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return fallback
+	}
+	return duration
 }
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -1748,5 +2084,4 @@ func env(k, d string) string {
 	return d
 }
 
-var _ = strings.TrimSpace
 var _ embed.FS

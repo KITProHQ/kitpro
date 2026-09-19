@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
+	"github.com/kitpro/kitpro/software/server/internal/operations"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 )
@@ -230,6 +232,21 @@ func TestOperationsEndpointCannotBypassConstrainedExposureRoute(t *testing.T) {
 	}
 }
 
+func TestLegacyOperationLifecycleRouteCannotDispatchHelperMutation(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	called := false
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		called = true
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	request := authenticatedRequest(http.MethodPost, "/api/v1/operations/op-1234567890abcdef1234567890abcdef/stop", "", session, csrf)
+	recorder := httptest.NewRecorder()
+	a.guard(a.ops)(recorder, request)
+	if recorder.Code != http.StatusBadRequest || called {
+		t.Fatalf("legacy lifecycle route status=%d helper_called=%v", recorder.Code, called)
+	}
+}
+
 func TestPasswordFormSubmitsExplicitCSRFToken(t *testing.T) {
 	a, _, csrf := newTestApp(t)
 	request := httptest.NewRequest(http.MethodGet, "/account/password", nil)
@@ -305,7 +322,7 @@ func TestExposureLoopbackRecreatesRuntimeAndPersistsAssignment(t *testing.T) {
 	a.allocatePort = func(used map[int]bool, address string) (int, error) { return 20000, nil }
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
 		received = request
-		return protocol.Response{OK: true, RequestID: request.ID}, nil
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committedLifecycleResult{Generation: 2, ReleaseID: request.ReleaseID, RuntimeState: "running", ExposureMode: request.ExposureMode, ServiceID: request.ServiceID, HostAddress: request.HostAddress, HostPort: request.HostPort}}, nil
 	}
 
 	path := "/api/v1/installations/inst-12345678/services/web/exposure"
@@ -325,6 +342,52 @@ func TestExposureLoopbackRecreatesRuntimeAndPersistsAssignment(t *testing.T) {
 	var generation int
 	if err = a.db.QueryRow(`SELECT runtime_generation FROM installations WHERE installation_id='inst-12345678'`).Scan(&generation); err != nil || generation != 2 {
 		t.Fatalf("runtime generation = %d, err=%v", generation, err)
+	}
+}
+
+func TestPendingExposureDoesNotAdvanceControlProjection(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	a.allocatePort = func(used map[int]bool, address string) (int, error) { return 20000, nil }
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "executing", Phase: "mutation_authorized"}, nil
+	}
+	recorder := httptest.NewRecorder()
+	path := "/api/v1/installations/inst-12345678/services/web/exposure"
+	a.guard(a.installations)(recorder, authenticatedRequest(http.MethodPost, path, `{"mode":"loopback"}`, session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("exposure status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	record, err := exposure.Get(context.Background(), a.db, "inst-12345678", "web")
+	if err != nil || record.Mode != exposure.Internal || record.HostPort != 0 {
+		t.Fatalf("accepted operation changed exposure projection: %#v %v", record, err)
+	}
+	var generation int
+	if err = a.db.QueryRow(`SELECT runtime_generation FROM installations WHERE installation_id='inst-12345678'`).Scan(&generation); err != nil || generation != 1 {
+		t.Fatalf("accepted operation advanced generation=%d err=%v", generation, err)
+	}
+}
+
+func TestSucceededExposureWithoutCommittedHelperResultDoesNotProjectIntent(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	a.allocatePort = func(map[int]bool, string) (int, error) { return 20000, nil }
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded"}, nil
+	}
+	recorder := httptest.NewRecorder()
+	path := "/api/v1/installations/inst-12345678/services/web/exposure"
+	a.guard(a.installations)(recorder, authenticatedRequest(http.MethodPost, path, `{"mode":"loopback"}`, session, csrf))
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	record, err := exposure.Get(context.Background(), a.db, "inst-12345678", "web")
+	if err != nil || record.Mode != exposure.Internal || record.HostPort != 0 {
+		t.Fatalf("uncommitted intent projected: %#v %v", record, err)
+	}
+	var generation int
+	if err = a.db.QueryRow(`SELECT runtime_generation FROM installations WHERE installation_id='inst-12345678'`).Scan(&generation); err != nil || generation != 1 {
+		t.Fatalf("generation=%d err=%v", generation, err)
 	}
 }
 
@@ -451,7 +514,7 @@ func TestMultiContainerInstallUsesTopLevelRelease(t *testing.T) {
 	}
 }
 
-func TestAmbiguousInitialInstallTransportFailureRetainsExpectedGeneration(t *testing.T) {
+func TestAmbiguousInitialInstallTransportFailureDoesNotAdvanceGeneration(t *testing.T) {
 	a, session, csrf := newTestApp(t)
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
 		return protocol.Response{}, fmt.Errorf("connection closed before response")
@@ -466,8 +529,216 @@ func TestAmbiguousInitialInstallTransportFailureRetainsExpectedGeneration(t *tes
 	if err := a.db.QueryRow(`SELECT desired_state,runtime_generation FROM installations WHERE application_id='uptime-kuma'`).Scan(&desired, &generation); err != nil {
 		t.Fatal(err)
 	}
-	if desired != "running" || generation != 1 {
+	if desired != "runtime_removed" || generation != 0 {
 		t.Fatalf("ambiguous helper outcome changed desired state to %s generation %d", desired, generation)
+	}
+}
+
+func TestTransportLossProjectsHelperExecutionWithoutRedispatch(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	mutationCalls := 0
+	lookupCalls := 0
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		switch request.Operation {
+		case "InstallApplication":
+			mutationCalls++
+			return protocol.Response{}, fmt.Errorf("connection closed after helper acceptance")
+		case "GetOperation":
+			lookupCalls++
+			return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "executing", Phase: "mutation_authorized"}, nil
+		default:
+			return protocol.Response{}, fmt.Errorf("unexpected operation %s", request.Operation)
+		}
+	}
+	install := httptest.NewRecorder()
+	a.guard(a.apps)(install, authenticatedRequest(http.MethodPost, "/api/v1/apps/uptime-kuma/install", "", session, csrf))
+	if install.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", install.Code, install.Body.String())
+	}
+	var result map[string]string
+	if err := json.NewDecoder(install.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result["status"] != "accepted" || mutationCalls != 1 || lookupCalls != 1 {
+		t.Fatalf("result=%v mutation calls=%d lookup calls=%d", result, mutationCalls, lookupCalls)
+	}
+	var status string
+	if err := a.db.QueryRow(`SELECT status FROM operations WHERE id=?`, result["id"]).Scan(&status); err != nil || status != "accepted" {
+		t.Fatalf("projection status=%q err=%v", status, err)
+	}
+}
+
+func TestResponseLossAfterHelperCommitProjectsStoredResultWithoutRedispatch(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	mutationCalls := 0
+	lookupCalls := 0
+	var accepted protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		switch request.Operation {
+		case "InstallApplication":
+			mutationCalls++
+			accepted = request
+			return protocol.Response{}, fmt.Errorf("response lost after commit")
+		case "GetOperation":
+			lookupCalls++
+			return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committedLifecycleResult{Generation: 1, ReleaseID: accepted.ReleaseID, RuntimeState: "running", ExposureMode: accepted.ExposureMode, ServiceID: accepted.ServiceID, HostAddress: accepted.HostAddress, HostPort: accepted.HostPort}}, nil
+		default:
+			return protocol.Response{}, fmt.Errorf("unexpected operation")
+		}
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.apps)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/apps/uptime-kuma/install", "", session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if mutationCalls != 1 || lookupCalls != 1 {
+		t.Fatalf("mutations=%d lookups=%d", mutationCalls, lookupCalls)
+	}
+	var generation int
+	var desired string
+	if err := a.db.QueryRow(`SELECT runtime_generation,desired_state FROM installations WHERE application_id='uptime-kuma'`).Scan(&generation, &desired); err != nil {
+		t.Fatal(err)
+	}
+	if generation != 1 || desired != "running" {
+		t.Fatalf("generation=%d desired=%s", generation, desired)
+	}
+}
+
+func TestOperationStatusRepairsStaleControlProjectionFromCommittedHelperTruth(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	operationID := operations.NewID()
+	if err := operations.Insert(context.Background(), a.db, operationID, "UpdateApplication", "inst-12345678"); err != nil {
+		t.Fatal(err)
+	}
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		if request.Operation != "GetOperation" || request.OperationID != operationID {
+			return protocol.Response{}, fmt.Errorf("unexpected request %#v", request)
+		}
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: operationID, State: "succeeded", Result: committedLifecycleResult{Generation: 2, ReleaseID: "1.30.0", RuntimeState: "running", ExposureMode: "loopback", ServiceID: "web", HostAddress: "127.0.0.1", HostPort: 20000}}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.ops)(recorder, authenticatedRequest(http.MethodGet, "/api/v1/operations/"+operationID, "", session, csrf))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var generation int
+	var release, runtimeState, source string
+	if err := a.db.QueryRow(`SELECT runtime_generation,release_id,runtime_state,projection_source_operation_id FROM installations WHERE installation_id='inst-12345678'`).Scan(&generation, &release, &runtimeState, &source); err != nil {
+		t.Fatal(err)
+	}
+	if generation != 2 || release != "1.30.0" || runtimeState != "running" || source != operationID {
+		t.Fatalf("generation=%d release=%q runtime=%q source=%q", generation, release, runtimeState, source)
+	}
+	record, err := exposure.Get(context.Background(), a.db, "inst-12345678", "web")
+	if err != nil || record.Mode != exposure.Loopback || record.HostPort != 20000 {
+		t.Fatalf("exposure=%#v err=%v", record, err)
+	}
+}
+
+func TestHelperSuccessProjectionFailureSelfHealsWithoutRedispatch(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	a.allocatePort = func(map[int]bool, string) (int, error) { return 20000, nil }
+	mutationCalls, lookupCalls := 0, 0
+	var operationID string
+	committed := committedLifecycleResult{Generation: 2, ReleaseID: "1.29.1", RuntimeState: "running", ExposureMode: "loopback", ServiceID: "web", HostAddress: "127.0.0.1", HostPort: 20000}
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		switch request.Operation {
+		case "ConfigureServiceExposure":
+			mutationCalls++
+			operationID = request.OperationID
+			return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committed}, nil
+		case "GetOperation":
+			lookupCalls++
+			return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committed}, nil
+		default:
+			return protocol.Response{}, fmt.Errorf("unexpected helper operation %s", request.Operation)
+		}
+	}
+	a.beforeControlProjection = func() error { return errors.New("injected control projection failure") }
+	recorder := httptest.NewRecorder()
+	path := "/api/v1/installations/inst-12345678/services/web/exposure"
+	a.guard(a.installations)(recorder, authenticatedRequest(http.MethodPost, path, `{"mode":"loopback"}`, session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response map[string]string
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "helper_succeeded_projection_pending" || operationID == "" {
+		t.Fatalf("response=%v operation=%q", response, operationID)
+	}
+	initial, err := exposure.Get(context.Background(), a.db, "inst-12345678", "web")
+	if err != nil || initial.Mode != exposure.Internal {
+		t.Fatalf("stale projection changed early: %#v err=%v", initial, err)
+	}
+	a.beforeControlProjection = nil
+	for i := 0; i < 2; i++ {
+		poll := httptest.NewRecorder()
+		a.guard(a.ops)(poll, authenticatedRequest(http.MethodGet, "/api/v1/operations/"+operationID, "", session, csrf))
+		if poll.Code != http.StatusOK {
+			t.Fatalf("poll %d status=%d body=%s", i, poll.Code, poll.Body.String())
+		}
+	}
+	projected, err := exposure.Get(context.Background(), a.db, "inst-12345678", "web")
+	if err != nil || projected.Mode != exposure.Loopback || projected.HostPort != 20000 {
+		t.Fatalf("projection=%#v err=%v", projected, err)
+	}
+	if mutationCalls != 1 || lookupCalls != 1 {
+		t.Fatalf("mutation calls=%d lookup calls=%d", mutationCalls, lookupCalls)
+	}
+	var status string
+	if err = a.db.QueryRow(`SELECT status FROM operations WHERE id=?`, operationID).Scan(&status); err != nil || status != "succeeded" {
+		t.Fatalf("operation status=%q err=%v", status, err)
+	}
+}
+
+func TestReconciliationEndpointSeparatesObservationFromDurableMutation(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	var requests []protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		requests = append(requests, request)
+		result := reconciliationResult{InstallationID: "inst-12345678", CheckedGeneration: 1, State: "consistent", RuntimeState: "running", ObservedAt: "2026-09-19T00:00:00Z", RecommendedAction: "none"}
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: map[bool]string{true: "succeeded"}[request.OperationID != ""], Result: result}, nil
+	}
+	get := httptest.NewRecorder()
+	a.guard(a.installations)(get, authenticatedRequest(http.MethodGet, "/api/v1/installations/inst-12345678/reconciliation", "", session, csrf))
+	if get.Code != http.StatusOK || len(requests) != 1 || requests[0].Operation != "GetReconciliation" || requests[0].OperationID != "" {
+		t.Fatalf("GET status=%d requests=%#v", get.Code, requests)
+	}
+	post := httptest.NewRecorder()
+	a.guard(a.installations)(post, authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-12345678/reconciliation", "", session, csrf))
+	if post.Code != http.StatusOK || len(requests) != 2 || requests[1].Operation != "ReconcileInstallation" || requests[1].Version != 2 || requests[1].OperationID == "" {
+		t.Fatalf("POST status=%d body=%s requests=%#v", post.Code, post.Body.String(), requests)
+	}
+}
+
+func TestReconciliationProjectionPreservesAdministratorIntentAndIsRepeatable(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	seedFreshRSSInstallation(t, a, "inst-12345678")
+	value := reconciliationResult{InstallationID: "inst-12345678", CheckedGeneration: 1, State: "runtime_missing", RuntimeState: "missing", ObservedAt: "2026-09-19T00:00:00Z", MismatchCodes: []string{"active_container_missing"}, RecommendedAction: "recreate_generation", Projection: &committedLifecycleResult{Generation: 1, ReleaseID: "1.29.1", RuntimeState: "missing", ExposureMode: "internal", ServiceID: "web"}}
+	for i := 0; i < 2; i++ {
+		if _, err := a.projectReconciliation(context.Background(), "op-reconcile", value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var desired, runtimeState, reconciliationState, codes string
+	if err := a.db.QueryRow(`SELECT desired_state,runtime_state,reconciliation_state,reconciliation_codes_json FROM installations WHERE installation_id='inst-12345678'`).Scan(&desired, &runtimeState, &reconciliationState, &codes); err != nil {
+		t.Fatal(err)
+	}
+	if desired != "running" || runtimeState != "missing" || reconciliationState != "runtime_missing" || !strings.Contains(codes, "active_container_missing") {
+		t.Fatalf("desired=%q runtime=%q reconciliation=%q codes=%q", desired, runtimeState, reconciliationState, codes)
+	}
+}
+
+func TestConnectionFailureBeforeAcceptanceIsNotProjectedAsRunning(t *testing.T) {
+	a := &app{helper: filepath.Join(t.TempDir(), "missing-helper.sock")}
+	response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "StartApplication", OperationRevision: 1, InstanceID: "inst-example01"})
+	if err == nil || response.State != "" {
+		t.Fatalf("pre-acceptance failure projected as %#v err=%v", response, err)
 	}
 }
 
