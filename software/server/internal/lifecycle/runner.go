@@ -212,6 +212,21 @@ func (r Runner) loadAndVerifyActive(ctx context.Context, plan Plan) (Generation,
 	if err != nil {
 		return Generation{}, err
 	}
+	// A failed target generation can be cleaned and left as a reusable
+	// tombstone above the last committed generation. Treat that tombstone as
+	// the target being retried, not as the prior runtime generation.
+	if active.Status == "removed" && active.Generation == plan.Generation {
+		if active.CleanupState != "clean" {
+			return Generation{}, errors.New("target generation has unresolved cleanup evidence")
+		}
+		if plan.ExpectedGeneration == 0 {
+			return Generation{}, nil
+		}
+		active, err = scanGeneration(r.Store.DB.QueryRowContext(ctx, generationSelect+` WHERE g.installation_id=? AND g.runtime_generation=? AND g.status='removed' AND g.cleanup_state='clean'`, plan.InstallationID, plan.ExpectedGeneration))
+		if err != nil {
+			return Generation{}, errors.New("previous removed generation is unavailable for target retry")
+		}
+	}
 	if active.Status == "removed" {
 		return active, nil
 	}

@@ -400,3 +400,133 @@ func TestDockerMigratedRestartLoopReconcilesAndStopsExactlyOnce(t *testing.T) {
 		t.Fatalf("persistent data changed: %q err=%v", contents, readErr)
 	}
 }
+
+func TestDockerOrphanCandidateCleanupWithoutActiveGeneration(t *testing.T) {
+	if os.Getenv("KITPRO_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set KITPRO_DOCKER_INTEGRATION=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(ctx, db, true); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &recordingLifecycleRuntime{LifecycleRuntime: docker.New()}
+	coordinator := helperops.Coordinator{DB: db}
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	installation := "inst-orphan" + suffix[len(suffix)-8:]
+	image := "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+	dataRoot := t.TempDir()
+	marker := filepath.Join(dataRoot, "preserve.txt")
+	if err = os.WriteFile(marker, []byte("persistent"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	begin := func(operation string, generation int) (protocol.Request, int64) {
+		request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: operation, OperationRevision: 1, InstanceID: installation, RuntimeGeneration: generation, ApplicationID: "docker-contract", ReleaseID: "fixture"}
+		decision, beginErr := coordinator.Begin(ctx, request, 0, installation)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		if beginErr = coordinator.AuthorizeMutation(ctx, request.OperationID, decision.FencingToken); beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		return request, decision.FencingToken
+	}
+	makePlan := func(request protocol.Request, token int64, generation, expected int, command []string) Plan {
+		networkName := fmt.Sprintf("kitpro-orphan-contract-%s-g%d", suffix, generation)
+		containerName := fmt.Sprintf("kitpro-orphan-contract-%s-g%d", suffix, generation)
+		labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: installation, ownership.LabelResource: "application", "com.kitpro.runtime-generation": fmt.Sprint(generation), "com.kitpro.operation": request.OperationID}
+		container := containers.ContainerPlan{Image: image, Name: containerName, Network: networkName, Labels: labels, Command: command, RestartPolicy: "no", Storage: []containers.StorageMount{{HostPath: dataRoot, ContainerPath: "/kitpro-data"}}}
+		return Plan{OperationID: request.OperationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: generation, ExpectedGeneration: expected, FencingToken: token, Image: image, NetworkName: networkName, ContainerName: containerName, PlanHash: fmt.Sprintf("plan-%d-%s", generation, request.OperationID), DataPath: dataRoot, ExposureMode: "internal", Container: container}
+	}
+	t.Cleanup(func() {
+		for generation := 1; generation <= 2; generation++ {
+			name := fmt.Sprintf("kitpro-orphan-contract-%s-g%d", suffix, generation)
+			_ = runtime.StopContainer(context.Background(), name)
+			_ = runtime.RemoveContainer(context.Background(), name)
+			_ = runtime.RemoveLifecycleNetwork(context.Background(), name)
+		}
+	})
+
+	installRequest, installToken := begin("InstallApplication", 1)
+	firstPlan := makePlan(installRequest, installToken, 1, 0, []string{"sleep", "300"})
+	installed, err := (Runner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Replace(ctx, firstPlan)
+	if err != nil || installed.Generation != 1 {
+		t.Fatalf("initial install=%#v err=%v", installed, err)
+	}
+	if _, err = coordinator.Complete(ctx, installRequest.OperationID, installToken, protocol.Response{OK: true, Result: installed}); err != nil {
+		t.Fatal(err)
+	}
+
+	removeRequest, removeToken := begin("RemoveApplication", 1)
+	removed, err := (SingleRunner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Operate(ctx, installation, removeRequest.OperationID, removeToken, "remove")
+	if err != nil || removed.RuntimeState != "runtime_removed" {
+		t.Fatalf("remove=%#v err=%v", removed, err)
+	}
+	if _, err = coordinator.Complete(ctx, removeRequest.OperationID, removeToken, protocol.Response{OK: true, Result: removed}); err != nil {
+		t.Fatal(err)
+	}
+
+	failedRequest, failedToken := begin("InstallApplication", 2)
+	failedPlan := makePlan(failedRequest, failedToken, 2, 1, []string{"sh", "-c", "exit 1"})
+	_, replaceErr := (Runner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator, Hook: func(_ context.Context, phase Phase) error {
+		if phase == PhaseBeforeVerification {
+			time.Sleep(500 * time.Millisecond)
+		}
+		return nil
+	}}).Replace(ctx, failedPlan)
+	if replaceErr == nil {
+		t.Fatal("failing candidate unexpectedly committed")
+	}
+	if _, err = coordinator.Complete(ctx, failedRequest.OperationID, failedToken, protocol.Response{OK: false, Error: replaceErr.Error()}); err != nil {
+		t.Fatal(err)
+	}
+	var active int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM runtime_generations WHERE installation_id=? AND status='active'`, installation).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("active generations=%d err=%v", active, err)
+	}
+	reconciliation, err := (Reconciler{Runtime: runtime, Store: Store{DB: db}}).Reconcile(ctx, installation)
+	if err != nil || reconciliation.State != ReconciliationCleanupPending || reconciliation.RecommendedAction != RepairCleanupResources || reconciliation.CheckedGeneration != 2 {
+		t.Fatalf("orphan reconciliation=%#v err=%v", reconciliation, err)
+	}
+
+	repairRequest, repairToken := begin("RepairInstallation", 2)
+	repaired, err := (Repairer{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Repair(ctx, installation, repairRequest.OperationID, repairToken, RepairCleanupResources)
+	if err != nil || repaired.State != ReconciliationConsistent || repaired.RuntimeState != "runtime_removed" || repaired.CheckedGeneration != 2 {
+		t.Fatalf("cleanup repair=%#v err=%v", repaired, err)
+	}
+	if _, err = coordinator.Complete(ctx, repairRequest.OperationID, repairToken, protocol.Response{OK: true, Result: repaired}); err != nil {
+		t.Fatal(err)
+	}
+	failedContainer, err := runtime.ObserveContainer(ctx, failedPlan.ContainerName)
+	if err != nil || failedContainer.Exists {
+		t.Fatalf("candidate container remained: %#v err=%v", failedContainer, err)
+	}
+	failedNetwork, err := runtime.ObserveNetwork(ctx, failedPlan.NetworkName)
+	if err != nil || failedNetwork.Exists {
+		t.Fatalf("candidate network remained: %#v err=%v", failedNetwork, err)
+	}
+
+	retryRequest, retryToken := begin("InstallApplication", 2)
+	retryPlan := makePlan(retryRequest, retryToken, 2, 1, []string{"sleep", "300"})
+	retried, err := (Runner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Replace(ctx, retryPlan)
+	if err != nil || retried.Generation != 2 || retried.RuntimeState != "running" {
+		t.Fatalf("retry install=%#v err=%v", retried, err)
+	}
+	if _, err = coordinator.Complete(ctx, retryRequest.OperationID, retryToken, protocol.Response{OK: true, Result: retried}); err != nil {
+		t.Fatal(err)
+	}
+	if contents, readErr := os.ReadFile(marker); readErr != nil || string(contents) != "persistent" {
+		t.Fatalf("persistent data changed: %q err=%v", contents, readErr)
+	}
+	var generation int
+	var status string
+	if err = db.QueryRow(`SELECT runtime_generation,status FROM runtime_generations WHERE installation_id=? AND status='active'`, installation).Scan(&generation, &status); err != nil || generation != 2 || status != "active" {
+		t.Fatalf("final generation=%d status=%q err=%v", generation, status, err)
+	}
+}

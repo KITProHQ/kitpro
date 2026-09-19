@@ -238,6 +238,33 @@ func TestPrepareReusesOnlyCleanRemovedGeneration(t *testing.T) {
 	}
 }
 
+func TestReplacementRetriesCleanRemovedCandidateWithoutActiveGeneration(t *testing.T) {
+	h := newHarness(t, true)
+	if _, err := h.db.Exec(`UPDATE runtime_generations SET status='removed',cleanup_state='clean' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Exec(`UPDATE runtime_components SET state='removed' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	delete(h.runtime.containers, "old-id")
+	delete(h.runtime.networks, "kitpro-net-inst-one-g1")
+	if _, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',2,'failed-install','app','new','removed','failed-network','failed-network-id','failed-plan','/data','internal','now','clean')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at,verified_at) VALUES('inst-one',2,'app','failed-container','failed-id',?,'image-id','failed-hash','removed','now','now')`, h.plan.Image); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (Runner{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Replace(context.Background(), h.plan)
+	if err != nil || result.Generation != 2 || result.RuntimeState != "running" {
+		t.Fatalf("retry result=%#v err=%v", result, err)
+	}
+	var generation int
+	var status string
+	if err = h.db.QueryRow(`SELECT runtime_generation,status FROM runtime_generations WHERE installation_id='inst-one' AND status='active'`).Scan(&generation, &status); err != nil || generation != 2 || status != "active" {
+		t.Fatalf("generation=%d status=%q err=%v", generation, status, err)
+	}
+}
+
 func TestPrepareRejectsUnresolvedGeneration(t *testing.T) {
 	h := newHarness(t, true)
 	_, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',2,'old-attempt','app','new','failed','old-network','old-plan','/data','internal','then','pending')`)

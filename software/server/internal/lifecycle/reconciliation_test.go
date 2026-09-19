@@ -322,6 +322,204 @@ func TestCleanupDebtRemovesOnlyExactNonActiveRuntimeAndNeverStorage(t *testing.T
 	}
 }
 
+func TestCleanupDebtWithoutActiveGenerationReconcilesAsRuntimeRemoved(t *testing.T) {
+	h := newHarness(t, true)
+	finishHarnessOperation(t, h)
+	if _, err := h.db.Exec(`UPDATE runtime_generations SET status='removed',cleanup_state='clean' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Exec(`UPDATE runtime_components SET state='removed' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	delete(h.runtime.containers, "old-id")
+	delete(h.runtime.networks, "kitpro-net-inst-one-g1")
+
+	if _, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',2,'failed-reinstall','app','new','cleanup_pending','candidate-network','candidate-network-id','candidate-plan','/persistent/data','internal','now','pending')`); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{"com.kitpro.managed": "true", "com.kitpro.instance": "inst-one", "com.kitpro.runtime-generation": "2"}
+	plan := containers.ContainerPlan{Image: "repo/app@sha256:new", Name: "candidate-name", Network: "candidate-network", Labels: labels}
+	h.runtime.networks[plan.Network] = containers.NetworkObservation{Exists: true, ID: "candidate-network-id", Name: plan.Network, Labels: labels}
+	h.runtime.containers["candidate-id"] = observationFromPlan("candidate-id", plan, "candidate-network-id", containers.RuntimeRunning)
+	if _, err := h.db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at,verified_at) VALUES('inst-one',2,'app','candidate-name','candidate-id',?,'image-id',?,'running','now','now')`, plan.Image, observationHash(h.runtime.containers["candidate-id"])); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationCleanupPending || result.RecommendedAction != RepairCleanupResources || result.CheckedGeneration != 2 {
+		t.Fatalf("pre-cleanup reconciliation=%#v err=%v", result, err)
+	}
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RepairInstallation", OperationRevision: 1, InstanceID: "inst-one", RepairAction: RepairCleanupResources}
+	decision, err := h.coordinator.Begin(context.Background(), request, 0, request.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.coordinator.AuthorizeMutation(context.Background(), request.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	before := len(h.runtime.mutations)
+	result, err = (Repairer{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Repair(context.Background(), request.InstanceID, request.OperationID, decision.FencingToken, request.RepairAction)
+	if err != nil {
+		t.Fatalf("cleanup repair: %v", err)
+	}
+	if result.State != ReconciliationConsistent || result.RuntimeState != "runtime_removed" || result.CheckedGeneration != 2 || result.RecommendedAction != RepairNone {
+		t.Fatalf("post-cleanup reconciliation=%#v", result)
+	}
+	if !isSubsequence(h.runtime.mutations[before:], []string{"stop:candidate-id", "remove:candidate-id", "remove-network:candidate-network"}) {
+		t.Fatalf("cleanup order=%v", h.runtime.mutations[before:])
+	}
+	var status, cleanup, dataPath string
+	if err = h.db.QueryRow(`SELECT status,cleanup_state,data_path FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=2`).Scan(&status, &cleanup, &dataPath); err != nil || status != "removed" || cleanup != "clean" || dataPath != "/persistent/data" {
+		t.Fatalf("generation status=%q cleanup=%q data=%q err=%v", status, cleanup, dataPath, err)
+	}
+	var active int
+	if err = h.db.QueryRow(`SELECT COUNT(*) FROM runtime_generations WHERE installation_id='inst-one' AND status='active'`).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("active generations=%d err=%v", active, err)
+	}
+	if _, err = h.coordinator.Complete(context.Background(), request.OperationID, decision.FencingToken, protocol.Response{OK: true, Result: result}); err != nil {
+		t.Fatal(err)
+	}
+	mutations := len(h.runtime.mutations)
+	replay := request
+	replay.ID = operations.NewRequestID()
+	replayed, err := h.coordinator.Begin(context.Background(), replay, 0, replay.InstanceID)
+	if err != nil || replayed.Execute || !replayed.Response.OK {
+		t.Fatalf("cleanup replay=%#v err=%v", replayed, err)
+	}
+	if len(h.runtime.mutations) != mutations {
+		t.Fatal("exact cleanup replay repeated runtime mutation")
+	}
+}
+
+func TestCleanupRefusesCandidateIdentityDriftAndStaleFence(t *testing.T) {
+	h := newHarness(t, true)
+	finishHarnessOperation(t, h)
+	if _, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',0,'failed-op','app','failed','cleanup_pending','candidate-network','candidate-network-id','candidate-plan','/persistent/data','internal','now','pending')`); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{"com.kitpro.managed": "true", "com.kitpro.instance": "inst-one", "com.kitpro.runtime-generation": "0"}
+	plan := containers.ContainerPlan{Image: "repo/app@sha256:failed", Name: "candidate-name", Network: "candidate-network", Labels: labels}
+	h.runtime.networks[plan.Network] = containers.NetworkObservation{Exists: true, ID: "candidate-network-id", Name: plan.Network, Labels: labels}
+	exact := observationFromPlan("candidate-id", plan, "candidate-network-id", containers.RuntimeStopped)
+	if _, err := h.db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at,verified_at) VALUES('inst-one',0,'app','candidate-name','candidate-id',?,'image-id',?,'stopped','now','now')`, plan.Image, observationHash(exact)); err != nil {
+		t.Fatal(err)
+	}
+	drifted := exact
+	drifted.User = "1234:1234"
+	h.runtime.containers["candidate-id"] = drifted
+	result, err := (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationActionRequired || result.RecommendedAction != RepairNone || !hasMismatch(result, MismatchConfiguration) {
+		t.Fatalf("drift reconciliation=%#v err=%v", result, err)
+	}
+
+	h.runtime.containers["candidate-id"] = exact
+	result, err = (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.RecommendedAction != RepairCleanupResources {
+		t.Fatalf("exact reconciliation=%#v err=%v", result, err)
+	}
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RepairInstallation", OperationRevision: 1, InstanceID: "inst-one", RepairAction: RepairCleanupResources}
+	decision, err := h.coordinator.Begin(context.Background(), request, 0, request.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.coordinator.AuthorizeMutation(context.Background(), request.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.db.Exec(`UPDATE installation_leases SET fencing_token=fencing_token+1 WHERE installation_id=?`, request.InstanceID); err != nil {
+		t.Fatal(err)
+	}
+	before := len(h.runtime.mutations)
+	if _, err = (Repairer{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Repair(context.Background(), request.InstanceID, request.OperationID, decision.FencingToken, request.RepairAction); err == nil {
+		t.Fatal("stale cleanup fence was accepted")
+	}
+	if len(h.runtime.mutations) != before {
+		t.Fatalf("stale cleanup fence mutated runtime: %v", h.runtime.mutations[before:])
+	}
+}
+
+func TestAbsentCleanupCandidateIsCommittedAndReconcilesIdempotently(t *testing.T) {
+	h := newHarness(t, true)
+	finishHarnessOperation(t, h)
+	if _, err := h.db.Exec(`UPDATE runtime_generations SET status='removed',cleanup_state='clean' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Exec(`UPDATE runtime_components SET state='removed' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	delete(h.runtime.containers, "old-id")
+	delete(h.runtime.networks, "kitpro-net-inst-one-g1")
+	if _, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',2,'failed-op','app','new','failed','candidate-network','candidate-network-id','candidate-plan','/persistent/data','internal','now','pending')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at,verified_at) VALUES('inst-one',2,'app','candidate-name','candidate-id','repo/app@sha256:new','image-id','config-hash','stopped','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+		if err != nil || result.State != ReconciliationConsistent || result.RuntimeState != "runtime_removed" || result.RecommendedAction != RepairNone || result.CheckedGeneration != 2 {
+			t.Fatalf("attempt %d result=%#v err=%v", attempt, result, err)
+		}
+	}
+	var status, cleanup string
+	if err := h.db.QueryRow(`SELECT status,cleanup_state FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=2`).Scan(&status, &cleanup); err != nil || status != "removed" || cleanup != "clean" {
+		t.Fatalf("status=%q cleanup=%q err=%v", status, cleanup, err)
+	}
+}
+
+func TestMultiCleanupWithoutActiveGenerationUsesPersistedReverseDependencyOrder(t *testing.T) {
+	store, runtime, coordinator, plan := newMultiHarness(t, true)
+	if _, err := coordinator.Complete(context.Background(), plan.OperationID, plan.FencingToken, protocol.Response{OK: false, Error: "test setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`UPDATE runtime_generations SET status='removed',cleanup_state='clean' WHERE installation_id='inst-multi' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`UPDATE runtime_components SET state='removed' WHERE installation_id='inst-multi' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"db", "redis", "worker", "web"} {
+		delete(runtime.containers, "old-"+id)
+	}
+	delete(runtime.networks, "kitpro-net-inst-multi-g1")
+	if _, err := store.DB.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,topology_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-multi',2,?,'multi','new','cleanup_pending',?,'candidate-network-id',?,?,'/persistent/data','internal','now','pending')`, plan.OperationID, plan.NetworkName, plan.PlanHash, plan.TopologyHash); err != nil {
+		t.Fatal(err)
+	}
+	runtime.networks[plan.NetworkName] = containers.NetworkObservation{Exists: true, ID: "candidate-network-id", Name: plan.NetworkName, Labels: map[string]string{"com.kitpro.managed": "true", "com.kitpro.instance": "inst-multi", "com.kitpro.runtime-generation": "2"}}
+	for _, component := range plan.Components {
+		containerID := "candidate-" + component.ID
+		observed := observationFromPlan(containerID, component.Container, "candidate-network-id", containers.RuntimeRunning)
+		runtime.containers[containerID] = observed
+		if _, err := store.DB.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,dependencies_json,start_ordinal,created_at,verified_at) VALUES('inst-multi',2,?,?,?,?,'image-id',?,'running',?,?,'now','now')`, component.ID, component.ContainerName, containerID, component.Image, observationHash(observed), jsonDependencies(component.DependsOn), component.StartOrdinal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := (Reconciler{Runtime: runtime, Store: *store}).Reconcile(context.Background(), "inst-multi")
+	if err != nil || result.RecommendedAction != RepairCleanupResources {
+		t.Fatalf("pre-cleanup reconciliation=%#v err=%v", result, err)
+	}
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RepairInstallation", OperationRevision: 1, InstanceID: "inst-multi", RepairAction: RepairCleanupResources}
+	decision, err := coordinator.Begin(context.Background(), request, 0, request.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.AuthorizeMutation(context.Background(), request.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runtime.mutations)
+	result, err = (Repairer{Runtime: runtime, Store: *store, Evidence: coordinator}).Repair(context.Background(), request.InstanceID, request.OperationID, decision.FencingToken, request.RepairAction)
+	if err != nil || result.State != ReconciliationConsistent || result.RuntimeState != "runtime_removed" {
+		t.Fatalf("cleanup result=%#v err=%v", result, err)
+	}
+	want := []string{"stop:candidate-web", "remove:candidate-web", "stop:candidate-worker", "remove:candidate-worker", "stop:candidate-redis", "remove:candidate-redis", "stop:candidate-db", "remove:candidate-db", "remove-network:" + plan.NetworkName}
+	if !isSubsequence(runtime.mutations[before:], want) {
+		t.Fatalf("multi cleanup order=%v", runtime.mutations[before:])
+	}
+	var status, cleanup, dataPath string
+	if err = store.DB.QueryRow(`SELECT status,cleanup_state,data_path FROM runtime_generations WHERE installation_id='inst-multi' AND runtime_generation=2`).Scan(&status, &cleanup, &dataPath); err != nil || status != "removed" || cleanup != "clean" || dataPath != "/persistent/data" {
+		t.Fatalf("generation status=%q cleanup=%q data=%q err=%v", status, cleanup, dataPath, err)
+	}
+}
+
 func hasMismatch(result ReconciliationResult, want MismatchCode) bool {
 	for _, code := range result.MismatchCodes {
 		if code == want {

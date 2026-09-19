@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,7 +129,15 @@ func (r Reconciler) Reconcile(ctx context.Context, installation string) (Reconci
 		return result, err
 	}
 	if len(generations) == 0 {
-		return result, sql.ErrNoRows
+		removed, removedErr := r.Store.LatestRemovedGeneration(ctx, installation)
+		if removedErr != nil {
+			return result, removedErr
+		}
+		result.CheckedGeneration = removed.Generation
+		result.OriginatingOperation = removed.CreatingOperationID
+		result.RuntimeState = "runtime_removed"
+		result.Summary = "no active runtime generation; runtime resources are removed"
+		return result, r.Store.SaveReconciliation(ctx, result)
 	}
 	var active *MultiGeneration
 	for i := range generations {
@@ -435,6 +442,15 @@ func (s Store) ReconciliationGenerations(ctx context.Context, installation strin
 		result = append(result, item)
 	}
 	return result, nil
+}
+
+func (s Store) LatestRemovedGeneration(ctx context.Context, installation string) (MultiGeneration, error) {
+	var generation int
+	err := s.DB.QueryRowContext(ctx, `SELECT runtime_generation FROM runtime_generations WHERE installation_id=? AND status='removed' ORDER BY runtime_generation DESC LIMIT 1`, installation).Scan(&generation)
+	if err != nil {
+		return MultiGeneration{}, err
+	}
+	return s.LoadMultiGeneration(ctx, installation, generation)
 }
 
 func (s Store) SaveReconciliation(ctx context.Context, result ReconciliationResult) error {
