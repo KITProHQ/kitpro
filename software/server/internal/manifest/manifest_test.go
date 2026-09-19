@@ -95,6 +95,46 @@ func TestRuntimeIdentityAndManagedStorageOwnership(t *testing.T) {
 		}
 	}
 }
+func TestBackupPolicyClassifiesEveryPersistentStorage(t *testing.T) {
+	data := strings.Replace(valid, `"schema_version":1`, `"schema_version":6`, 1)
+	data = strings.Replace(data, `"restart":"unless-stopped"`, `"restart":"unless-stopped","backup":{"strategy":"cold-sqlite-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, 1)
+	m, err := Parse([]byte(data))
+	if err != nil || m.Backup == nil || m.Backup.Strategy != "cold-sqlite-filesystem" {
+		t.Fatalf("backup policy: %v %#v", err, m.Backup)
+	}
+	p, err := Resolve(m, "1.0", "inst-12345678", "kitpro-net-inst-12345678", "/srv/kitpro/apps/busybox/inst-12345678/data")
+	if err != nil || p.Backup == nil || len(p.Backup.Storage) != 1 {
+		t.Fatalf("resolved backup policy: %v %#v", err, p.Backup)
+	}
+	p.Backup.Storage[0].ID = "changed"
+	if m.Backup.Storage[0].ID != "data" {
+		t.Fatal("resolved plan aliases manifest backup policy")
+	}
+
+	for _, candidate := range []string{
+		strings.Replace(data, `"backup":{"strategy":"cold-sqlite-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, `"backup":{"strategy":"shell","storage":[{"component":"app","id":"data","disposition":"include"}]}`, 1),
+		strings.Replace(data, `"id":"data","disposition":"include"`, `"id":"missing","disposition":"include"`, 1),
+		strings.Replace(data, `"disposition":"include"`, `"disposition":"skip"`, 1),
+		strings.Replace(data, `,"backup":{"strategy":"cold-sqlite-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, ``, 1),
+		strings.Replace(valid, `"schema_version":1`, `"schema_version":1,"backup":{"strategy":"cold-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, 1),
+	} {
+		if _, err := Parse([]byte(candidate)); err == nil {
+			t.Fatalf("accepted invalid backup policy: %s", candidate)
+		}
+	}
+}
+
+func TestMetadataOnlyBackupRejectsPersistentStorage(t *testing.T) {
+	data := strings.Replace(valid, `"schema_version":1`, `"schema_version":6`, 1)
+	data = strings.Replace(data, `"restart":"unless-stopped"`, `"restart":"unless-stopped","backup":{"strategy":"metadata-only"}`, 1)
+	if _, err := Parse([]byte(data)); err == nil {
+		t.Fatal("accepted metadata-only policy with persistent storage")
+	}
+	data = strings.Replace(data, `,"storage":[{"id":"data","container_path":"/data","persistent":true,"read_only":false}]`, ``, 1)
+	if _, err := Parse([]byte(data)); err != nil {
+		t.Fatalf("metadata-only policy: %v", err)
+	}
+}
 func TestHardwareSchemaIsTypedAndBounded(t *testing.T) {
 	data := strings.Replace(valid, `"schema_version":1`, `"schema_version":3`, 1)
 	data = strings.Replace(data, `"restart":"unless-stopped"`, `"hardware":[{"class":"gpu.nvidia","optional":true,"cpu_fallback":true}],"restart":"unless-stopped"`, 1)
@@ -135,8 +175,11 @@ func TestManifestRejectsUnsafeVariants(t *testing.T) {
 			t.Errorf("accepted unsafe variant: %s", replacement)
 		}
 	}
-	if _, err := Parse([]byte(strings.Replace(valid, `"container_path":"/data"`, `"container_path":"/var/run/docker.sock"`, 1))); err == nil {
-		t.Error("accepted Docker socket storage")
+	for _, socket := range []string{"docker.sock", "podman.sock", "containerd.sock"} {
+		candidate := strings.Replace(valid, `"container_path":"/data"`, `"container_path":"/var/run/`+socket+`"`, 1)
+		if _, err := Parse([]byte(candidate)); err == nil {
+			t.Errorf("accepted runtime socket storage: %s", socket)
+		}
 	}
 	oversized := make([]byte, 65*1024)
 	for i := range oversized {

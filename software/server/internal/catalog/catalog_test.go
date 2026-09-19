@@ -41,13 +41,13 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"ollama", "0.34.0", "docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4", "/root/.ollama", 11434, nil},
 		{"jellyfin", "12.1", "docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b", "/config", 8096, nil},
 		{"navidrome", "0.64.0", "docker.io/deluan/navidrome@sha256:1a64cbb2603cec5d2615c3a27e91442436b2229583408a55cdc8d85705b95e65", "/data", 4533, map[string]string{"ND_LOGLEVEL": "info", "ND_SCANSCHEDULE": "1h"}},
-		{"audiobookshelf", "2.36.0", "ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8", "/config", 80, map[string]string{"TZ": "UTC"}},
+		{"audiobookshelf", "2.36.0", "ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8", "/config", 13378, map[string]string{"TZ": "UTC", "PORT": "13378"}},
 		{"sftpgo", "2.7.5", "ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e", "/var/lib/sftpgo", 8080, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			m := c[tt.id].Manifest
-			if m.Description == "" || len(m.Services) == 0 {
+			if m.Description == "" || len(m.Services) == 0 || m.Backup == nil {
 				t.Fatalf("incomplete manifest: %#v", m)
 			}
 			if len(m.Components) == 0 && ((tt.storagePath != "" && (len(m.Storage) == 0 || m.Storage[0].ContainerPath != tt.storagePath)) || (tt.storagePath == "" && len(m.Storage) != 0) || m.Services[0].ContainerPort != tt.port) {

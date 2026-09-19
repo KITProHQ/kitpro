@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"io"
 	"net"
 	"net/http"
@@ -16,49 +17,20 @@ type Client struct{ HTTP *http.Client }
 
 const imagePullTimeout = 30 * time.Minute
 
-type ContainerSummary struct {
-	ID     string            `json:"Id"`
-	Names  []string          `json:"Names"`
-	Image  string            `json:"Image"`
-	Labels map[string]string `json:"Labels"`
-}
-type ContainerPlan struct {
-	Image, Name, Network string
-	User                 string
-	Labels               map[string]string
-	Command              []string
-	Environment          []string
-	DataPath             string
-	ReadOnly             bool
-	Storage              []StorageMount
-	PortBindings         map[string][]PortBinding
-	RestartPolicy        string
-	NetworkAliases       []string
-	Devices              []DeviceMapping
-	DeviceRequests       []DeviceRequest
-}
-type PortBinding struct {
-	HostIP   string
-	HostPort string
-}
-
-type StorageMount struct {
-	ContainerPath string
-	HostPath      string
-	ReadOnly      bool
-}
-type DeviceMapping struct{ PathOnHost, PathInContainer, CgroupPermissions string }
-type DeviceRequest struct {
-	Driver       string
-	Count        int
-	Capabilities [][]string
-}
+type ContainerSummary = containers.ContainerSummary
+type ContainerPlan = containers.ContainerPlan
+type PortBinding = containers.PortBinding
+type StorageMount = containers.StorageMount
+type DeviceMapping = containers.DeviceMapping
+type DeviceRequest = containers.DeviceRequest
 
 func New() *Client {
 	return &Client{HTTP: &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
 	}}, Timeout: 120 * time.Second}}
 }
+
+func (c *Client) Name() string { return "docker" }
 func (c *Client) do(method, path string, body io.Reader) (map[string]any, error) {
 	q, err := http.NewRequest(method, "http://docker"+path, body)
 	if err != nil {

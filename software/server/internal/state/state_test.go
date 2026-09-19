@@ -35,6 +35,9 @@ func TestSeparateSchemas(t *testing.T) {
 	if _, e = b.Exec("INSERT INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation) VALUES('i','c','n','net','sha256:'||replace(hex(randomblob(32)), 'A','a'),'/srv/kitpro/apps/a/i/data','now',2)"); e != nil {
 		t.Fatal(e)
 	}
+	if e = b.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='application_backups'").Scan(&table); e != nil || table != "application_backups" {
+		t.Fatalf("application backup schema missing: %v", e)
+	}
 	if e = a.QueryRow("SELECT name FROM sqlite_master WHERE type='index' AND name='installation_service_exposure_binding_unique'").Scan(&table); e != nil {
 		t.Fatalf("exposure uniqueness index missing: %v", e)
 	}

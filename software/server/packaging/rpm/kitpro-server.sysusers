@@ -1,0 +1,3 @@
+u kitpro-api - "KITPro Server API" /var/lib/kitpro-api /usr/sbin/nologin
+g kitpro-api -
+m kitpro-api kitpro-api

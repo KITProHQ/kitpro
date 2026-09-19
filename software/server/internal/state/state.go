@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 7
+	target := 8
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -141,6 +141,17 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=7"); err != nil {
+			return err
+		}
+	}
+	if n < 8 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS application_backups (backup_id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, application_id TEXT NOT NULL, release_id TEXT NOT NULL, runtime_generation INTEGER NOT NULL, archive_path TEXT NOT NULL UNIQUE, archive_sha256 TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL CHECK(status = 'complete'))`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=8"); err != nil {
 			return err
 		}
 	}

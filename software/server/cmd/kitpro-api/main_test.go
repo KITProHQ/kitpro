@@ -124,8 +124,42 @@ func TestVersionEndpointReportsBuildAndSchemaMetadata(t *testing.T) {
 	req := authenticatedRequest(http.MethodGet, "/api/v1/version", "", session, csrf)
 	rec := httptest.NewRecorder()
 	a.guard(a.version)(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":4`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":6`) {
 		t.Fatalf("version response: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestApplicationBackupAndRestoreUseTypedHelperBoundary(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES('inst-backup001','busybox','1.37.0','running',3,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	var requests []protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		requests = append(requests, request)
+		if request.Operation == "CreateApplicationBackup" {
+			return protocol.Response{OK: true, RequestID: request.ID, Result: map[string]any{"backup_id": request.ID}}, nil
+		}
+		return protocol.Response{OK: true, RequestID: request.ID, Result: map[string]any{"backup_id": request.BackupID, "status": "restored"}}, nil
+	}
+
+	recorder := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-backup001/backup", "", session, csrf)
+	a.guard(a.installations)(recorder, request)
+	if recorder.Code != http.StatusOK || len(requests) != 1 {
+		t.Fatalf("backup response: %d %s %#v", recorder.Code, recorder.Body.String(), requests)
+	}
+	backupID := requests[0].ID
+	if requests[0].Operation != "CreateApplicationBackup" || requests[0].ApplicationID != "busybox" || requests[0].ReleaseID != "1.37.0" || requests[0].RuntimeGeneration != 3 || requests[0].BackupID != "" {
+		t.Fatalf("unsafe or incomplete backup request: %#v", requests[0])
+	}
+
+	recorder = httptest.NewRecorder()
+	request = authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-backup001/restore", `{"backup_id":"`+backupID+`"}`, session, csrf)
+	request.Header.Set("Content-Type", "application/json")
+	a.guard(a.installations)(recorder, request)
+	if recorder.Code != http.StatusOK || len(requests) != 2 || requests[1].Operation != "RestoreApplicationBackup" || requests[1].BackupID != backupID {
+		t.Fatalf("restore response: %d %s %#v", recorder.Code, recorder.Body.String(), requests)
 	}
 }
 
@@ -394,6 +428,26 @@ func TestFailedInitialInstallCanRecreateAtGenerationOne(t *testing.T) {
 	a.guard(a.installations)(recreate, authenticatedRequest(http.MethodPost, "/api/v1/installations/"+installation+"/recreate", "", session, csrf))
 	if recreate.Code != http.StatusAccepted || retry.RuntimeGeneration != 1 || retry.InstanceID != installation {
 		t.Fatalf("recreate status=%d request=%#v body=%s", recreate.Code, retry, recreate.Body.String())
+	}
+}
+
+func TestMultiContainerInstallUsesTopLevelRelease(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.apps)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/apps/paperless-ngx/install", "", session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.ReleaseID != "2.20.15" || received.Image != "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f" {
+		t.Fatalf("unexpected top-level release: %#v", received)
+	}
+	if len(received.Components) != 2 || received.Components[0].ID != "broker" || received.Components[1].ID != "web" {
+		t.Fatalf("unexpected component plan: %#v", received.Components)
 	}
 }
 

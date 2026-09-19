@@ -1,6 +1,6 @@
 # KITPro Server public alpha quickstart
 
-Download the package and matching `SHA256SUMS` from the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11). Use the version and filename from that release.
+Download the package and matching `SHA256SUMS` from the [current GitHub release](https://github.com/KITProHQ/kitpro/releases). Use the version and filename from that release; development release notes do not mean a package was published.
 
 ## Debian 13 or Ubuntu 26.04 LTS
 

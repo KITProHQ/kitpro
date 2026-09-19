@@ -1,6 +1,6 @@
 module github.com/kitpro/kitpro/software/server
 
-go 1.27
+go 1.26
 
 require (
 	golang.org/x/crypto v0.31.0

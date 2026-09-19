@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 6,
   "id": "ollama",
   "name": "Ollama",
   "description": "Run local language models with CPU support and optional trusted GPU acceleration.",
@@ -15,5 +15,6 @@
   "hardware": [
     {"class": "gpu.nvidia", "optional": true, "cpu_fallback": true}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-filesystem", "storage": [{"component": "app", "id": "models", "disposition": "include"}]}
 }

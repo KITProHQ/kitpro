@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 6,
   "id": "jellyfin",
   "name": "Jellyfin",
   "description": "Stream a private media library while keeping source media outside KITPro's lifecycle.",
@@ -19,5 +19,6 @@
   "services": [
     {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8096}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "config", "disposition": "include"}, {"component": "app", "id": "cache", "disposition": "exclude-ephemeral"}]}
 }

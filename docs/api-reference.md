@@ -52,6 +52,26 @@ authoritative for KITPro software updates.
 For first use, follow the [quickstart](release/quickstart.md) rather than
 calling the API directly.
 
+## Application backup and restore
+
+`POST /api/v1/installations/{id}/backup` creates a version 1 application
+archive in the helper's configured local backup directory. The request has no
+body. The response contains a backup ID, filename, SHA-256, creation time, and
+detected database count. It never returns archive data or secret values.
+
+`POST /api/v1/installations/{id}/restore` accepts only
+`{"backup_id":"op-..."}`. The helper resolves that ID from its root-owned
+backup inventory. The API cannot supply an archive path, storage path, runtime
+command, or database command.
+
+Both operations require the existing authenticated administrator, CSRF,
+Origin, and Host checks. Restore format version 1 targets the same existing
+installation, release, runtime generation, component images, managed storage,
+and imported storage bindings.
+
+See [Back up and restore an application](operations/application-backup-restore.md)
+for the operator workflow.
+
 ## Trusted storage roots
 
 `POST /api/v1/storage-roots` is the only application-management workflow that

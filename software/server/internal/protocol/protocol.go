@@ -44,6 +44,7 @@ type Request struct {
 	RootPath          string                   `json:"root_path,omitempty"`
 	RootMode          string                   `json:"root_mode,omitempty"`
 	RunAs             *RuntimeIdentity         `json:"run_as,omitempty"`
+	BackupID          string                   `json:"backup_id,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`

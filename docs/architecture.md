@@ -9,21 +9,22 @@ implementation.
 KITPro Server is the name of the public-alpha product. Each decision is
 recorded in [`docs/decisions/`](decisions/README.md). The production API,
 helper, Docker, state, catalog, exposure, multi-container, generated-secret,
-hardware, and trusted-storage boundaries are implemented on the certified
+hardware, trusted-storage, and application-backup boundaries are implemented on the certified
 alpha platforms. TLS automation, general rollback, and off-host backup remain
 open.
 
 ADR-0017 selects Debian 13 as the primary/reference host. Ubuntu Server 26.04
 LTS and fully updated Arch Linux amd64 hosts using official repositories and
 `linux-lts` are also supported after native-package certification. Rocky Linux
-10 remains a secondary experimental host. The core helper and Docker
-integration use Linux, systemd, Unix sockets, and Docker Engine contracts.
-Distribution packaging, firewall integration, AppArmor profiles, and SELinux
-policy stay outside those core contracts. ADR-0019 requires enforcing helper
-MAC on supported hosts; Rocky must run with SELinux Enforcing. KITPro does not
-disable enforcement to support it. ADR-0001 accepts one Go toolchain for
-separate API and helper binaries; ADR-0020 accepts separate SQLite state files;
-ADR-0021 accepts strict framed JSON.
+10 remains experimental pending its support designation. The core helper uses
+Linux, systemd, Unix sockets, normalized container plans, and a constrained
+Docker or Podman runtime adapter. Distribution packaging, orchestration,
+firewall integration, AppArmor profiles, and SELinux policy stay outside those
+shared contracts. ADR-0019 requires enforcing helper MAC on supported hosts;
+Rocky must run with SELinux Enforcing. KITPro does not disable enforcement to
+support it. ADR-0001 accepts one Go toolchain for separate API and helper
+binaries; ADR-0020 accepts separate SQLite state files; ADR-0021 accepts strict
+framed JSON.
 
 ## System boundary
 
@@ -72,12 +73,12 @@ The architecture must assign the following responsibilities. The list does not p
 | Local user interface | Presents host state, application state, planned changes, controls, logs, and recovery information. |
 | Application lifecycle coordination | Validates and records install, start, stop, update, rollback, and uninstall operations. Prevents conflicting operations. |
 | Host inspection | Reads supported host facts and distinguishes unavailable data from unhealthy state. |
-| Workload integration | The privileged helper translates constrained lifecycle operations to an allowlisted subset of the Docker Engine API. The browser-facing service has no Docker socket access. |
+| Workload integration | The privileged helper translates constrained lifecycle operations through the selected Docker or Podman adapter. The browser-facing service has no container-runtime socket access. |
 | Privileged host changes | A root-owned helper accepts versioned semantic operations over a protected Unix socket. It authenticates the API service with kernel peer credentials and enforces policy again. |
 | Application specification | Describes a trusted application, its source, configuration, health checks, networking, storage, secrets, and lifecycle behavior through the bounded manifest schemas. |
-| State and operation history | The control plane stores desired state and user-facing metadata. The helper independently stores trusted ownership, privileged receipts, leases, and audit events. Fresh host and Docker inspection supplies observed state. The storage technologies remain open. |
+| State and operation history | The control plane stores desired state and user-facing metadata. The helper independently stores trusted ownership, privileged receipts, leases, and audit events. Fresh host and selected-runtime inspection supplies observed state. The storage technologies remain open. |
 | Logs and observations | Collects relevant KITPro, host, and workload information without presenting raw volume as useful diagnosis. |
-| Data protection integration | Separates managed and imported data, creates validated control-state backups before migrations and trusted updates, and documents that imported data and full application recovery remain external responsibilities. |
+| Data protection integration | Separates managed and imported data, creates validated control-state backups before migrations and trusted updates, and creates versioned application archives for exact existing-installation recovery. Imported data and bare-host recovery remain external responsibilities. |
 
 No responsibility in this table implies that KITPro owns user application data. KITPro may record where data lives and how an operation affects it.
 

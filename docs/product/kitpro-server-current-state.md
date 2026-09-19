@@ -1,66 +1,144 @@
-# KITPro Server current-state product brief
+# KITPro Server Current State
+
+Status date: 2026-09-16. This is the primary factual source for the KITPro Server launch-video script. It distinguishes released behavior from validated development-source boundaries and roadmap intent.
 
 ## What KITPro Server is
 
-KITPro Server is a local-first web control panel that installs and operates a trusted catalog of self-hosted applications on a supported Linux server while keeping privileged Docker, device, and storage operations behind a constrained helper.
+KITPro Server is a local-first web control panel that installs and operates a trusted catalog of self-hosted applications on a supported Linux server. It keeps Docker, device, network, and storage operations behind a narrowly privileged helper while giving the owner a clear browser interface for normal administration.
 
 ## The problem it solves
 
-Self-hosting normally asks a user to understand container images, persistent volumes, ports, credentials, updates, Linux permissions, device access, and failure recovery before the first useful app appears. A small configuration mistake can expose a service, lose data, or grant more host access than intended. KITPro turns reviewed deployment patterns into a guided local workflow.
+Self-hosting with standard Linux and Docker tooling can require a user to understand images, volumes, ports, credentials, updates, permissions, devices, and recovery before the first useful application is available. KITPro does not replace or criticize those tools. It keeps standard Linux and rootful Docker underneath, then abstracts their repetitive infrastructure details into reviewed, bounded workflows that are easier to understand and operate safely.
 
-## What KITPro does differently
+## Core product idea
 
-- A trusted catalog uses official images pinned to immutable digests.
-- Core administration is local-first and requires no KITPro cloud account or telemetry.
-- Installation identity and managed data survive container replacement.
-- Services begin private and can be exposed only on loopback or one configured LAN address.
-- A narrowly privileged, AppArmor-confined helper revalidates every typed operation.
-- One application may safely own several internal components without exposing their implementation to normal users.
-- Trusted release updates preserve installation state and create bounded control-state backups.
-- Hardware access is expressed as approved device classes, never arbitrary `/dev` paths.
-- External storage comes from administrator-approved roots, never arbitrary bind-mount syntax.
+- **Local-first:** administration runs on the user's server. No KITPro cloud account, telemetry service, or required cloud control plane is involved.
+- **User-owned server and data:** the user controls the host and the application data. Imported data remains outside KITPro's deletion lifecycle.
+- **Browser management:** first-run setup, catalog browsing, installation, access, updates, storage, and hardware status are available in the local web interface.
+- **Trusted catalog:** KITPro accepts reviewed, schema-versioned application definitions with immutable image digests. It is not a general Docker or Compose dashboard.
+- **Explicit boundaries:** network exposure, devices, storage roots, and privileged operations are typed and independently revalidated.
+
+## User journey
+
+1. Install the native KITPro package for the server operating system.
+2. Open the local KITPro address in a browser.
+3. Create the first local administrator.
+4. Browse the trusted application catalog.
+5. Select and install an application.
+6. Choose **Private**, **This server only**, or **Local network** access.
+7. Use **Open App** when the selected access mode makes the service reachable.
+8. Manage, update, stop, start, or recreate the application while preserving its installation identity and managed data.
+9. Register and select an administrator-approved trusted storage root when an application requires imported data.
+10. Use CPU mode or an approved GPU mode for supported workloads and hardware.
 
 ## Current catalog
 
-FreshRSS, Uptime Kuma, Mealie, Memos, Actual Budget, Vaultwarden, Home Assistant, Paperless-ngx, Open WebUI, IT-Tools, Ollama, Jellyfin, Navidrome, Audiobookshelf, and SFTPGo. See the [catalog reference](../application-catalog.md) for versions, storage, ports, and limitations.
+The public alpha contains 15 applications:
+
+- **FreshRSS 1.29.1:** a self-hosted RSS reader with managed data and extensions.
+- **Uptime Kuma 2.3.1:** a service-monitoring dashboard with managed persistent data.
+- **Mealie 3.24.0:** a recipe manager whose browser signup is disabled by default.
+- **Memos 0.30.0:** a lightweight notes and capture application.
+- **Actual Budget 26.9.0:** a local-first personal budgeting application.
+- **Vaultwarden 1.37.2:** a password-vault server; public TLS remains an administrator responsibility.
+- **Home Assistant stable:** a home-automation dashboard without arbitrary device or host-network access.
+- **Paperless-ngx 2.20.15 with Redis 7.4.11:** a document archive presented as one logical application.
+- **Open WebUI 0.11.3:** an authenticated AI interface whose model backend is configured separately.
+- **IT-Tools 2024.10.22-7ca5933:** a stateless collection of browser-based technical utilities.
+- **Ollama 0.34.0:** a local model runtime with CPU mode and optional certified NVIDIA acceleration.
+- **Jellyfin 12.1:** a media server with managed config/cache and one read-only trusted media root.
+- **Navidrome 0.64.0:** a music server with a managed database and read-only trusted music library.
+- **Audiobookshelf 2.36.0:** an audiobook server with managed metadata and a read-only trusted library.
+- **SFTPGo 2.7.5:** scoped file access backed by an exclusive trusted read-write root; only its web UI is exposable through KITPro.
+
+Exact images, digests, ports, storage, and upstream licenses are recorded in the [application catalog](../application-catalog.md).
+
+## Multi-container support
+
+Paperless-ngx is the current multi-container application. KITPro owns its web component and internal Redis broker as one installation on one isolated network. The user installs and manages Paperless-ngx as a single logical app; only the web component can receive host exposure. Other catalog entries are single-container applications.
+
+## AI/GPU
+
+Open WebUI and Ollama are independent catalog applications. Open WebUI starts with authentication enabled and can be configured with a reachable model backend; KITPro does not automatically connect separate installations. Ollama works in CPU mode without a GPU.
+
+NVIDIA Ollama inference is live-certified on Debian 13, Ubuntu 26.04 LTS, and Arch Linux under the documented host boundaries using an RTX A2000 12GB and NVIDIA Container Toolkit 1.20.0. The host still needs a compatible NVIDIA driver and toolkit. KITPro accepts one unambiguous GPU; it does not provide multi-GPU selection, GPU scheduling, or VRAM reservation. AMD and Intel device classes exist, but accelerated workloads are not live-certified. Jellyfin can request optional NVIDIA access, but NVENC/NVDEC transcoding is not certified.
+
+## Storage/media
+
+KITPro-managed storage lives under installation-owned directories and survives container recreation. For external data, an administrator registers a trusted local directory or an already-mounted network-storage directory. Applications request named read-only or read-write slots; users never enter arbitrary Docker bind syntax.
+
+Jellyfin, Navidrome, and Audiobookshelf use imported data read-only. SFTPGo is the current exclusive read-write consumer. The helper checks canonical paths, symlinks, forbidden host areas, filesystem and mount identity, declared access mode, and writer conflicts. Existing host-mounted NFS and CIFS filesystems can be detected and registered, but KITPro does not mount shares, store NAS credentials, or manage the NAS lifecycle. Imported external data is not included in KITPro control-plane backups.
+
+## Security model
+
+- The browser UI and API run without Docker or broad host privileges.
+- A separate privileged helper accepts only typed operations and independently validates the exact plan.
+- The helper is confined by AppArmor on supported hosts.
+- Trusted manifests use immutable image digests and reject arbitrary Compose, shell commands, capabilities, privileged mode, host networking, devices, raw bind mounts, and host-port requests.
+- Application secrets are generated and preserved without being displayed through the normal API or interface.
+- Services begin **Private** and may be changed only to **This server only** or one configured **Local network** address. KITPro does not provide wildcard or automatic Internet exposure.
+- Hardware access uses approved device classes; arbitrary device passthrough is unavailable.
+- Storage uses administrator-approved trusted roots; arbitrary host mounts are unavailable.
+- Reconciliation compares recorded intent with Docker, storage, hardware, and network state. Security-sensitive drift fails closed.
+
+## Updates/backups
+
+The host's native package manager remains authoritative for KITPro package updates. Application updates are administrator-initiated and are available only when the trusted catalog defines a reviewed release transition. Before package migrations and application updates, KITPro creates a bounded backup of its control-plane SQLite state.
+
+The development source also contains application backup format version 1 and
+typed backup and restore operations. The helper takes cold copies of declared
+managed storage, verifies detected SQLite databases, preserves generated
+secrets, and restores through a rollback tree. Representative live acceptance
+passed on both Docker and Podman. This work is not part of the current public
+release.
+
+Application archives do not copy imported external data. They do not provide
+bare-host or host-to-host recovery. Irreversible upstream schema rollback is
+not promised.
 
 ## Supported platforms
 
-Debian 13 amd64 and Ubuntu 26.04 LTS amd64 are supported with rootful Docker and enforcing AppArmor. Arch Linux x86_64 is supported when fully updated from official repositories, running `linux-lts`, rootful Docker, and enforcing AppArmor. Rocky Linux 10 amd64 remains experimental. The [support matrix](../support-matrix.md) is authoritative.
+| Platform | Status | Exact boundary |
+| --- | --- | --- |
+| Debian 13 amd64 | Supported | Rootful Docker and enforcing AppArmor |
+| Ubuntu 26.04 LTS amd64 | Supported | Rootful Docker and enforcing AppArmor |
+| Arch Linux x86_64 | Supported | Fully updated official repositories, `linux-lts`, rootful Docker, and enforcing AppArmor; no partial upgrades |
+| Rocky Linux 10 amd64 | Experimental, promotion-ready | Rootful Podman 5 and Quadlet; clean SELinux/firewalld/RPM and application backup/restore acceptance passed, with support designation and publication still pending |
 
-## Security philosophy
+The [support matrix](../support-matrix.md) is definitive for platform-specific capability certification.
 
-KITPro deliberately refuses general Docker administration. Users cannot submit Compose files, shell commands, raw capabilities, host networking, arbitrary devices, or arbitrary host mounts. Trusted manifests describe a bounded intention; the helper independently resolves and checks the exact runtime plan. Security-sensitive drift fails closed.
+## Package formats
 
-## GPU and AI capabilities
+- Debian and Ubuntu: `.deb`
+- Arch Linux: `.pkg.tar.zst`
+- Rocky Linux 10: experimental `.rpm` inputs exist; no RPM is published
 
-Ollama runs on CPU or can use the one unambiguous NVIDIA GPU detected through the NVIDIA Container Toolkit. Real inference on an RTX A2000 12GB passed on Debian, Ubuntu, and Arch. Open WebUI is a separate authenticated frontend and can be configured with a reachable model backend after installation; KITPro does not yet create a cross-installation connection automatically. AMD and Intel device classes exist, but accelerated workloads are not certified. KITPro does not schedule GPU workloads or reserve VRAM.
+Published releases also include SHA-256 checksums, build metadata, a release manifest, and a CycloneDX JSON SBOM.
 
-## Media and storage capabilities
+## Licensing
 
-An administrator registers a trusted local or already-mounted network-storage root. A catalog app requests a named read-only or read-write slot; the user selects a compatible root. Jellyfin, Navidrome, and Audiobookshelf read media without modifying the library. SFTPGo is the first exclusive read-write consumer. KITPro checks canonical paths, symlinks, forbidden host areas, mount identity, access mode, and writer conflicts. It detects host-mounted NFS/CIFS filesystems but does not mount shares or manage their credentials. Jellyfin NVIDIA transcoding is not yet certified.
+KITPro is licensed under the Apache License 2.0. Catalog applications retain their own upstream licenses.
 
-## Package and install experience
+## Current release
 
-Debian and Ubuntu use a signed/checksummed `.deb`; Arch uses a native `.pkg.tar.zst`. After package installation, the user opens the local dashboard in a browser and creates the first administrator. Rootful Docker and AppArmor remain visible prerequisites rather than hidden vendor services.
+The current public release is [`v0.1.0-alpha.11`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11), published as a GitHub prerelease from source commit `1eed6b0a2199e927a9647e50206e89f6cfc19995`.
 
-## What a user actually does
+## Known limitations
 
-1. Install the package for the server operating system.
-2. Open the local KITPro address in a browser.
-3. Create the first administrator.
-4. Pick a reviewed application.
-5. Select approved storage when the app needs it.
-6. Install it, choose Private, This server only, or Local network access, and open the app.
+- AMD and Intel accelerated workloads are not live-certified.
+- Jellyfin NVIDIA transcoding is not certified.
+- There is no multi-GPU selection or scheduling and no VRAM reservation.
+- Arbitrary device passthrough, host bind mounts, Compose input, and host networking are unavailable.
+- KITPro does not mount NFS/CIFS shares or manage NAS credentials.
+- Imported external data is not automatically backed up.
+- Cross-installation service discovery is unavailable; Open WebUI and Ollama remain separately configured.
+- Immich is unsupported because its current topology requires trusted primitives for shared secrets, health-gated dependencies, bounded database shared memory, and database-aware backup/rollback that KITPro does not yet provide.
+- Syncthing is unsupported because its LAN/UDP discovery topology conflicts with KITPro's current bridge-network and no-host-networking boundary.
+- Clustering, high availability, automatic failover, and complete disaster recovery are unavailable.
+- Public TLS, domains, and reverse-proxy automation are outside the current product boundary.
 
-## What KITPro does behind the scenes
+The public [known limitations](../release/known-limitations.md) document is authoritative if a shorter product summary differs.
 
-KITPro validates a trusted manifest, prepares managed directories and durable secrets, asks the helper to revalidate the exact plan, pulls the pinned image, creates an isolated network and runtime, and records what it owns. Reconciliation later compares that record with Docker, hardware, and storage state so missing or extra privileges do not pass unnoticed.
+## Why KITPro matters
 
-## What is not supported yet
-
-KITPro does not provide arbitrary Compose, arbitrary devices or bind mounts, host networking, public TLS/reverse-proxy automation, multi-GPU selection, GPU scheduling, NAS mounting, cross-installation service discovery, clustering, high availability, or complete application-data disaster recovery. AMD/Intel workloads and Jellyfin NVIDIA transcoding are not certified. Immich, Syncthing, Frigate, ComfyUI, and other deferred candidates are not in the catalog. See [known limitations](../release/known-limitations.md).
-
-## Why this matters
-
-Useful personal infrastructure should not require surrendering ownership to a hosted platform or granting a dashboard unrestricted root access. KITPro aims for a practical middle ground: the privacy and durability of self-hosting, with a comprehensible interface and explicit security boundaries that ordinary users can reason about.
+KITPro makes personal infrastructure more approachable without taking ownership away from the user. It combines local-first administration, open-source software, explicit privacy and security boundaries, and standard Linux/Docker foundations so people can learn, self-host, and control more of their digital lives without first becoming infrastructure experts.

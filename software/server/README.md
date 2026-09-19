@@ -1,12 +1,12 @@
 # KITPro Server technical entry point
 
-KITPro Server is a Go control plane and narrowly privileged helper for trusted self-hosted applications. The API owns authentication, desired state, the browser UI, and operations. The AppArmor-confined helper independently validates typed plans and is the only KITPro process permitted to operate Docker or approved host storage.
+KITPro Server is a Go control plane and narrowly privileged helper for trusted self-hosted applications. The API owns authentication, desired state, the browser UI, and operations. The host-confined helper independently validates typed plans and is the only KITPro process permitted to operate the selected container runtime or approved host storage.
 
 ## Supported production boundary
 
 - Debian 13 amd64 and Ubuntu 26.04 LTS amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Arch Linux x86_64: native package, `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor.
-- Rocky Linux 10 amd64: experimental, not certified.
+- Rocky Linux 10 amd64: experimental RPM path, rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; clean-host matrix not certified.
 
 See the definitive [support matrix](../../docs/support-matrix.md).
 
@@ -27,8 +27,9 @@ From this directory:
 go test ./...
 go vet ./...
 gofmt -l .
-./packaging/test-package.sh
-./packaging/test-arch-package.sh
+./packaging/tests/package_static_test.sh
+./packaging/tests/arch_package_static_test.sh
+./packaging/tests/rpm_package_static_test.sh
 ```
 
 Build packages with the version documented in the release manifest:
@@ -36,9 +37,10 @@ Build packages with the version documented in the release manifest:
 ```sh
 ./packaging/build-package.sh 0.1.0~alpha11
 ./packaging/build-arch-package.sh 0.1.0_alpha11
+./packaging/build-rpm.sh 0.1.0~alpha11
 ```
 
-Do not infer a public release from a source version. Use the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11) for published artifacts.
+Do not infer a public release from a source version. Use the [GitHub releases page](https://github.com/KITProHQ/kitpro/releases) for published artifacts.
 
 ## Contributor references
 
@@ -49,3 +51,5 @@ Do not infer a public release from a source version. Use the [v0.1.0-alpha.11 pr
 - [Catalog](../../docs/application-catalog.md)
 - [Package quickstart](../../docs/release/quickstart.md)
 - [Known limitations](../../docs/release/known-limitations.md)
+- [Contributing](../../CONTRIBUTING.md)
+- [Security policy](../../SECURITY.md)

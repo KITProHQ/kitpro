@@ -1,5 +1,5 @@
 pkgname=kitpro-server
-pkgver=0.1.0_alpha2
+pkgver=0.1.0_alpha1
 pkgrel=1
 pkgdesc='Local application manager for KITPro Server'
 arch=('x86_64')
@@ -17,7 +17,9 @@ build() {
     local source_root="$srcdir/${pkgname}-${pkgver}/software/server"
     local build_date
     build_date=$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)
-    local public_version=${pkgver/_alpha/-alpha.}
+    # Keep the public prerelease separator literal. An unquoted replacement
+    # is subject to Bash tilde expansion and can leak the builder home path.
+    local public_version=${pkgver/_/"~"}
     local ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=${public_version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=${KITPRO_SOURCE_COMMIT} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=${build_date}"
     cd "$source_root"
     export CGO_ENABLED=0 GOOS=linux GOARCH=amd64

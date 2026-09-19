@@ -24,6 +24,10 @@ func Vacuum(ctx context.Context, db *sql.DB, dir, name string) (string, error) {
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
 		return "", err
 	}
+	if err := os.Chmod(path, 0600); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("secure backup permissions: %w", err)
+	}
 	if err := Verify(ctx, path); err != nil {
 		_ = os.Remove(path)
 		return "", err

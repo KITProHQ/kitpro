@@ -40,7 +40,7 @@
     if (status === 403) return "KITPro blocked this request. Refresh the page and try again.";
     if (text.includes("lan bind address")) return "Local network access is not configured for this server. Set its LAN address in KITPro's server configuration, then try again.";
     if (status === 409 || text.includes("port")) return "KITPro could not apply that change because the requested network port is unavailable.";
-    if (text.includes("docker") || status === 503) return "Container services are unavailable right now. Check Docker and try again.";
+    if (text.includes("docker") || text.includes("podman") || text.includes("runtime") || status === 503) return "Container services are unavailable right now. Check the container runtime and try again.";
     if (text.includes("image")) return "KITPro could not download the trusted application image. Check the server connection and retry.";
     return "KITPro could not complete this operation. You can safely retry or review Technical details.";
   }

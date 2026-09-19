@@ -1,0 +1,42 @@
+[Unit]
+Description=KITPro Server privileged helper
+Documentation=man:kitpro-helper(8)
+Requires=kitpro-helper.socket
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/kitpro-helper
+User=root
+Group=root
+EnvironmentFile=-/etc/sysconfig/kitpro-server
+Environment=KITPRO_API_USER=kitpro-api
+Environment=KITPRO_CONTAINER_RUNTIME=podman
+Environment=KITPRO_PODMAN_PATH=/usr/libexec/kitpro-podman-command
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+# CAP_CHOWN preserves manifest-declared ownership in KITPro-managed storage.
+# CAP_DAC_READ_SEARCH lets the root helper read application-owned backup data
+# without granting write bypass. Imported roots are never copied or re-owned.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH
+UMask=0077
+# Podman lifecycle execution occurs in the generated systemd units. The helper
+# writes only KITPro Quadlets and secret files; rootful Podman inspection needs
+# its runtime and storage locks.
+ReadWritePaths=/run/kitpro -/run/containers -/var/lib/containers /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro /etc/containers/systemd /etc/kitpro-server/runtime
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

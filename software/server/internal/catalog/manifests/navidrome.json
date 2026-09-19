@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "id": "navidrome",
   "name": "Navidrome",
   "description": "Stream a music library while keeping source audio read only.",
@@ -20,5 +20,6 @@
   "services": [
     {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 4533}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
 }

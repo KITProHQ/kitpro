@@ -57,6 +57,12 @@ configure_package() {
     fi
     export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
     export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
+    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}"
+    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}"
+    local backup_dir
+    for backup_dir in "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"; do
+        [[ ! -d "$backup_dir" ]] || find "$backup_dir" -type f -exec chmod 0600 {} +
+    done
     runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
     /usr/libexec/kitpro-helper --migrate-only
     systemctl daemon-reload

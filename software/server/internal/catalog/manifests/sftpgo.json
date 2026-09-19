@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "id": "sftpgo",
   "name": "SFTPGo",
   "description": "Manage files inside one explicitly approved read-write storage location.",
@@ -17,5 +17,6 @@
     {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8080},
     {"id": "sftp", "name": "SFTP Service", "protocol": "tcp", "container_port": 2022}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "config", "disposition": "include"}]}
 }

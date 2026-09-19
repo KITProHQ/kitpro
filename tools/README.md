@@ -2,6 +2,11 @@
 
 These tools support architecture validation. They are not the KITPro Server application or production installer.
 
+Rocky Linux 10 production preparation uses
+[`install-rocky.sh`](install-rocky.sh) and Podman. The RHEL-family branches in
+`install-docker.sh` are retained only for historical Docker compatibility
+experiments; they are not the KITPro Rocky installation path.
+
 ## Docker installer
 
 [`install-docker.sh`](install-docker.sh) installs Docker Engine from an exact

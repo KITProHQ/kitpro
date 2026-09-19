@@ -10,9 +10,38 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
+	"github.com/kitpro/kitpro/software/server/internal/platform"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 )
+
+func TestRuntimeSocketNamesAreRejected(t *testing.T) {
+	for _, value := range []string{"/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock"} {
+		if !containsRuntimeSocket(value) {
+			t.Fatalf("runtime socket was not recognized: %s", value)
+		}
+	}
+	if containsRuntimeSocket("/srv/kitpro/apps/podman.socket/data") {
+		t.Fatal("ordinary path was treated as a runtime socket")
+	}
+}
+
+func TestSelectRuntimeUsesExplicitOrInstallablePlatform(t *testing.T) {
+	rocky := platform.Platform{ID: "rocky", Version: "10.1", ContainerRuntime: "podman", Installable: true}
+	if got, err := selectRuntime("", rocky); err != nil || got != "podman" {
+		t.Fatalf("Rocky runtime = %q, %v", got, err)
+	}
+	if got, err := selectRuntime("docker", rocky); err != nil || got != "docker" {
+		t.Fatalf("explicit runtime = %q, %v", got, err)
+	}
+	if _, err := selectRuntime("containerd", rocky); err == nil {
+		t.Fatal("unknown explicit runtime accepted")
+	}
+	rhel := platform.Platform{ID: "rhel", Version: "10.0", ContainerRuntime: "podman", Installable: false}
+	if _, err := selectRuntime("", rhel); err == nil {
+		t.Fatal("unvalidated RHEL host silently accepted")
+	}
+}
 
 func TestExpectedAPIUIDFromConfiguredNumericValue(t *testing.T) {
 	t.Setenv("KITPRO_API_UID", "1234")

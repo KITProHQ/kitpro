@@ -1,5 +1,11 @@
 # Rocky Linux 10 SELinux validation
 
+This document records the earlier Docker experiment. The current Rocky runtime
+uses Podman and Quadlet. Use
+[`security/selinux-rocky-podman.md`](../security/selinux-rocky-podman.md) and
+[`testing/rocky-linux-10-validation.md`](rocky-linux-10-validation.md) for new
+validation; do not treat the results below as Podman evidence.
+
 ## Status
 
 The initial 2026-09-12 Rocky Linux 10.2 run `FAILED` the intended mandatory-access-control posture. SELinux remained `Enforcing`, but Docker did not enable SELinux integration. The helper ran as `unconfined_service_t`, and the test container ran as `spc_t` with empty Docker process and mount labels.

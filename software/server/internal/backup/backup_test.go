@@ -2,9 +2,11 @@ package backup
 
 import (
 	"context"
-	"github.com/kitpro/kitpro/software/server/internal/state"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kitpro/kitpro/software/server/internal/state"
 )
 
 func TestVacuum(t *testing.T) {
@@ -14,8 +16,16 @@ func TestVacuum(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer db.Close()
-	if _, e = Vacuum(context.Background(), db, d, "b.db"); e != nil {
+	backupPath, e := Vacuum(context.Background(), db, d, "b.db")
+	if e != nil {
 		t.Fatal(e)
+	}
+	info, e := os.Stat(backupPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("backup mode = %04o, want 0600", info.Mode().Perm())
 	}
 	if e = Verify(context.Background(), filepath.Join(d, "b.db")); e != nil {
 		t.Fatal(e)

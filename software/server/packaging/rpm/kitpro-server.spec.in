@@ -1,0 +1,176 @@
+%global debug_package %{nil}
+
+Name:           kitpro-server
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Local application manager for KITPro Server
+License:        Apache-2.0
+URL:            https://github.com/KITProHQ/kitpro
+Source0:        %{name}-%{version}.tar.gz
+
+ExclusiveArch:  x86_64
+BuildRequires:  golang
+BuildRequires:  bzip2
+BuildRequires:  systemd-rpm-macros
+BuildRequires:  selinux-policy-devel
+BuildRequires:  selinux-policy-targeted
+Requires:       podman >= 5
+Requires:       crun
+Requires:       container-selinux
+Requires:       firewalld
+Requires:       policycoreutils-python-utils
+Requires:       systemd
+Requires:       util-linux
+Requires:       kitpro-selinux = %{version}-%{release}
+Requires(pre):  systemd
+Requires(pre):  libselinux-utils
+Requires(post): systemd
+Requires(preun): systemd
+
+%description
+KITPro Server manages a curated set of OCI application containers. On Rocky
+Linux 10 it uses rootful Podman, Quadlet-generated systemd services, SELinux
+Enforcing, and firewalld without installing Docker Engine.
+
+%package -n kitpro-selinux
+Summary:        SELinux file contexts for KITPro Server application data
+Requires:       container-selinux
+Requires(post): policycoreutils
+Requires(postun): policycoreutils
+Requires(post): selinux-policy-targeted
+
+%description -n kitpro-selinux
+Installs the persistent file-context rule for KITPro-managed container data.
+Container execution remains in the standard container_t domain with Podman MCS
+separation. The package does not add permissive domains or SELinux booleans.
+
+%prep
+%autosetup
+
+%build
+cd software/server
+export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-api ./cmd/kitpro-api
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-helper ./cmd/kitpro-helper
+make -C packaging/selinux kitpro.pp
+bzip2 -9 packaging/selinux/kitpro.pp
+
+%install
+cd software/server
+install -Dpm0755 kitpro-api %{buildroot}%{_bindir}/kitpro-api
+install -Dpm0755 kitpro-helper %{buildroot}%{_libexecdir}/kitpro-helper
+install -Dpm0755 packaging/rpm/kitpro-podman-command %{buildroot}%{_libexecdir}/kitpro-podman-command
+install -Dpm0755 packaging/rpm/kitpro-server-uninstall %{buildroot}%{_sbindir}/kitpro-server-uninstall
+install -Dpm0644 packaging/systemd/kitpro-api.service %{buildroot}%{_unitdir}/kitpro-api.service
+install -Dpm0644 packaging/systemd/kitpro-helper-rocky.service %{buildroot}%{_unitdir}/kitpro-helper.service
+install -Dpm0644 packaging/systemd/kitpro-helper.socket %{buildroot}%{_unitdir}/kitpro-helper.socket
+install -Dpm0644 packaging/tmpfiles/kitpro.conf %{buildroot}%{_tmpfilesdir}/kitpro.conf
+install -Dpm0644 packaging/rpm/kitpro-server.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/kitpro-server
+install -Dpm0644 packaging/rpm/kitpro-server.sysusers %{buildroot}%{_sysusersdir}/kitpro-server.conf
+install -Dpm0644 packaging/debian/kitpro-api.8 %{buildroot}%{_mandir}/man8/kitpro-api.8
+install -Dpm0644 packaging/debian/kitpro-helper.8 %{buildroot}%{_mandir}/man8/kitpro-helper.8
+install -d -m 0700 %{buildroot}%{_sysconfdir}/kitpro-server/runtime
+install -Dpm0644 packaging/selinux/kitpro.pp.bz2 %{buildroot}%{_datadir}/selinux/packages/kitpro/kitpro.pp.bz2
+install -Dpm0644 packaging/selinux/kitpro.if %{buildroot}%{_datadir}/selinux/devel/include/contrib/kitpro.if
+
+%pre
+. /etc/os-release
+if [ "${ID:-}" != rocky ] || [ "${VERSION_ID%%.*}" != 10 ]; then
+    echo "kitpro-server: this RPM is installable only on Rocky Linux 10" >&2
+    exit 1
+fi
+if [ "$(getenforce 2>/dev/null || true)" != Enforcing ]; then
+    echo "kitpro-server: SELinux must be Enforcing" >&2
+    exit 1
+fi
+if ! systemctl is-active --quiet firewalld.service || ! systemctl is-enabled --quiet firewalld.service; then
+    echo "kitpro-server: firewalld must be enabled and active" >&2
+    exit 1
+fi
+podman_major=$(podman version --format '{{.Client.Version}}' | cut -d. -f1)
+if ! [ "$podman_major" -ge 5 ] 2>/dev/null; then
+    echo "kitpro-server: Podman 5 or newer is required" >&2
+    exit 1
+fi
+if [ "$(podman info --format '{{.Host.OCIRuntime.Name}}')" != crun ]; then
+    echo "kitpro-server: crun must be the active OCI runtime" >&2
+    exit 1
+fi
+if [ "$1" -gt 1 ] && [ -x %{_bindir}/kitpro-api ] && [ -x %{_libexecdir}/kitpro-helper ]; then
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket >/dev/null 2>&1 || true
+    if [ -r %{_sysconfdir}/sysconfig/kitpro-server ]; then
+        . %{_sysconfdir}/sysconfig/kitpro-server
+    fi
+    export KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}
+    export KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}
+    export KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}
+    export KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}
+    [ ! -f "$KITPRO_CONTROL_DB" ] || runuser -u kitpro-api -- %{_bindir}/kitpro-api --prepare-upgrade '%{version}-%{release}'
+    [ ! -f "$KITPRO_HELPER_DB" ] || %{_libexecdir}/kitpro-helper --prepare-upgrade '%{version}-%{release}'
+fi
+
+%post
+%systemd_post kitpro-helper.socket kitpro-api.service
+systemd-sysusers %{_sysusersdir}/kitpro-server.conf
+systemd-tmpfiles --create %{_tmpfilesdir}/kitpro.conf
+restorecon -RF /run/kitpro /var/lib/kitpro-api /var/lib/kitpro-helper /var/log/kitpro /srv/kitpro %{_sysconfdir}/kitpro-server || true
+. %{_sysconfdir}/sysconfig/kitpro-server
+export KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}
+export KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}
+export KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}
+export KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}
+for backup_dir in "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"; do
+    [ ! -d "$backup_dir" ] || find "$backup_dir" -type f -exec chmod 0600 {} +
+done
+runuser -u kitpro-api -- %{_bindir}/kitpro-api --migrate-only
+%{_libexecdir}/kitpro-helper --migrate-only
+%{_sbindir}/kitpro-server-uninstall --restore
+systemctl daemon-reload
+systemctl enable --now kitpro-helper.socket kitpro-api.service
+
+%preun
+if [ "$1" -eq 0 ] && [ ! -e /run/kitpro/purge-complete ]; then
+    %{_sbindir}/kitpro-server-uninstall --preserve-data
+fi
+%systemd_preun kitpro-helper.socket kitpro-api.service
+
+%postun
+%systemd_postun_with_restart kitpro-helper.socket kitpro-api.service
+if [ "$1" -eq 0 ]; then
+    rm -f /run/kitpro/purge-complete
+    rmdir /run/kitpro 2>/dev/null || true
+fi
+
+%post -n kitpro-selinux
+%selinux_modules_install -s targeted %{_datadir}/selinux/packages/kitpro/kitpro.pp.bz2
+restorecon -RF /srv/kitpro/apps 2>/dev/null || true
+
+%postun -n kitpro-selinux
+if [ "$1" -eq 0 ]; then
+    %selinux_modules_uninstall -s targeted kitpro
+fi
+
+%files
+%license LICENSE
+%doc software/server/README.md
+%{_bindir}/kitpro-api
+%{_libexecdir}/kitpro-helper
+%{_libexecdir}/kitpro-podman-command
+%{_sbindir}/kitpro-server-uninstall
+%{_unitdir}/kitpro-api.service
+%{_unitdir}/kitpro-helper.service
+%{_unitdir}/kitpro-helper.socket
+%{_tmpfilesdir}/kitpro.conf
+%{_sysusersdir}/kitpro-server.conf
+%{_mandir}/man8/kitpro-api.8*
+%{_mandir}/man8/kitpro-helper.8*
+%config(noreplace) %{_sysconfdir}/sysconfig/kitpro-server
+%dir %attr(0700,root,root) %{_sysconfdir}/kitpro-server/runtime
+
+%files -n kitpro-selinux
+%{_datadir}/selinux/packages/kitpro/kitpro.pp.bz2
+%{_datadir}/selinux/devel/include/contrib/kitpro.if
+
+%changelog
+* Tue Sep 15 2026 KITPro Project <release@kitpro.local> - @VERSION@-1
+- Add the experimental Rocky Linux 10 Podman and Quadlet package path.

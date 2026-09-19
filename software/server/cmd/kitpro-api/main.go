@@ -14,6 +14,7 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/maintenance"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/operations"
+	hostplatform "github.com/kitpro/kitpro/software/server/internal/platform"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 	"html/template"
@@ -436,7 +437,7 @@ func (a *app) version(w http.ResponseWriter, r *http.Request) {
 		"package_family":         packageFamily(),
 		"platform":               platformName(),
 		"schema_version":         schema,
-		"catalog_schema_version": manifest.ExternalStorageSchemaVersion,
+		"catalog_schema_version": manifest.BackupSchemaVersion,
 	})
 }
 func (a *app) hardware(w http.ResponseWriter, r *http.Request) {
@@ -548,7 +549,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		Title, Initial, StatusLabel, StatusClass, Summary, RequestedAt, TimeLabel string
 	}
 	type healthView struct {
-		Label, Headline, Description, Docker, Helper, Class string
+		Label, Headline, Description, Runtime, Helper, Class string
 	}
 
 	storageRoots := a.trustedStorageRoots()
@@ -669,9 +670,9 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, operationView{Title: title, Initial: strings.ToUpper(title[:1]), StatusLabel: label, StatusClass: class, Summary: summary, RequestedAt: record.RequestedAt, TimeLabel: when})
 	}
-	health := healthView{Label: "Healthy", Headline: "Your server is ready.", Description: "KITPro is connected to its protected helper and ready to manage trusted applications.", Docker: "Connected", Helper: "Protected", Class: "is-healthy"}
-	if response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectDocker"}); err != nil || !response.OK {
-		health = healthView{Label: "Attention needed", Headline: "Container services need attention.", Description: "KITPro cannot reach Docker through its protected helper. Existing data remains in place.", Docker: "Unavailable", Helper: "Check service", Class: "needs-attention"}
+	health := healthView{Label: "Healthy", Headline: "Your server is ready.", Description: "KITPro is connected to its protected helper and ready to manage trusted applications.", Runtime: "Connected", Helper: "Protected", Class: "is-healthy"}
+	if response, err := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectRuntime"}); err != nil || !response.OK {
+		health = healthView{Label: "Attention needed", Headline: "Container services need attention.", Description: "KITPro cannot reach the container runtime through its protected helper. Existing data remains in place.", Runtime: "Unavailable", Helper: "Check service", Class: "needs-attention"}
 		attentionCount++
 	}
 	csrf := ""
@@ -694,14 +695,14 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 						if runtimeReady, _ := result["nvidia_runtime"].(bool); runtimeReady {
 							hardwareSummary = model + " — available; NVIDIA Container Toolkit detected"
 						} else {
-							hardwareSummary = model + " — GPU detected, but Docker GPU runtime is unavailable"
+							hardwareSummary = model + " — GPU detected, but the container GPU runtime is unavailable"
 						}
 					}
 				}
 			}
 		}
 	}
-	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.ExternalStorageSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
+	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.BackupSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
 		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
 	}
 }
@@ -821,24 +822,19 @@ func (a *app) installationHardware(installation, appID string) (label, class, st
 }
 
 func platformName() string {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
+	p, err := hostplatform.Detect()
+	if err != nil || p.PrettyName == "" {
 		return "Linux"
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "PRETTY_NAME=") {
-			return strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
-		}
-	}
-	return "Linux"
+	return p.PrettyName
 }
 
 func packageFamily() string {
-	data, _ := os.ReadFile("/etc/os-release")
-	if strings.Contains(string(data), "ID=arch") {
-		return "pacman"
+	p, err := hostplatform.Detect()
+	if err != nil || p.PackageManager == "" {
+		return "unknown"
 	}
-	return "apt/dpkg"
+	return p.PackageManager
 }
 
 func catalogVisible(id string) bool { return id != "busybox" }
@@ -1042,7 +1038,11 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if release == "" {
-		release = entry.Manifest.Releases[len(entry.Manifest.Releases)-1].Version
+		releaseIndex := len(entry.Manifest.Releases) - 1
+		if len(entry.Manifest.Components) > 0 {
+			releaseIndex = 0
+		}
+		release = entry.Manifest.Releases[releaseIndex].Version
 	}
 	if target := r.URL.Query().Get("target_release"); target != "" {
 		release = target
@@ -1355,6 +1355,14 @@ func (a *app) runInstallationLifecycle(w http.ResponseWriter, r *http.Request, i
 
 func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/installations/"), "/"), "/")
+	if len(parts) == 2 && (parts[1] == "backup" || parts[1] == "restore") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		a.applicationBackupOperation(w, r, parts[0], parts[1])
+		return
+	}
 	if len(parts) == 2 && (parts[1] == "start" || parts[1] == "stop" || parts[1] == "remove") {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method", http.StatusMethodNotAllowed)
@@ -1633,6 +1641,60 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	a.ops(w, r)
 }
 
+func (a *app) applicationBackupOperation(w http.ResponseWriter, r *http.Request, installationID, action string) {
+	var applicationID, releaseID string
+	var generation int
+	if err := a.db.QueryRowContext(r.Context(), `SELECT application_id,release_id,runtime_generation FROM installations WHERE installation_id=?`, installationID).Scan(&applicationID, &releaseID, &generation); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	entry, ok := a.catalog[applicationID]
+	if !ok || entry.Manifest.Backup == nil {
+		http.Error(w, "application backup policy unavailable", http.StatusConflict)
+		return
+	}
+	operationType := "CreateApplicationBackup"
+	request := protocol.Request{Version: 1, ID: operations.NewID(), Operation: operationType, InstanceID: installationID, ApplicationID: applicationID, ReleaseID: releaseID, RuntimeGeneration: generation}
+	if action == "restore" {
+		operationType = "RestoreApplicationBackup"
+		request.Operation = operationType
+		var input struct {
+			BackupID string `json:"backup_id"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil || input.BackupID == "" {
+			http.Error(w, "backup_id is required", http.StatusBadRequest)
+			return
+		}
+		var trailing any
+		if decoder.Decode(&trailing) != io.EOF {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		request.BackupID = input.BackupID
+	}
+	if err := operations.Insert(r.Context(), a.db, request.ID, operationType, installationID); err != nil {
+		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
+		return
+	}
+	response, err := a.callHelper(request)
+	if err == nil && !response.OK {
+		err = fmt.Errorf("helper rejected application backup operation")
+	}
+	status, summary := "succeeded", "application backup operation completed"
+	if err != nil {
+		status, summary = "failed", "application backup operation failed"
+	}
+	_ = operations.Update(r.Context(), a.db, request.ID, status, summary)
+	if err != nil {
+		http.Error(w, "KITPro could not complete the application backup operation", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response.Result)
+}
+
 func (a *app) serviceStatuses(ctx context.Context, installationID string) ([]serviceStatus, error) {
 	var appID string
 	if err := a.db.QueryRowContext(ctx, "SELECT application_id FROM installations WHERE installation_id=?", installationID).Scan(&appID); err != nil {
@@ -1657,7 +1719,7 @@ func (a *app) serviceStatuses(ctx context.Context, installationID string) ([]ser
 	return out, nil
 }
 func (a *app) host(w http.ResponseWriter, r *http.Request) {
-	v, e := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectDocker"})
+	v, e := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectRuntime"})
 	if e != nil {
 		http.Error(w, e.Error(), 503)
 		return

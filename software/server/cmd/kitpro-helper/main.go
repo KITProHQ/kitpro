@@ -10,6 +10,7 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/backup"
 	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
+	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"github.com/kitpro/kitpro/software/server/internal/docker"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
@@ -17,6 +18,8 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/multicontainer"
 	"github.com/kitpro/kitpro/software/server/internal/ownership"
+	"github.com/kitpro/kitpro/software/server/internal/platform"
+	"github.com/kitpro/kitpro/software/server/internal/podman"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 	"golang.org/x/sys/unix"
@@ -29,10 +32,25 @@ import (
 	"time"
 )
 
+var detectPlatform = platform.Detect
+
+var newContainerRuntime = func() containers.Runtime {
+	name, _ := configuredRuntimeName()
+	if name == "podman" {
+		return podman.New()
+	}
+	return docker.New()
+}
+
 func main() {
 	if handleMaintenance(os.Args[1:]) {
 		return
 	}
+	runtimeName, err := configuredRuntimeName()
+	if err != nil {
+		fatal(err.Error())
+	}
+	slog.Info("container runtime selected", "component", "helper", "runtime", runtimeName)
 	sock := env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock")
 	u, e := expectedAPIUID()
 	if e != nil {
@@ -68,6 +86,27 @@ func main() {
 			go serve(c, u, db)
 		}
 	}
+}
+
+func configuredRuntimeName() (string, error) {
+	p, err := detectPlatform()
+	if err != nil {
+		return "", err
+	}
+	return selectRuntime(os.Getenv("KITPRO_CONTAINER_RUNTIME"), p)
+}
+
+func selectRuntime(explicit string, p platform.Platform) (string, error) {
+	if explicit != "" {
+		if explicit != "docker" && explicit != "podman" {
+			return "", fmt.Errorf("unsupported KITPRO_CONTAINER_RUNTIME %q", explicit)
+		}
+		return explicit, nil
+	}
+	if !p.Installable || p.ContainerRuntime == "" {
+		return "", fmt.Errorf("unsupported host platform %s %s", p.ID, p.Version)
+	}
+	return p.ContainerRuntime, nil
 }
 
 func expectedAPIUID() (uint32, error) {
@@ -173,11 +212,13 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 		switch r.Operation {
 		case "Ping":
 			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "ok"}})
-		case "InspectDocker":
-			v, e := docker.New().Version()
+		case "InspectRuntime", "InspectDocker":
+			runtime := newContainerRuntime()
+			v, e := runtime.Version()
 			if e != nil {
 				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 			} else {
+				v["KitproRuntime"] = runtime.Name()
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: v})
 			}
 		case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication":
@@ -189,10 +230,10 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 		case "ReconcileTestWorkload":
 			reconcile(c, db, r)
 		case "GetHardwareInventory":
-			d := docker.New()
+			d := newContainerRuntime()
 			info, err := d.Info()
 			if err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "Docker runtime inventory unavailable"})
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "container runtime inventory unavailable"})
 				break
 			}
 			inv, err := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
@@ -243,6 +284,24 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 			} else {
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"path": path}})
 			}
+		case "CreateApplicationBackup":
+			result, backupErr := createApplicationBackup(context.Background(), db, r)
+			if backupErr != nil {
+				_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='failed' WHERE operation_id=?", r.ID)
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: backupErr.Error()})
+			} else {
+				_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='succeeded' WHERE operation_id=?", r.ID)
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+			}
+		case "RestoreApplicationBackup":
+			result, restoreErr := restoreApplicationBackup(context.Background(), db, r)
+			if restoreErr != nil {
+				_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='failed' WHERE operation_id=?", r.ID)
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: restoreErr.Error()})
+			} else {
+				_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='succeeded' WHERE operation_id=?", r.ID)
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+			}
 		default:
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "operation not permitted"})
 		}
@@ -258,7 +317,7 @@ func hardwareAssignmentView(db *sql.DB, installation string) (map[string]any, er
 		return nil, err
 	}
 	defer rows.Close()
-	info, _ := docker.New().Info()
+	info, _ := newContainerRuntime().Info()
 	inv, _ := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
 	assignments := []map[string]any{}
 	for rows.Next() {
@@ -388,7 +447,7 @@ func validateApplicationPlan(r protocol.Request) error {
 		}
 	}
 	for _, s := range r.Storage {
-		if s.ID == "" || s.ContainerPath == "" || !strings.HasPrefix(s.HostPath, "/srv/kitpro/apps/") || strings.Contains(s.HostPath, "..") || strings.Contains(s.ContainerPath, "..") || strings.Contains(s.HostPath, "docker.sock") || s.ContainerPath == "/" {
+		if s.ID == "" || s.ContainerPath == "" || !strings.HasPrefix(s.HostPath, "/srv/kitpro/apps/") || strings.Contains(s.HostPath, "..") || strings.Contains(s.ContainerPath, "..") || containsRuntimeSocket(s.HostPath) || containsRuntimeSocket(s.ContainerPath) || s.ContainerPath == "/" {
 			return fmt.Errorf("invalid storage mapping")
 		}
 	}
@@ -414,6 +473,15 @@ func runtimeIdentityEqual(got *protocol.RuntimeIdentity, want *manifest.RuntimeI
 	return got.UID == want.UID && got.GID == want.GID
 }
 
+func containsRuntimeSocket(value string) bool {
+	for _, component := range strings.Split(value, "/") {
+		if component == "docker.sock" || component == "podman.sock" || component == "containerd.sock" {
+			return true
+		}
+	}
+	return false
+}
+
 func externalBindingsEqual(got []protocol.ExternalStorageBinding, want []manifest.ExternalStorage) bool {
 	if len(got) != len(want) {
 		return false
@@ -427,19 +495,19 @@ func externalBindingsEqual(got []protocol.ExternalStorageBinding, want []manifes
 }
 
 type runtimeHardware struct {
-	Devices     []docker.DeviceMapping
-	Requests    []docker.DeviceRequest
+	Devices     []containers.DeviceMapping
+	Requests    []containers.DeviceRequest
 	Assignments []hardware.Assignment
 	CPU         []string
 }
 
-func resolveHardware(d *docker.Client, requirements []protocol.HardwareRequirement) (runtimeHardware, error) {
+func resolveHardware(d containers.Runtime, requirements []protocol.HardwareRequirement) (runtimeHardware, error) {
 	if len(requirements) == 0 {
 		return runtimeHardware{}, nil
 	}
 	info, err := d.Info()
 	if err != nil {
-		return runtimeHardware{}, fmt.Errorf("Docker runtime inventory unavailable: %w", err)
+		return runtimeHardware{}, fmt.Errorf("container runtime inventory unavailable: %w", err)
 	}
 	inv, err := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
 	if err != nil {
@@ -457,10 +525,10 @@ func resolveHardware(d *docker.Client, requirements []protocol.HardwareRequireme
 		}
 		out.Assignments = append(out.Assignments, assignment)
 		if assignment.NVIDIARuntime {
-			out.Requests = append(out.Requests, docker.DeviceRequest{Driver: "nvidia", Count: -1, Capabilities: [][]string{{"gpu"}}})
+			out.Requests = append(out.Requests, containers.DeviceRequest{Driver: "nvidia", Count: -1, Capabilities: [][]string{{"gpu"}}})
 		}
 		for _, node := range assignment.Devices {
-			out.Devices = append(out.Devices, docker.DeviceMapping{PathOnHost: node.Path, PathInContainer: node.Path, CgroupPermissions: "rwm"})
+			out.Devices = append(out.Devices, containers.DeviceMapping{PathOnHost: node.Path, PathInContainer: node.Path, CgroupPermissions: "rwm"})
 		}
 	}
 	return out, nil
@@ -511,7 +579,7 @@ func validateHardwareObservation(db *sql.DB, installation, component string, hos
 			continue
 		}
 		if inv == nil {
-			info, infoErr := docker.New().Info()
+			info, infoErr := newContainerRuntime().Info()
 			if infoErr != nil {
 				return fmt.Errorf("accelerator inventory unavailable")
 			}
@@ -727,7 +795,7 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: r.InstanceID, ownership.LabelResource: "application", "com.kitpro.application": r.ApplicationID, "com.kitpro.release": r.ReleaseID, "com.kitpro.runtime-generation": strconv.Itoa(maxGeneration(r.RuntimeGeneration))}
 	gen := maxGeneration(r.RuntimeGeneration)
 	name := "kitpro-" + r.ApplicationID + "-" + r.InstanceID + "-g" + strconv.Itoa(gen)
-	d := docker.New()
+	d := newContainerRuntime()
 	hw, e := resolveHardware(d, r.Hardware)
 	if e != nil {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
@@ -774,9 +842,9 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		return
 	}
 	networkCreated = true
-	mounts := make([]docker.StorageMount, 0, len(r.Storage))
+	mounts := make([]containers.StorageMount, 0, len(r.Storage))
 	for _, s := range r.Storage {
-		mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
+		mounts = append(mounts, containers.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
 	}
 	mounts = append(mounts, externalMounts...)
 	env, e := resolvedEnvironment(db, r.InstanceID, "", r.Environment)
@@ -784,16 +852,16 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
 		return
 	}
-	bindings := map[string][]docker.PortBinding{}
+	bindings := map[string][]containers.PortBinding{}
 	if r.ExposureMode == "loopback" || r.ExposureMode == "lan" {
-		proto, _ := exposure.DockerProtocol(r.ServiceProtocol)
-		bindings[fmt.Sprintf("%d/%s", r.ContainerPort, proto)] = []docker.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
+		proto, _ := exposure.ContainerProtocol(r.ServiceProtocol)
+		bindings[fmt.Sprintf("%d/%s", r.ContainerPort, proto)] = []containers.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
 	}
 	user := ""
 	if r.RunAs != nil {
 		user = strconv.Itoa(r.RunAs.UID) + ":" + strconv.Itoa(r.RunAs.GID)
 	}
-	id, e := d.CreateContainerPlan(docker.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests})
+	id, e := d.CreateContainerPlan(containers.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests})
 	if e == nil {
 		e = d.Start(id)
 	}
@@ -804,7 +872,7 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			host, _ := observed["HostConfig"].(map[string]any)
 			portBindings, _ := host["PortBindings"].(map[string]any)
 			if !exposure.ObservedBindingsExact(exposure.Assignment{Mode: exposure.Mode(r.ExposureMode), Address: r.HostAddress, Port: r.HostPort}, r.ContainerPort, r.ServiceProtocol, portBindings) {
-				e = fmt.Errorf("observed Docker exposure does not match trusted assignment")
+				e = fmt.Errorf("observed container exposure does not match trusted assignment")
 			}
 		}
 	}
@@ -838,7 +906,7 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		if strings.Contains(e.Error(), "address already in use") || strings.Contains(e.Error(), "port is already allocated") {
 			event = "exposure_collision"
 		}
-		slog.Default().Warn("runtime creation failed", "event", event, "operation_id", r.ID, "installation_id", r.InstanceID, "service_id", r.ServiceID, "mode", r.ExposureMode, "host_address", r.HostAddress, "host_port", r.HostPort, "result", "failed", "error_category", "docker")
+		slog.Default().Warn("runtime creation failed", "event", event, "operation_id", r.ID, "installation_id", r.InstanceID, "service_id", r.ServiceID, "mode", r.ExposureMode, "host_address", r.HostAddress, "host_port", r.HostPort, "result", "failed", "error_category", "runtime")
 		_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='failed' WHERE operation_id=?", r.ID)
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 		return
@@ -867,7 +935,7 @@ func validateTrustedMultiRecreation(db *sql.DB, r protocol.Request) error {
 }
 
 // createMultiApplication creates a bounded, dependency-ordered runtime set.
-// It is deliberately separate from the single-container path: no raw Docker
+// It is deliberately separate from the single-container path: no raw runtime
 // objects cross the helper boundary, and every component is revalidated above.
 func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	components := make([]manifest.Component, 0, len(r.Components))
@@ -879,13 +947,13 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
 		return
 	}
-	d := docker.New()
+	d := newContainerRuntime()
 	entries, _ := catalog.Load()
 	manifestComponents := map[string]manifest.Component{}
 	for _, component := range entries[r.ApplicationID].Manifest.Components {
 		manifestComponents[component.ID] = component
 	}
-	externalByComponent := map[string][]docker.StorageMount{}
+	externalByComponent := map[string][]containers.StorageMount{}
 	for _, component := range r.Components {
 		resolved, resolveErr := resolveExternalMounts(db, r.InstanceID, component.ID, r.RuntimeGeneration, manifestComponents[component.ID].ExternalStorage, component.ExternalStorage)
 		if resolveErr != nil {
@@ -967,12 +1035,12 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
 			return
 		}
-		mounts := make([]docker.StorageMount, 0, len(component.Storage))
+		mounts := make([]containers.StorageMount, 0, len(component.Storage))
 		for _, s := range component.Storage {
-			mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
+			mounts = append(mounts, containers.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
 		}
 		mounts = append(mounts, externalByComponent[component.ID]...)
-		bindings := map[string][]docker.PortBinding{}
+		bindings := map[string][]containers.PortBinding{}
 		for _, service := range component.Services {
 			if service.ID == r.ServiceID {
 				if service.ContainerPort != r.ContainerPort || service.Protocol != r.ServiceProtocol {
@@ -980,9 +1048,9 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 					protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "service binding mismatch"})
 					return
 				}
-				proto, _ := exposure.DockerProtocol(service.Protocol)
+				proto, _ := exposure.ContainerProtocol(service.Protocol)
 				if r.ExposureMode != "internal" {
-					bindings[fmt.Sprintf("%d/%s", service.ContainerPort, proto)] = []docker.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
+					bindings[fmt.Sprintf("%d/%s", service.ContainerPort, proto)] = []containers.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
 				}
 			}
 		}
@@ -991,7 +1059,11 @@ func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		if component.RunAs != nil {
 			user = strconv.Itoa(component.RunAs.UID) + ":" + strconv.Itoa(component.RunAs.GID)
 		}
-		id, ce := d.CreateContainerPlan(docker.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Devices: hw.Devices, DeviceRequests: hw.Requests})
+		dependencies := make([]string, 0, len(component.DependsOn))
+		for _, dependency := range component.DependsOn {
+			dependencies = append(dependencies, "kitpro-"+r.ApplicationID+"-"+r.InstanceID+"-"+dependency+"-g"+strconv.Itoa(r.RuntimeGeneration))
+		}
+		id, ce := d.CreateContainerPlan(containers.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Dependencies: dependencies, Devices: hw.Devices, DeviceRequests: hw.Requests})
 		if ce == nil {
 			ce = d.Start(id)
 		}
@@ -1075,7 +1147,7 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 			return
 		}
 		classification, summary := "exact", "all managed components match trusted state"
-		d := docker.New()
+		d := newContainerRuntime()
 		owned := map[string]bool{}
 		network := ""
 		bindingMatches := 0
@@ -1145,9 +1217,9 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 	e := db.QueryRow("SELECT container_id,container_name,network_name,image_digest,exposure_mode,host_address,host_port,service_id,container_port,service_protocol FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&id, &name, &network, &image, &mode, &hostAddress, &hostPort, &serviceID, &containerPort, &serviceProtocol)
 	classification, summary := "missing", "trusted ownership record absent"
 	if e == nil {
-		got, ie := docker.New().Inspect(id)
+		got, ie := newContainerRuntime().Inspect(id)
 		if ie != nil {
-			items, le := docker.New().ListContainers()
+			items, le := newContainerRuntime().ListContainers()
 			if le == nil {
 				for _, item := range items {
 					for _, n := range item.Names {
@@ -1180,7 +1252,7 @@ func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
 					classification, summary = "security_drift", "unexpected or missing host exposure"
 					slog.Default().Warn("exposure drift", "event", "exposure_drift_detected", "installation_id", r.InstanceID, "service_id", serviceID, "mode", mode, "host_address", hostAddress, "host_port", hostPort, "result", "security_drift")
 				}
-				if foreign, ne := docker.New().HasForeignNetworkMember(network, id); ne == nil && foreign {
+				if foreign, ne := newContainerRuntime().HasForeignNetworkMember(network, id); ne == nil && foreign {
 					classification, summary = "security_drift", "unexpected network member"
 				}
 				if classification == "security_drift" { /* preserve drift classification */
@@ -1243,7 +1315,7 @@ func remove(c net.Conn, db *sql.DB, r protocol.Request) {
 			network = n
 		}
 		_ = rows.Close()
-		d := docker.New()
+		d := newContainerRuntime()
 		for _, id := range ids {
 			if id != "" {
 				err = d.Stop(id)
@@ -1275,7 +1347,7 @@ func remove(c net.Conn, db *sql.DB, r protocol.Request) {
 	e := db.QueryRow("SELECT container_id,container_name,network_name FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&id, &name, &network)
 	if e == nil {
 		var got map[string]any
-		got, e = docker.New().Inspect(id)
+		got, e = newContainerRuntime().Inspect(id)
 		if e == nil {
 			cfg, _ := got["Config"].(map[string]any)
 			labels, _ := cfg["Labels"].(map[string]any)
@@ -1285,19 +1357,19 @@ func remove(c net.Conn, db *sql.DB, r protocol.Request) {
 		}
 	}
 	if e == nil {
-		if foreign, checkErr := docker.New().HasForeignNetworkMember(network, id); checkErr != nil {
+		if foreign, checkErr := newContainerRuntime().HasForeignNetworkMember(network, id); checkErr != nil {
 			e = checkErr
 		} else if foreign {
 			e = fmt.Errorf("network security drift")
 		}
 	}
 	if e == nil {
-		e = docker.New().Stop(id)
+		e = newContainerRuntime().Stop(id)
 	}
 	if e == nil && r.Operation == "RemoveApplication" {
-		e = docker.New().Remove(id)
+		e = newContainerRuntime().Remove(id)
 		if e == nil {
-			e = docker.New().RemoveNetwork(network)
+			e = newContainerRuntime().RemoveNetwork(network)
 		}
 		if e == nil {
 			e = markRuntimeRemoved(db, r.InstanceID)
@@ -1311,9 +1383,9 @@ func remove(c net.Conn, db *sql.DB, r protocol.Request) {
 }
 
 // markRuntimeRemoved retains the helper-owned installation identity and its
-// storage/exposure trust anchors while clearing the disposable Docker runtime.
+// storage/exposure trust anchors while clearing the disposable container runtime.
 // A later recreate can therefore prove continuity without adopting state from
-// the control plane or from Docker labels alone.
+// the control plane or from runtime labels alone.
 func markRuntimeRemoved(db *sql.DB, instanceID string) error {
 	_, err := db.Exec(`UPDATE ownership
 		SET container_id='', container_name='', network_name=''
@@ -1334,7 +1406,7 @@ func start(c net.Conn, db *sql.DB, r protocol.Request) {
 			return
 		}
 		defer rows.Close()
-		d := docker.New()
+		d := newContainerRuntime()
 		for rows.Next() {
 			var id, name string
 			if err = rows.Scan(&id, &name); err != nil {
@@ -1354,7 +1426,7 @@ func start(c net.Conn, db *sql.DB, r protocol.Request) {
 	e := db.QueryRow("SELECT container_id,container_name,network_name,exposure_mode,host_address,host_port,container_port,service_protocol FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&id, &name, &network, &mode, &hostAddress, &hostPort, &containerPort, &serviceProtocol)
 	if e == nil {
 		var got map[string]any
-		got, e = docker.New().Inspect(id)
+		got, e = newContainerRuntime().Inspect(id)
 		if e == nil {
 			cfg, _ := got["Config"].(map[string]any)
 			labels, _ := cfg["Labels"].(map[string]any)
@@ -1367,7 +1439,7 @@ func start(c net.Conn, db *sql.DB, r protocol.Request) {
 		}
 	}
 	if e == nil {
-		if foreign, checkErr := docker.New().HasForeignNetworkMember(network, id); checkErr != nil {
+		if foreign, checkErr := newContainerRuntime().HasForeignNetworkMember(network, id); checkErr != nil {
 			e = checkErr
 		} else if foreign {
 			slog.Default().Warn("start blocked by network drift", "event", "network_drift_detected", "operation_id", r.ID, "installation_id", r.InstanceID, "result", "security_drift")
@@ -1375,7 +1447,7 @@ func start(c net.Conn, db *sql.DB, r protocol.Request) {
 		}
 	}
 	if e == nil {
-		e = docker.New().Start(id)
+		e = newContainerRuntime().Start(id)
 	}
 	if e != nil {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
