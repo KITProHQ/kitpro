@@ -288,10 +288,21 @@ func stopInstallationsWithUnavailableStorage(db *sql.DB) {
 			continue
 		}
 		var id string
-		if db.QueryRow(`SELECT container_id FROM ownership WHERE instance_id=?`, installation).Scan(&id) == nil && id != "" {
-			_ = newContainerRuntime().Stop(id)
+		stoppedManaged := false
+		componentRows, e := db.Query(`SELECT c.observed_container_id FROM runtime_components c JOIN runtime_generations g USING(installation_id,runtime_generation) WHERE c.installation_id=? AND g.status='active' ORDER BY c.start_ordinal DESC,c.component_id DESC`, installation)
+		if e == nil {
+			for componentRows.Next() {
+				if componentRows.Scan(&id) == nil && id != "" {
+					_ = newContainerRuntime().Stop(id)
+					stoppedManaged = true
+				}
+			}
+			_ = componentRows.Close()
 		}
-		componentRows, e := db.Query(`SELECT container_id FROM component_ownership WHERE installation_id=?`, installation)
+		if stoppedManaged {
+			continue
+		}
+		componentRows, e = db.Query(`SELECT container_id FROM component_ownership WHERE installation_id=? ORDER BY component_id DESC`, installation)
 		if e == nil {
 			for componentRows.Next() {
 				if componentRows.Scan(&id) == nil && id != "" {

@@ -197,7 +197,8 @@ func createApplicationBackup(ctx context.Context, db *sql.DB, request protocol.R
 	}
 
 	stamp := backupManifest.CreatedAt.Format("20060102T150405Z")
-	filename := plan.Application.ID + "--" + request.InstanceID + "--" + stamp + "--" + request.ID + ".kitpro-backup.tar.gz"
+	operationID := request.SemanticOperationID()
+	filename := plan.Application.ID + "--" + request.InstanceID + "--" + stamp + "--" + operationID + ".kitpro-backup.tar.gz"
 	archivePath := filepath.Join(backupDir, filename)
 	if _, err := appbackup.Create(archivePath, backupManifest, archiveSources, []appbackup.InlineFile{
 		{ArchivePath: "metadata/installation.json", Contents: metadataBytes, Mode: 0600},
@@ -210,14 +211,18 @@ func createApplicationBackup(ctx context.Context, db *sql.DB, request protocol.R
 		_ = os.Remove(archivePath)
 		return nil, err
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO application_backups(backup_id,installation_id,application_id,release_id,runtime_generation,archive_path,archive_sha256,created_at,status) VALUES(?,?,?,?,?,?,?,?, 'complete')`, request.ID, request.InstanceID, plan.Application.ID, plan.ReleaseID, plan.Generation, archivePath, archiveHash, backupManifest.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO application_backups(backup_id,installation_id,application_id,release_id,runtime_generation,archive_path,archive_sha256,created_at,status) VALUES(?,?,?,?,?,?,?,?, 'complete')`, operationID, request.InstanceID, plan.Application.ID, plan.ReleaseID, plan.Generation, archivePath, archiveHash, backupManifest.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 		_ = os.Remove(archivePath)
 		return nil, fmt.Errorf("record application backup: %w", err)
 	}
-	return map[string]any{"backup_id": request.ID, "filename": filename, "sha256": archiveHash, "created_at": backupManifest.CreatedAt.Format(time.RFC3339Nano), "databases": len(databases)}, nil
+	return map[string]any{"backup_id": operationID, "filename": filename, "sha256": archiveHash, "created_at": backupManifest.CreatedAt.Format(time.RFC3339Nano), "databases": len(databases)}, nil
 }
 
 func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.Request) (map[string]any, error) {
+	return restoreApplicationBackupWithFence(ctx, db, request, 0)
+}
+
+func restoreApplicationBackupWithFence(ctx context.Context, db *sql.DB, request protocol.Request, fencingToken int64) (map[string]any, error) {
 	if !backupIDPattern.MatchString(request.BackupID) {
 		return nil, fmt.Errorf("invalid backup identity")
 	}
@@ -277,8 +282,8 @@ func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.
 			continue
 		}
 		extractedPath := filepath.Join(extractRoot, filepath.FromSlash(storage.Manifest.ArchivePath))
-		newPath := storage.HostPath + ".kitpro-restore-new-" + request.ID
-		rollbackPath := storage.HostPath + ".kitpro-restore-rollback-" + request.ID
+		newPath := storage.HostPath + ".kitpro-restore-new-" + request.SemanticOperationID()
+		rollbackPath := storage.HostPath + ".kitpro-restore-rollback-" + request.SemanticOperationID()
 		if _, err := os.Lstat(storage.HostPath); err != nil {
 			return nil, fmt.Errorf("managed restore target unavailable")
 		}
@@ -295,7 +300,11 @@ func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.
 		rollbackPaths[storageKey(storage.Manifest.Component, storage.Manifest.ID)] = rollbackPath
 		stagedDatabases = append(stagedDatabases, appbackup.ManagedSource{Component: storage.Manifest.Component, StorageID: storage.Manifest.ID, Path: newPath})
 	}
+	preserveStaging := false
 	defer func() {
+		if preserveStaging {
+			return
+		}
 		for _, name := range newPaths {
 			_ = removeBackupTree(name)
 		}
@@ -309,10 +318,28 @@ func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.
 			return nil, fmt.Errorf("restored SQLite inventory does not match manifest")
 		}
 	}
+	journaled := fencingToken > 0 && request.OperationID != ""
+	if journaled {
+		if err := beginRestoreJournal(ctx, db, request, fencingToken, plan, secrets, newPaths, rollbackPaths); err != nil {
+			return nil, fmt.Errorf("record restore journal: %w", err)
+		}
+		if err := runRestoreFault("before_first_rename", ""); err != nil {
+			preserveStaging = errors.Is(err, errRestoreInterrupted)
+			return nil, err
+		}
+	}
 
 	runtime := newContainerRuntime()
-	running, err := quiesceBackupRuntime(runtime, &plan)
+	running, err := snapshotBackupRuntime(runtime, &plan, false)
 	if err != nil {
+		return nil, err
+	}
+	if journaled {
+		if err = updateRestoreRuntimeIntent(ctx, db, request.OperationID, fencingToken, running); err != nil {
+			return nil, err
+		}
+	}
+	if err = quiesceRecordedBackupRuntime(runtime, plan, running); err != nil {
 		return nil, err
 	}
 	swapped := make([]managedBackupStorage, 0)
@@ -321,15 +348,21 @@ func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.
 		for i := len(swapped) - 1; i >= 0; i-- {
 			storage := swapped[i]
 			key := storageKey(storage.Manifest.Component, storage.Manifest.ID)
-			failedPath := storage.HostPath + ".kitpro-restore-failed-" + request.ID
+			failedPath := storage.HostPath + ".kitpro-restore-failed-" + request.SemanticOperationID()
 			_ = os.Rename(storage.HostPath, failedPath)
 			_ = os.Rename(rollbackPaths[key], storage.HostPath)
+			if journaled {
+				_ = updateRestoreStep(ctx, db, request.OperationID, key, "rolled_back", "")
+			}
 		}
 		if secretErr := replaceSecrets(ctx, db, request.InstanceID, plan.Secrets); secretErr != nil {
 			cause = fmt.Errorf("%v; secret rollback failed", cause)
 		}
 		if resumeErr := resumeBackupRuntime(runtime, plan, running); resumeErr != nil {
 			cause = fmt.Errorf("%v; application rollback restart failed", cause)
+		}
+		if journaled {
+			_ = updateRestoreOperation(ctx, db, request.OperationID, "rolled_back", cause.Error())
 		}
 		return cause
 	}
@@ -338,15 +371,79 @@ func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.
 			continue
 		}
 		key := storageKey(storage.Manifest.Component, storage.Manifest.ID)
+		if journaled {
+			if err := updateRestoreStep(ctx, db, request.OperationID, key, "original_to_rollback_prepared", ""); err != nil {
+				return nil, rollback(err)
+			}
+			if err := updateRestoreStep(ctx, db, request.OperationID, key, "original_to_rollback_dispatched", "original_to_rollback_dispatched=1"); err != nil {
+				return nil, rollback(err)
+			}
+		}
 		if err := os.Rename(storage.HostPath, rollbackPaths[key]); err != nil {
 			return nil, rollback(fmt.Errorf("stage current managed storage for rollback: %w", err))
+		}
+		if journaled {
+			if err := runRestoreFault("after_original_to_rollback", key); err != nil {
+				if errors.Is(err, errRestoreInterrupted) {
+					preserveStaging = true
+					return nil, err
+				}
+				return nil, rollback(err)
+			}
+			if err := updateRestoreStep(ctx, db, request.OperationID, key, "original_to_rollback_confirmed", "original_to_rollback_confirmed=1"); err != nil {
+				preserveStaging = true
+				return nil, err
+			}
+			if err := updateRestoreStep(ctx, db, request.OperationID, key, "staged_to_active_prepared", ""); err != nil {
+				preserveStaging = true
+				return nil, err
+			}
+			if err := updateRestoreStep(ctx, db, request.OperationID, key, "staged_to_active_dispatched", "staged_to_active_dispatched=1"); err != nil {
+				preserveStaging = true
+				return nil, err
+			}
 		}
 		if err := os.Rename(newPaths[key], storage.HostPath); err != nil {
 			_ = os.Rename(rollbackPaths[key], storage.HostPath)
 			return nil, rollback(fmt.Errorf("activate restored managed storage: %w", err))
 		}
+		if journaled {
+			if err := runRestoreFault("after_staged_to_active", key); err != nil {
+				if errors.Is(err, errRestoreInterrupted) {
+					preserveStaging = true
+					return nil, err
+				}
+				return nil, rollback(err)
+			}
+			if err := updateRestoreStep(ctx, db, request.OperationID, key, "staged_to_active_confirmed", "staged_to_active_confirmed=1"); err != nil {
+				preserveStaging = true
+				return nil, err
+			}
+		}
 		swapped = append(swapped, storage)
 		delete(newPaths, key)
+		if journaled {
+			if err := runRestoreFault("between_storage_slots", key); err != nil {
+				if errors.Is(err, errRestoreInterrupted) {
+					preserveStaging = true
+					return nil, err
+				}
+				return nil, rollback(err)
+			}
+		}
+	}
+	if journaled {
+		if err := updateRestoreOperation(ctx, db, request.OperationID, "runtime_restore_pending", ""); err != nil {
+			preserveStaging = true
+			return nil, err
+		}
+		if err := runRestoreFault("after_all_swaps_before_runtime", ""); err != nil {
+			if errors.Is(err, errRestoreInterrupted) {
+				preserveStaging = true
+				return nil, err
+			}
+			return nil, rollback(err)
+		}
 	}
 	if err := replaceSecrets(ctx, db, request.InstanceID, secrets); err != nil {
 		return nil, rollback(fmt.Errorf("restore generated secrets: %w", err))
@@ -354,13 +451,59 @@ func restoreApplicationBackup(ctx context.Context, db *sql.DB, request protocol.
 	if err := resumeBackupRuntime(runtime, plan, running); err != nil {
 		return nil, rollback(fmt.Errorf("start restored application: %w", err))
 	}
-	for _, storage := range swapped {
-		key := storageKey(storage.Manifest.Component, storage.Manifest.ID)
-		if err := removeBackupTree(rollbackPaths[key]); err != nil {
-			return nil, fmt.Errorf("restore succeeded but rollback cleanup failed: %w", err)
+	if journaled {
+		if err := runRestoreFault("after_runtime_restart", ""); err != nil {
+			if errors.Is(err, errRestoreInterrupted) {
+				preserveStaging = true
+				return nil, err
+			}
+			return nil, rollback(err)
+		}
+		if err := updateRestoreOperation(ctx, db, request.OperationID, "committed", ""); err != nil {
+			preserveStaging = true
+			return nil, err
+		}
+		if err := runRestoreFault("after_restore_commit", ""); err != nil {
+			if errors.Is(err, errRestoreInterrupted) {
+				preserveStaging = true
+				return nil, err
+			}
+			return nil, err
 		}
 	}
-	return map[string]any{"backup_id": request.BackupID, "status": "restored", "application_id": applicationID, "release_id": releaseID}, nil
+	cleanupDeferred := false
+	for _, storage := range swapped {
+		key := storageKey(storage.Manifest.Component, storage.Manifest.ID)
+		if journaled {
+			_ = updateRestoreStep(ctx, db, request.OperationID, key, "cleanup_pending", "cleanup_dispatched=1")
+			if err := runRestoreFault("during_cleanup", key); err != nil {
+				cleanupDeferred = true
+				_, _ = db.ExecContext(ctx, `UPDATE restore_storage_steps SET error_detail=?,updated_at=? WHERE operation_id=? AND storage_key=?`, boundedRestoreError(err.Error()), time.Now().UTC().Format(time.RFC3339Nano), request.OperationID, key)
+				continue
+			}
+		}
+		if err := removeBackupTree(rollbackPaths[key]); err != nil {
+			if !journaled {
+				return nil, fmt.Errorf("restore succeeded but rollback cleanup failed: %w", err)
+			}
+			cleanupDeferred = true
+			_, _ = db.ExecContext(ctx, `UPDATE restore_storage_steps SET error_detail=?,updated_at=? WHERE operation_id=? AND storage_key=?`, boundedRestoreError(err.Error()), time.Now().UTC().Format(time.RFC3339Nano), request.OperationID, key)
+			continue
+		}
+		if journaled {
+			_ = updateRestoreStep(ctx, db, request.OperationID, key, "completed", "cleanup_confirmed=1")
+		}
+	}
+	if journaled {
+		phase := "completed"
+		if cleanupDeferred {
+			phase = "cleanup_pending"
+			_, _ = db.ExecContext(ctx, `UPDATE restore_operations SET phase=?,cleanup_error='rollback cleanup deferred',updated_at=? WHERE operation_id=?`, phase, time.Now().UTC().Format(time.RFC3339Nano), request.OperationID)
+		} else if err := updateRestoreOperation(ctx, db, request.OperationID, phase, ""); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"backup_id": request.BackupID, "status": "restored", "application_id": applicationID, "release_id": releaseID, "cleanup_deferred": cleanupDeferred}, nil
 }
 
 // removeBackupTree reclaims only a caller-selected backup workspace, staging
@@ -390,7 +533,7 @@ func removeBackupTree(name string) error {
 }
 
 func loadApplicationBackupPlan(db *sql.DB, request protocol.Request) (applicationBackupPlan, error) {
-	if !backupIDPattern.MatchString(request.ID) || request.InstanceID == "" || request.ApplicationID == "" || request.ReleaseID == "" || request.RuntimeGeneration < 1 {
+	if !backupIDPattern.MatchString(request.SemanticOperationID()) || request.InstanceID == "" || request.ApplicationID == "" || request.ReleaseID == "" || request.RuntimeGeneration < 1 {
 		return applicationBackupPlan{}, fmt.Errorf("invalid application backup request")
 	}
 	entries, err := catalog.Load()
@@ -403,40 +546,65 @@ func loadApplicationBackupPlan(db *sql.DB, request protocol.Request) (applicatio
 	}
 	plan := applicationBackupPlan{Application: entry.Manifest, ReleaseID: request.ReleaseID, Generation: request.RuntimeGeneration}
 	if len(entry.Manifest.Components) == 0 {
-		var runtimeID, image, applicationID, releaseID string
-		var generation int
-		if err := db.QueryRow(`SELECT container_id,image_digest,application_id,release_id,runtime_generation FROM ownership WHERE instance_id=?`, request.InstanceID).Scan(&runtimeID, &image, &applicationID, &releaseID, &generation); err != nil {
+		owned, ownershipErr := loadSingleRuntime(db, request.InstanceID)
+		if ownershipErr != nil {
 			return applicationBackupPlan{}, fmt.Errorf("trusted application ownership unavailable")
 		}
 		expectedImage, err := releaseImage(entry.Manifest, request.ReleaseID)
-		if err != nil || applicationID != request.ApplicationID || releaseID != request.ReleaseID || generation != request.RuntimeGeneration || image != expectedImage {
+		if err != nil || owned.ApplicationID != request.ApplicationID || owned.ReleaseID != request.ReleaseID || owned.Generation != request.RuntimeGeneration || owned.Image != expectedImage {
 			return applicationBackupPlan{}, fmt.Errorf("trusted application backup identity mismatch")
 		}
-		plan.Components = []ownedBackupComponent{{Manifest: appbackup.Component{ID: "app", ImageDigest: expectedImage}, Runtime: runtimeID}}
+		plan.Components = []ownedBackupComponent{{Manifest: appbackup.Component{ID: "app", ImageDigest: expectedImage}, Runtime: owned.ContainerID}}
 		plan.StartOrder = []string{"app"}
 	} else {
 		if request.ReleaseID != entry.Manifest.Releases[0].Version {
 			return applicationBackupPlan{}, fmt.Errorf("trusted application release mismatch")
 		}
-		rows, err := db.Query(`SELECT component_id,container_id,image_digest,runtime_generation FROM component_ownership WHERE installation_id=? ORDER BY component_id`, request.InstanceID)
+		rows, err := db.Query(`SELECT c.component_id,c.observed_container_id,c.image_digest,g.runtime_generation,c.dependencies_json,c.start_ordinal,g.application_id,g.release_id FROM runtime_components c JOIN runtime_generations g USING(installation_id,runtime_generation) WHERE c.installation_id=? AND g.status='active' ORDER BY c.start_ordinal,c.component_id`, request.InstanceID)
 		if err != nil {
 			return applicationBackupPlan{}, err
 		}
 		owned := map[string]ownedBackupComponent{}
+		persistedOrder := []string{}
 		for rows.Next() {
-			var componentID, runtimeID, image string
-			var generation int
-			if err := rows.Scan(&componentID, &runtimeID, &image, &generation); err != nil {
+			var componentID, runtimeID, image, dependenciesJSON, applicationID, releaseID string
+			var generation, ordinal int
+			if err := rows.Scan(&componentID, &runtimeID, &image, &generation, &dependenciesJSON, &ordinal, &applicationID, &releaseID); err != nil {
 				_ = rows.Close()
 				return applicationBackupPlan{}, err
 			}
-			owned[componentID] = ownedBackupComponent{Manifest: appbackup.Component{ID: componentID, ImageDigest: image}, Runtime: runtimeID}
-			if generation != request.RuntimeGeneration {
+			var dependencies []string
+			if json.Unmarshal([]byte(dependenciesJSON), &dependencies) != nil || ordinal != len(persistedOrder) || applicationID != request.ApplicationID || releaseID != request.ReleaseID || generation != request.RuntimeGeneration {
 				_ = rows.Close()
-				return applicationBackupPlan{}, fmt.Errorf("trusted component generation mismatch")
+				return applicationBackupPlan{}, fmt.Errorf("trusted component generation or topology mismatch")
 			}
+			owned[componentID] = ownedBackupComponent{Manifest: appbackup.Component{ID: componentID, ImageDigest: image, DependsOn: dependencies}, Runtime: runtimeID}
+			persistedOrder = append(persistedOrder, componentID)
 		}
 		_ = rows.Close()
+		if len(owned) == 0 {
+			// Pre-slice installations retain their original evidence until a
+			// trusted topology migration can run. Backups remain available, but
+			// no new lifecycle mutation uses this legacy ownership path.
+			legacyRows, legacyErr := db.Query(`SELECT component_id,container_id,image_digest,runtime_generation FROM component_ownership WHERE installation_id=? ORDER BY component_id`, request.InstanceID)
+			if legacyErr != nil {
+				return applicationBackupPlan{}, legacyErr
+			}
+			for legacyRows.Next() {
+				var componentID, runtimeID, image string
+				var generation int
+				if legacyErr = legacyRows.Scan(&componentID, &runtimeID, &image, &generation); legacyErr != nil {
+					legacyRows.Close()
+					return applicationBackupPlan{}, legacyErr
+				}
+				if generation != request.RuntimeGeneration {
+					legacyRows.Close()
+					return applicationBackupPlan{}, fmt.Errorf("trusted component generation mismatch")
+				}
+				owned[componentID] = ownedBackupComponent{Manifest: appbackup.Component{ID: componentID, ImageDigest: image}, Runtime: runtimeID}
+			}
+			_ = legacyRows.Close()
+		}
 		componentGraph := make([]manifest.Component, 0, len(entry.Manifest.Components))
 		for _, component := range entry.Manifest.Components {
 			ownedComponent, present := owned[component.ID]
@@ -444,16 +612,25 @@ func loadApplicationBackupPlan(db *sql.DB, request protocol.Request) (applicatio
 			if !present || imageErr != nil || ownedComponent.Manifest.ImageDigest != expectedImage {
 				return applicationBackupPlan{}, fmt.Errorf("trusted component backup identity mismatch")
 			}
-			ownedComponent.Manifest.DependsOn = append([]string(nil), component.DependsOn...)
+			if len(ownedComponent.Manifest.DependsOn) == 0 && len(component.DependsOn) > 0 {
+				ownedComponent.Manifest.DependsOn = append([]string(nil), component.DependsOn...)
+			}
+			if !sameStringSet(ownedComponent.Manifest.DependsOn, component.DependsOn) {
+				return applicationBackupPlan{}, fmt.Errorf("trusted component topology mismatch")
+			}
 			plan.Components = append(plan.Components, ownedComponent)
 			componentGraph = append(componentGraph, manifest.Component{ID: component.ID, DependsOn: component.DependsOn})
 		}
 		if len(owned) != len(entry.Manifest.Components) {
 			return applicationBackupPlan{}, fmt.Errorf("trusted component count mismatch")
 		}
-		plan.StartOrder, err = multicontainer.StartOrder(componentGraph)
-		if err != nil {
-			return applicationBackupPlan{}, err
+		if len(persistedOrder) > 0 {
+			plan.StartOrder = persistedOrder
+		} else {
+			plan.StartOrder, err = multicontainer.StartOrder(componentGraph)
+			if err != nil {
+				return applicationBackupPlan{}, err
+			}
 		}
 	}
 	plan.Storage, err = backupStoragePlan(entry.Manifest, request.InstanceID)
@@ -668,6 +845,32 @@ func quiesceBackupRuntime(runtime containers.Runtime, plan *applicationBackupPla
 	return snapshotBackupRuntime(runtime, plan, true)
 }
 
+// quiesceRecordedBackupRuntime stops only the components whose running intent
+// was already persisted in the restore journal. Recovery can therefore resume
+// them even if the helper exits during the first stop.
+func quiesceRecordedBackupRuntime(runtime containers.Runtime, plan applicationBackupPlan, running map[string]bool) error {
+	byID := map[string]ownedBackupComponent{}
+	for _, component := range plan.Components {
+		byID[component.Manifest.ID] = component
+	}
+	for i := len(plan.StartOrder) - 1; i >= 0; i-- {
+		component := byID[plan.StartOrder[i]]
+		if component.Runtime == "" || !running[component.Manifest.ID] {
+			continue
+		}
+		if err := runtime.Stop(component.Runtime); err != nil {
+			_ = resumeBackupRuntime(runtime, plan, running)
+			return fmt.Errorf("stop application for backup: %w", err)
+		}
+		observed, err := runtime.Inspect(component.Runtime)
+		if err != nil || runtimeRunning(observed) {
+			_ = resumeBackupRuntime(runtime, plan, running)
+			return fmt.Errorf("application did not quiesce")
+		}
+	}
+	return nil
+}
+
 func snapshotBackupRuntime(runtime containers.Runtime, plan *applicationBackupPlan, stop bool) (map[string]bool, error) {
 	running := map[string]bool{}
 	byID := map[string]*ownedBackupComponent{}
@@ -742,7 +945,7 @@ func resumeBackupRuntime(runtime containers.Runtime, plan applicationBackupPlan,
 		}
 		observed, err := runtime.Inspect(component.Runtime)
 		if err != nil || !runtimeRunning(observed) {
-			return fmt.Errorf("application runtime did not become healthy")
+			return fmt.Errorf("application runtime did not return to the running state")
 		}
 	}
 	return nil
@@ -752,6 +955,21 @@ func runtimeRunning(observed map[string]any) bool {
 	state, _ := observed["State"].(map[string]any)
 	running, _ := state["Running"].(bool)
 	return running
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	first, second := append([]string(nil), left...), append([]string(nil), right...)
+	sort.Strings(first)
+	sort.Strings(second)
+	for index := range first {
+		if first[index] != second[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateRestoreManifest(backup appbackup.Manifest, request protocol.Request, plan applicationBackupPlan) error {
