@@ -50,6 +50,7 @@ grep -q '^  deny network inet6,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpr
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q 'apparmor_parser -r -W -T' "$unpack/control/postinst"
+grep -q '^systemctl daemon-reload$' "$unpack/control/postinst"
 if grep -R -E '__API_UID__|RestrictSUIDSGID|docker group|0\.0\.0\.0' "$unpack/data/usr/lib/systemd/system" "$unpack/data/etc/default"; then
     echo "unsafe or unresolved package configuration found" >&2
     exit 1

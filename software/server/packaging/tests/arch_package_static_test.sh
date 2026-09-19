@@ -29,6 +29,7 @@ grep -q 'usr/share/man/man8/kitpro-api.8' "$arch_dir/PKGBUILD"
 grep -q 'usr/share/man/man8/kitpro-helper.8' "$arch_dir/PKGBUILD"
 grep -q 'invalid source commit' "$server_dir/packaging/build-arch-package.sh"
 grep -q 'invalid source epoch' "$server_dir/packaging/build-arch-package.sh"
+grep -Fq '[[ -e "$repo_dir/$path" ]] || continue' "$server_dir/packaging/build-arch-package.sh"
 grep -q 'install -Dm0644 /usr/share/kitpro-server/kitpro-server.conf /etc/conf.d/kitpro-server' "$arch_dir/kitpro-server.install"
 if grep -E 'rm .*/srv/kitpro|rm -rf /var/lib/kitpro' "$arch_dir/kitpro-server.install"; then
     printf 'Arch removal deletes persistent or trusted state\n' >&2

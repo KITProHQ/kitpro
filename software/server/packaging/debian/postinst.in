@@ -43,6 +43,7 @@ runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
 
 deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service >/dev/null || true
 deb-systemd-helper enable kitpro-helper.socket kitpro-api.service >/dev/null
+systemctl daemon-reload
 deb-systemd-invoke restart kitpro-helper.socket
 deb-systemd-invoke restart kitpro-api.service
 

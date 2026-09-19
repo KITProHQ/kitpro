@@ -55,6 +55,7 @@ fi | while IFS= read -r -d '' path; do
     case "$path" in
         software/server/dist/*|software/server/.arch-build/*|software/server/packaging/arch/*.tar.*|software/server/packaging/arch/pkg/*|software/server/packaging/arch/src/*) continue ;;
     esac
+    [[ -e "$repo_dir/$path" ]] || continue
     install -D -m "$(stat -c '%a' "$repo_dir/$path")" "$repo_dir/$path" "$source_root/$path"
 done
 
