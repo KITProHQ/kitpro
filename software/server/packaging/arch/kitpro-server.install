@@ -15,22 +15,36 @@ check_prerequisites() {
     fi
 }
 
-prepare_upgrade_state() {
-    local target_version=$1
-    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
-    if [[ -r /etc/conf.d/kitpro-server ]]; then
-        # shellcheck disable=SC1091
-        source /etc/conf.d/kitpro-server
+require_upgrade_approval() {
+    local old_version=$1 new_version=$2
+    local approval=/run/kitpro/upgrade-approved
+    local key value format='' approved_old='' approved_target='' created_at=''
+    if [[ ! -f "$approval" || -L "$approval" ]]; then
+        printf 'kitpro-server: upgrade preflight approval is missing; use the checksummed KITPro upgrade wrapper\n' >&2
+        return 1
     fi
-    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
-    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
-    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}"
-    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}"
-    if [[ -f "$KITPRO_CONTROL_DB" ]]; then
-        runuser -u kitpro-api -- /usr/bin/kitpro-api --prepare-upgrade "$target_version"
+    if [[ $(stat -c '%u:%a' "$approval") != 0:600 ]]; then
+        printf 'kitpro-server: upgrade preflight approval has unsafe ownership or permissions\n' >&2
+        return 1
     fi
-    if [[ -f "$KITPRO_HELPER_DB" ]]; then
-        /usr/libexec/kitpro-helper --prepare-upgrade "$target_version"
+    while IFS='=' read -r key value; do
+        case "$key" in
+            format) format=$value ;;
+            old_version) approved_old=$value ;;
+            target_version) approved_target=$value ;;
+            created_at) created_at=$value ;;
+        esac
+    done < "$approval"
+    if [[ "$format" != 1 || "$approved_old" != "$old_version" || \
+        ( "$approved_target" != pending && "$approved_target" != "$new_version" ) || \
+        ! "$created_at" =~ ^[0-9]+$ ]]; then
+        printf 'kitpro-server: upgrade preflight approval is invalid or stale\n' >&2
+        return 1
+    fi
+    local approval_age=$(( $(date +%s) - 10#$created_at ))
+    if (( approval_age < 0 || approval_age > 3600 )); then
+        printf 'kitpro-server: upgrade preflight approval is invalid or stale\n' >&2
+        return 1
     fi
 }
 
@@ -84,11 +98,15 @@ pre_upgrade() {
         printf 'kitpro-server: downgrade from %s to %s is unsupported\n' "$old_version" "$new_version" >&2
         return 1
     fi
-    prepare_upgrade_state "$new_version"
+    require_upgrade_approval "$old_version" "$new_version"
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
 }
 
 post_upgrade() {
+    local new_version=$1 old_version=$2
+    require_upgrade_approval "$old_version" "$new_version"
     configure_package
+    rm -f /run/kitpro/upgrade-approved
 }
 
 pre_remove() {

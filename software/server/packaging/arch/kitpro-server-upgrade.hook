@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = kitpro-server
+
+[Action]
+Description = Validating and backing up KITPro state before upgrade...
+When = PreTransaction
+Exec = /usr/libexec/kitpro-arch-upgrade --preflight-installed
+AbortOnFail

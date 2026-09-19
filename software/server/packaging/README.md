@@ -28,7 +28,8 @@ unprivileged user with:
 
 The builder creates a deterministic source archive, substitutes its checksum
 into the build-only PKGBUILD, invokes `makepkg`, and writes the package,
-SHA-256, and build metadata under `dist/`. Outside a Git checkout,
+the alpha.11 bootstrap upgrade wrapper, their SHA-256 files, and build metadata
+under `dist/`. Outside a Git checkout,
 `KITPRO_SOURCE_COMMIT` and `SOURCE_DATE_EPOCH` are mandatory so source-tar
 builds remain attributable and reproducible. See
 [`docs/install-arch-package.md`](../../../docs/install-arch-package.md).

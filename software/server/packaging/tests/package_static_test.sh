@@ -67,5 +67,12 @@ fi
 for script in preinst postinst prerm postrm; do
     sh -n "$unpack/control/$script"
 done
+grep -q '^set -eu$' "$unpack/control/preinst"
+grep -q 'runuser -u kitpro-api -- /usr/bin/kitpro-api --prepare-upgrade' "$unpack/control/preinst"
+grep -q '^        /usr/libexec/kitpro-helper --prepare-upgrade' "$unpack/control/preinst"
+if grep -E 'prepare-upgrade.*\|\| true|prepare-upgrade.*&& true' "$unpack/control/preinst"; then
+    echo "Debian preinst suppresses a mandatory backup failure" >&2
+    exit 1
+fi
 
 echo "package static tests: PASS"

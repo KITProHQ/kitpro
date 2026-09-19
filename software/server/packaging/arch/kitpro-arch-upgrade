@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly approval_version=1
+readonly embedded_package_sha256='@KITPRO_PACKAGE_SHA256@'
+
+die() {
+    printf 'KITPro upgrade aborted: %s\n' "$1" >&2
+    exit 1
+}
+
+test_mode=false
+root_prefix=
+systemctl_command=/usr/bin/systemctl
+runuser_command=/usr/bin/runuser
+pacman_command=/usr/bin/pacman
+bsdtar_command=/usr/bin/bsdtar
+
+if [[ ${KITPRO_UPGRADE_TESTING:-} == 1 ]]; then
+    (( EUID != 0 )) || die 'test overrides are not accepted when running as root.'
+    test_mode=true
+    root_prefix=${KITPRO_TEST_ROOT:?KITPRO_TEST_ROOT is required in test mode}
+    systemctl_command=${KITPRO_TEST_SYSTEMCTL:?KITPRO_TEST_SYSTEMCTL is required in test mode}
+    runuser_command=${KITPRO_TEST_RUNUSER:?KITPRO_TEST_RUNUSER is required in test mode}
+    pacman_command=${KITPRO_TEST_PACMAN:?KITPRO_TEST_PACMAN is required in test mode}
+    bsdtar_command=${KITPRO_TEST_BSDTAR:?KITPRO_TEST_BSDTAR is required in test mode}
+elif (( EUID != 0 )); then
+    die 'run this upgrade command with sudo.'
+fi
+
+path_in_root() {
+    printf '%s%s\n' "$root_prefix" "$1"
+}
+
+approval_path() {
+    path_in_root /run/kitpro/upgrade-approved
+}
+
+restart_previously_active_services() {
+    local approval key value
+    approval=$(approval_path)
+    if [[ -f "$approval" && -z ${api_was_active+x} ]]; then
+        api_was_active=false
+        helper_was_active=false
+        socket_was_active=false
+        while IFS='=' read -r key value; do
+            case "$key" in
+                api_was_active) api_was_active=$value ;;
+                helper_was_active) helper_was_active=$value ;;
+                socket_was_active) socket_was_active=$value ;;
+            esac
+        done < "$approval"
+    fi
+    [[ ${helper_was_active:-false} != true ]] || "$systemctl_command" start kitpro-helper.service 2>/dev/null || true
+    [[ ${socket_was_active:-false} != true ]] || "$systemctl_command" start kitpro-helper.socket 2>/dev/null || true
+    [[ ${api_was_active:-false} != true ]] || "$systemctl_command" start kitpro-api.service 2>/dev/null || true
+}
+
+run_api() {
+    local binary=$1
+    shift
+    if [[ "$test_mode" == true ]]; then
+        "$runuser_command" "$binary" "$@"
+    else
+        "$runuser_command" -u kitpro-api -- "$binary" "$@"
+    fi
+}
+
+preflight() {
+    local api_binary=$1 helper_binary=$2 target_version=$3 old_version=$4
+    local approval config_path
+    approval=$(approval_path)
+    config_path=$(path_in_root /etc/conf.d/kitpro-server)
+
+    [[ -x "$api_binary" ]] || die "incoming API binary is unavailable: $api_binary"
+    [[ -x "$helper_binary" ]] || die "incoming helper binary is unavailable: $helper_binary"
+    [[ "$target_version" =~ ^[0-9A-Za-z.+:~_-]{1,64}$ ]] || die 'target package version is invalid.'
+    [[ "$old_version" =~ ^[0-9A-Za-z.+:~_-]{1,64}$ ]] || die 'installed package version is invalid.'
+
+    if [[ -r "$config_path" ]]; then
+        # This root-owned package configuration contains assignments only.
+        # shellcheck disable=SC1090
+        source "$config_path"
+    fi
+    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-$(path_in_root /var/lib/kitpro-api/control.db)}"
+    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-$(path_in_root /var/lib/kitpro-helper/helper.db)}"
+    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-api/backups)}"
+    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-helper/backups)}"
+
+    install -d -m 0755 "$(dirname -- "$approval")"
+    rm -f -- "$approval"
+
+    api_was_active=false
+    helper_was_active=false
+    socket_was_active=false
+    "$systemctl_command" is-active --quiet kitpro-api.service && api_was_active=true || true
+    "$systemctl_command" is-active --quiet kitpro-helper.service && helper_was_active=true || true
+    "$systemctl_command" is-active --quiet kitpro-helper.socket && socket_was_active=true || true
+    "$systemctl_command" stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+
+    preflight_succeeded=false
+    trap 'if [[ $preflight_succeeded != true ]]; then rm -f -- "$(approval_path)"; restart_previously_active_services; printf "KITPro upgrade aborted: existing state failed integrity/backup validation. The installed package and databases were left unchanged.\nRecovery: /usr/share/doc/kitpro-server/install-arch-package.md\n" >&2; fi' EXIT HUP INT TERM
+
+    # Verify every existing database before creating any backup. A corrupt
+    # helper database therefore cannot leave a control backup that suggests the
+    # complete package preflight succeeded.
+    if [[ -f "$KITPRO_CONTROL_DB" ]]; then
+        if ! run_api "$api_binary" --verify-database; then
+            printf 'Control database failed integrity validation: %s\n' "$KITPRO_CONTROL_DB" >&2
+            return 1
+        fi
+    fi
+    if [[ -f "$KITPRO_HELPER_DB" ]]; then
+        if ! "$helper_binary" --verify-database; then
+            printf 'Helper database failed integrity validation: %s\n' "$KITPRO_HELPER_DB" >&2
+            return 1
+        fi
+    fi
+    if [[ -f "$KITPRO_CONTROL_DB" ]]; then
+        if ! run_api "$api_binary" --prepare-upgrade "$target_version"; then
+            printf 'Control database backup failed validation: %s\n' "$KITPRO_CONTROL_DB" >&2
+            return 1
+        fi
+    fi
+    if [[ -f "$KITPRO_HELPER_DB" ]]; then
+        if ! "$helper_binary" --prepare-upgrade "$target_version"; then
+            printf 'Helper database backup failed validation: %s\n' "$KITPRO_HELPER_DB" >&2
+            return 1
+        fi
+    fi
+
+    local temporary_approval
+    temporary_approval=$(mktemp "${approval}.partial.XXXXXX")
+    chmod 0600 "$temporary_approval"
+    printf 'format=%s\nold_version=%s\ntarget_version=%s\ncreated_at=%s\napi_was_active=%s\nhelper_was_active=%s\nsocket_was_active=%s\n' \
+        "$approval_version" "$old_version" "$target_version" "$(date +%s)" \
+        "$api_was_active" "$helper_was_active" "$socket_was_active" > "$temporary_approval"
+    mv -f -- "$temporary_approval" "$approval"
+    preflight_succeeded=true
+    trap - EXIT HUP INT TERM
+    printf 'KITPro upgrade preflight completed successfully.\n'
+}
+
+preflight_with_error_report() {
+    local api_binary=$1 helper_binary=$2 target_version=$3 old_version=$4
+    preflight "$api_binary" "$helper_binary" "$target_version" "$old_version"
+}
+
+installed_version() {
+    "$pacman_command" -Q kitpro-server 2>/dev/null | awk 'NF >= 2 {print $2}'
+}
+
+case ${1:-} in
+    --preflight-installed)
+        old_version=$(installed_version)
+        [[ -n "$old_version" ]] || die 'the installed KITPro package version could not be determined.'
+        preflight_with_error_report \
+            "$(path_in_root /usr/bin/kitpro-api)" \
+            "$(path_in_root /usr/libexec/kitpro-helper)" \
+            pending "$old_version"
+        ;;
+    --preflight-extracted)
+        (( $# == 4 )) || die 'invalid extracted-preflight arguments.'
+        preflight_with_error_report "$2/usr/bin/kitpro-api" "$2/usr/libexec/kitpro-helper" "$3" "$4"
+        ;;
+    '')
+        die 'an Arch package path is required.'
+        ;;
+    *)
+        (( $# == 1 )) || die 'exactly one Arch package path is required.'
+        package=$1
+        [[ -f "$package" ]] || die "package does not exist: $package"
+        package=$(readlink -f -- "$package")
+        expected_package_sha256=$embedded_package_sha256
+        if [[ "$test_mode" == true ]]; then
+            expected_package_sha256=${KITPRO_TEST_EXPECTED_PACKAGE_SHA256:?KITPRO_TEST_EXPECTED_PACKAGE_SHA256 is required in test mode}
+        fi
+        [[ "$expected_package_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'this is not a package-bound KITPro upgrade wrapper.'
+        actual_package_sha256=$(sha256sum "$package" | awk '{print $1}')
+        [[ "$actual_package_sha256" == "$expected_package_sha256" ]] || die 'package SHA-256 does not match this upgrade wrapper.'
+        target_name=$("$pacman_command" -Qp --print-format '%n' "$package")
+        target_version=$("$pacman_command" -Qp --print-format '%v' "$package")
+        [[ "$target_name" == kitpro-server ]] || die "package is not kitpro-server: $target_name"
+
+        old_version=$(installed_version || true)
+        if [[ -z "$old_version" ]]; then
+            exec "$pacman_command" -U -- "$package"
+        fi
+
+        install -d -m 0755 "$(path_in_root /run/kitpro)"
+        transaction_dir=$(mktemp -d "$(path_in_root /run/kitpro)/upgrade-transaction.XXXXXX")
+        transaction_root="$transaction_dir/root"
+        hook_dir="$transaction_dir/hooks"
+        chmod 0755 "$transaction_dir"
+        install -d -m 0755 "$transaction_root"
+        install -d -m 0700 "$hook_dir"
+        wrapper_succeeded=false
+        trap 'if [[ $wrapper_succeeded != true ]]; then restart_previously_active_services; fi; rm -f -- "$(approval_path)"; rm -rf -- "$transaction_dir"' EXIT HUP INT TERM
+        "$bsdtar_command" -xf "$package" -C "$transaction_root" usr/bin/kitpro-api usr/libexec/kitpro-helper
+        install -m 0755 "$0" "$transaction_dir/preflight"
+        cat > "$hook_dir/90-kitpro-server-bootstrap-upgrade.hook" <<EOF
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = kitpro-server
+
+[Action]
+Description = Validating and backing up KITPro state before upgrade...
+When = PreTransaction
+Exec = $transaction_dir/preflight --preflight-extracted $transaction_root $target_version $old_version
+AbortOnFail
+EOF
+        "$pacman_command" --hookdir "$hook_dir" -U -- "$package"
+        wrapper_succeeded=true
+        ;;
+esac

@@ -21,9 +21,14 @@ Requirements: x86_64, a fully updated system using official repositories, `linux
 ```sh
 sudo pacman -Syu
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./kitpro-server-VERSION-1-x86_64.pkg.tar.zst
+sudo ./kitpro-server-VERSION-1-upgrade.sh \
+  ./kitpro-server-VERSION-1-x86_64.pkg.tar.zst
 sudo systemctl status kitpro-api kitpro-helper
 ```
+
+Use the checksummed upgrade wrapper when upgrading an existing KITPro package.
+Fresh installs may use `sudo pacman -U` directly. Alpha.12 installs a permanent
+pre-transaction validation hook for future upgrades.
 
 Reboot into `linux-lts` after installing or changing the kernel/AppArmor boundary before expecting the helper to pass readiness checks.
 

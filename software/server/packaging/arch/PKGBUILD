@@ -38,6 +38,8 @@ package() {
     install -Dm0644 "$source_root/packaging/apparmor/kitpro-helper" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-helper"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.conf" "$pkgdir/usr/share/kitpro-server/kitpro-server.conf"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.sysusers" "$pkgdir/usr/lib/sysusers.d/kitpro-server.conf"
+    install -Dm0755 "$source_root/packaging/arch/kitpro-arch-upgrade" "$pkgdir/usr/libexec/kitpro-arch-upgrade"
+    install -Dm0644 "$source_root/packaging/arch/kitpro-server-upgrade.hook" "$pkgdir/usr/share/libalpm/hooks/90-kitpro-server-upgrade.hook"
     install -Dm0644 "$source_root/README.md" "$pkgdir/usr/share/doc/kitpro-server/README.md"
     install -Dm0644 "$srcdir/${pkgname}-${pkgver}/docs/install-arch-package.md" "$pkgdir/usr/share/doc/kitpro-server/install-arch-package.md"
     install -Dm0644 "$source_root/packaging/debian/kitpro-api.8" "$pkgdir/usr/share/man/man8/kitpro-api.8"
