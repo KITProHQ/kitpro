@@ -1,12 +1,19 @@
 # Install KITPro Server on Debian 13
 
-KITPro Server supports Debian 13 on amd64. Rocky Linux 10 and Podman remain
-Experimental. Download the package and checksum file from the
-[v0.1.0-alpha.12 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12).
+KITPro Server's current public `.deb` baseline supports Debian 13 on amd64.
+Ubuntu Server 26.04 LTS has development validation evidence and uses the same
+`.deb` format, but it is not currently part of the public support baseline.
+Rocky Linux 10 remains Experimental.
+Use the filename and checksum from the [current public release](https://github.com/KITProHQ/kitpro/releases).
+
+> KITPro Server is active alpha software. Breaking changes and incomplete
+> workflows may occur. Review the [alpha.12 current state](product/kitpro-server-current-state.md)
+> and [known limitations](release/known-limitations.md) before using it with
+> important data.
 
 ## Prerequisites
 
-- Debian 13 or Ubuntu Server 26.04 LTS on amd64, with systemd and AppArmor enabled
+- Debian 13 on amd64, with systemd and AppArmor enabled
 - a compatible rootful Docker Engine that is running and exposes its local Unix
   socket
 - root or sudo access for package installation
@@ -16,41 +23,18 @@ package. Debian's `docker.io` and Docker Inc.'s `docker-ce` can both provide a
 compatible engine. KITPro verifies that Docker is active before installation;
 it never installs Docker or adds `kitpro-api` to the `docker` group.
 
-## Fresh alpha.12 install
+## Install
 
-These commands are for a new installation. Existing alpha.11 users must use
-the guarded upgrade path in the next section.
+These commands are for a fresh alpha.12 installation. If this host runs
+alpha.11, use the [guarded alpha.11 to alpha.12 transition](upgrade-uninstall-debian-package.md#upgrade-from-alpha11-to-alpha12).
+Raw `apt install` and `dpkg -i` transitions from alpha.11 are unsupported.
+
+Verify the adjacent checksum, then install the local artifact:
 
 ```sh
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-server_0.1.0.alpha12_amd64.deb
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-alpha12-SHA256SUMS
 sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
 sudo apt install ./kitpro-server_0.1.0.alpha12_amd64.deb
 ```
-
-GitHub exposes `0.1.0.alpha12` in the filename. The installed Debian package
-version is `0.1.0~alpha12`.
-
-## Upgrade from alpha.11
-
-Do not use raw `apt install` or `dpkg -i` for this transition. Download the
-package-bound wrapper and the alpha.12 package, verify both, then run:
-
-```sh
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-debian-upgrade
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-server_0.1.0.alpha12_amd64.deb
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-alpha12-SHA256SUMS
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-chmod +x kitpro-debian-upgrade
-sudo ./kitpro-debian-upgrade ./kitpro-server_0.1.0.alpha12_amd64.deb
-```
-
-The wrapper validates the existing state, creates and verifies the complete
-backup set, checks the exact package hash and metadata, and invokes APT only
-after preflight succeeds. Alpha.11 schema 7 to alpha.12 schema 13 migration is
-supported and validated. Downgrading after migration is unsupported.
-
-## What installation changes
 
 Installation creates the `kitpro-api` system account, loads the helper's
 AppArmor profile, creates state directories through tmpfiles, initializes both
@@ -113,7 +97,7 @@ Check embedded build metadata with:
 
 ## Ubuntu development-evidence note
 
-Ubuntu 26.04 certification used the same package, Docker Engine 29.8.0, and an
+Ubuntu 26.04 validation used the same package, Docker Engine 29.8.0, and an
 inactive UFW policy. Exact-address loopback and LAN publications produced
 exact-address Docker nftables DNAT rules and no wildcard binding. Docker warns
 that published container traffic can bypass UFW's normal INPUT/OUTPUT chains,
@@ -121,4 +105,4 @@ so administrators must not treat UFW alone as the policy boundary for a
 KITPro-published application. KITPro's Phase 1 boundary is the exact bind
 address and assigned port; hosts with custom UFW or nftables policy require a
 separate compatibility check before enabling LAN exposure. This evidence does
-not make Ubuntu part of the current public support baseline.
+not make Ubuntu a supported public platform.

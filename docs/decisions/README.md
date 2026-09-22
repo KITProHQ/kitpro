@@ -11,7 +11,7 @@ This directory contains architecture decision records for KITPro. Proposed recor
 | [ADR-0003](0003-privileged-helper-protocol.md) | Privileged helper protocol | Accepted; production helper and supported-platform validation passed |
 | [ADR-0004](0004-docker-integration.md) | Docker integration | Accepted; production adapter and supported-platform validation passed |
 | [ADR-0016](0016-durable-state-and-reconciliation.md) | Durable state and reconciliation | Accepted; disposable state-machine fixture passed |
-| [ADR-0017](0017-phase-1-host-compatibility.md) | Phase 1 host compatibility | Accepted: Debian 13 primary; Ubuntu 26.04 LTS and fully updated Arch Linux with `linux-lts` supported; Rocky Linux 10 experimental |
+| [ADR-0017](0017-phase-1-host-compatibility.md) | Phase 1 host compatibility | Accepted architecture decision. Public alpha.12 designation: Debian and Arch supported; Ubuntu development and validation only; Rocky and Podman Experimental. |
 | [ADR-0018](0018-security-boundaries.md) | Security boundaries | Accepted |
 | [ADR-0019](0019-helper-mandatory-access-control.md) | Helper mandatory-access-control confinement | Accepted; Debian, Ubuntu, and Arch require enforcing AppArmor; Rocky requires an enforcing SELinux domain before experimental promotion |
 | [ADR-0015](0015-api-design.md) | Control-plane API style | Accepted: versioned REST/JSON with operation resources |

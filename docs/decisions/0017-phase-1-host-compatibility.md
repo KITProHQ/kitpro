@@ -1,5 +1,10 @@
 # ADR-0017: Phase 1 host compatibility
 
+> Public-status update for alpha.12: Debian 13 and Arch Linux with `linux-lts`
+> are the supported baseline. Ubuntu 26.04 LTS has development and validation
+> evidence only. Rocky Linux 10 and Podman are Experimental. The decision text
+> below preserves the earlier architecture decision and validation context.
+
 - Status: Accepted
 - Date: 2026-09-12
 - Owners: Josh
@@ -35,10 +40,11 @@ Phase 1 uses this reference host:
 
 Application data, media, photos, databases, and backups require separate capacity planning. The 20 GiB system floor does not include those workloads.
 
-### Additional supported platform
+### Original additional platform decision
 
-Ubuntu Server 26.04 LTS on `amd64` is supported by the same native `.deb` as
-Debian 13. Certification covered Docker installation, package lifecycle,
+Ubuntu Server 26.04 LTS on `amd64` was originally accepted for the same native
+`.deb` as Debian 13. For alpha.12, it has development and validation evidence
+only and is not in the public support baseline. Certification covered Docker installation, package lifecycle,
 AppArmor and systemd confinement, authentication, FreshRSS lifecycle and
 exposure, persistent state, backup, and reboot recovery. Ubuntu's Docker/UFW
 interaction remains an operator-visible caveat: exact-address publication is
@@ -93,7 +99,7 @@ An officially supported host satisfies every row in this table.
 
 | Area | Supported boundary |
 | --- | --- |
-| Distribution | Debian 13 stable; Ubuntu Server 26.04 LTS with current security updates and a supported point release; or fully updated Arch Linux using current official repositories |
+| Distribution | Supported for alpha.12: Debian 13 stable or fully updated Arch Linux using current official repositories. Development and validation only: Ubuntu Server 26.04 LTS with current security updates. |
 | CPU architecture | `amd64`/`x86_64` |
 | Init and service manager | systemd running as PID 1 |
 | Control groups | cgroup v2 unified hierarchy with the CPU, memory, I/O, and process-count controllers available to the runtime |

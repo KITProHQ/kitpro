@@ -11,7 +11,7 @@ Companion automation repository: `asciinema-demo-automation`. Canonical public s
 | KITPro homepage | KITPro as the personal-infrastructure umbrella | <https://kitpro.us/> | Yes; live browser-validated | `browse goto https://kitpro.us/` | Browser video/still | None | Opening / ecosystem |
 | KITPro Server page | Current Server positioning, screenshots, supported systems, public alpha CTA | <https://kitpro.us/server> | Yes; live browser-validated | `browse goto https://kitpro.us/server` | Browser video/still | None | Product introduction |
 | GitHub repository | Open-source code, Apache-2.0 license, docs, support matrix | <https://github.com/KITProHQ/kitpro> | Yes; live browser-validated | `browse goto https://github.com/KITProHQ/kitpro` | Browser video/still | Hide signed-in account chrome if present | Open source / ownership |
-| GitHub release | Published alpha.11 packages, checksums, manifest, build metadata, SBOM | <https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11> | Yes; live browser-validated | `browse goto https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11` | Browser video/still | Hide signed-in account chrome if present | Install / release evidence |
+| GitHub release | Published alpha.12 packages, checksums, manifest, build metadata, SBOM | <https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12> | Release evidence | `browse goto https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12` | Browser video/still | Hide signed-in account chrome if present | Install / release evidence |
 
 ## Installation
 
@@ -83,9 +83,9 @@ The strongest product visuals are Dashboard, Catalog, Installed Application, Acc
 | Item | What it demonstrates | Source | Existing capture | Automation command | Format | Sanitization | Recommended script section |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Debian 13 | Fully supported host boundary | Disposable Debian VM and package | Validation evidence yes; launch capture no | Remote terminal scenario | Terminal video | Hide network inventory | Platform support |
-| Ubuntu 26.04 LTS | Fully supported host boundary | Disposable Ubuntu VM and package | Validation evidence yes; launch capture no | Remote terminal scenario | Terminal video | Hide network inventory | Platform support |
+| Ubuntu 26.04 LTS | Development and validation only | Disposable Ubuntu VM and package | Validation evidence yes; launch capture no | Remote terminal scenario | Terminal video | Hide network inventory | Platform validation |
 | Arch `linux-lts` | Supported rolling host under exact boundary | Disposable Arch VM and package | Validation evidence yes; launch capture no | Remote terminal scenario | Terminal video | Show full update and `linux-lts`; hide network inventory | Platform support |
-| Package artifacts | Native `.deb`, `.pkg.tar.zst`, checksums, manifest, metadata, SBOM | GitHub alpha.11 release | Yes; published | Release-page browser capture | Browser video/still | None | Installation / open source |
+| Package artifacts | Native `.deb`, `.pkg.tar.zst`, checksums, manifest, metadata, SBOM | GitHub alpha.12 release | Yes; published | Release-page browser capture | Browser video/still | None | Installation / open source |
 
 ## Repeatable demo path
 

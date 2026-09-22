@@ -9,25 +9,26 @@ implementation.
 KITPro Server is the name of the public-alpha product. Each decision is
 recorded in [`docs/decisions/`](decisions/README.md). The production API,
 helper, Docker, state, catalog, exposure, multi-container, generated-secret,
-hardware, and trusted-storage boundaries are implemented on the certified
+hardware, trusted-storage, and application-backup boundaries are implemented on the certified
 alpha platforms. TLS automation, general rollback, and off-host backup remain
 open.
 
-ADR-0017 selects Debian 13 as the primary/reference host. Ubuntu Server 26.04
-LTS and fully updated Arch Linux amd64 hosts using official repositories and
-`linux-lts` are also supported after native-package certification. Rocky Linux
-10 remains a secondary experimental host. The core helper and Docker
-integration use Linux, systemd, Unix sockets, and Docker Engine contracts.
-Distribution packaging, firewall integration, AppArmor profiles, and SELinux
-policy stay outside those core contracts. ADR-0019 requires enforcing helper
-MAC on supported hosts; Rocky must run with SELinux Enforcing. KITPro does not
-disable enforcement to support it. ADR-0001 accepts one Go toolchain for
-separate API and helper binaries; ADR-0020 accepts separate SQLite state files;
-ADR-0021 accepts strict framed JSON.
+ADR-0017 selects Debian 13 as the primary/reference host. Fully updated Arch
+Linux amd64 hosts using official repositories and `linux-lts` are also in the
+supported alpha.12 baseline. Ubuntu Server 26.04 LTS has development and
+validation evidence only. Rocky Linux 10 and Podman remain Experimental. The core helper uses
+Linux, systemd, Unix sockets, normalized container plans, and a constrained
+Docker or Podman runtime adapter. Distribution packaging, orchestration,
+firewall integration, AppArmor profiles, and SELinux policy stay outside those
+shared contracts. ADR-0019 requires enforcing helper MAC on supported hosts;
+Rocky must run with SELinux Enforcing. KITPro does not disable enforcement to
+support it. ADR-0001 accepts one Go toolchain for separate API and helper
+binaries; ADR-0020 accepts separate SQLite state files; ADR-0021 accepts strict
+framed JSON.
 
 ## System boundary
 
-The alpha covers one supported Linux host and trusted single- or
+The alpha covers the supported Debian and Arch Linux baselines and trusted single- or
 multi-container applications. The product supports this complete local
 workflow:
 
@@ -72,12 +73,12 @@ The architecture must assign the following responsibilities. The list does not p
 | Local user interface | Presents host state, application state, planned changes, controls, logs, and recovery information. |
 | Application lifecycle coordination | Validates and records install, start, stop, update, rollback, and uninstall operations. Prevents conflicting operations. |
 | Host inspection | Reads supported host facts and distinguishes unavailable data from unhealthy state. |
-| Workload integration | The privileged helper translates constrained lifecycle operations to an allowlisted subset of the Docker Engine API. The browser-facing service has no Docker socket access. |
+| Workload integration | The privileged helper translates constrained lifecycle operations through the selected Docker or Podman adapter. The browser-facing service has no container-runtime socket access. |
 | Privileged host changes | A root-owned helper accepts versioned semantic operations over a protected Unix socket. It authenticates the API service with kernel peer credentials and enforces policy again. |
 | Application specification | Describes a trusted application, its source, configuration, health checks, networking, storage, secrets, and lifecycle behavior through the bounded manifest schemas. |
-| State and operation history | The control plane stores desired state and user-facing metadata. The helper independently stores trusted ownership, privileged receipts, leases, and audit events. Fresh host and Docker inspection supplies observed state. The storage technologies remain open. |
+| State and operation history | The control plane stores desired state and user-facing metadata. The helper independently stores trusted ownership, privileged receipts, leases, and audit events. Fresh host and selected-runtime inspection supplies observed state. The storage technologies remain open. |
 | Logs and observations | Collects relevant KITPro, host, and workload information without presenting raw volume as useful diagnosis. |
-| Data protection integration | Separates managed and imported data, creates validated control-state backups before migrations and trusted updates, and documents that imported data and full application recovery remain external responsibilities. |
+| Data protection integration | Separates managed and imported data, creates validated control-state backups before migrations and trusted updates, and creates versioned application archives for exact existing-installation recovery. Imported data and bare-host recovery remain external responsibilities. |
 
 No responsibility in this table implies that KITPro owns user application data. KITPro may record where data lives and how an operation affects it.
 
@@ -134,7 +135,7 @@ Each row is open unless its linked record says otherwise. A proposed record is n
 | ADR-0014 | Backup integration | Which backup responsibilities belong to KITPro? How will the product define data sets, consistency, scheduling, destinations, encryption, retention, verification, and restore tests while allowing standard external tools? |
 | [ADR-0015](decisions/0015-api-design.md) | API design, accepted | Versioned REST/JSON with operation resources. |
 | [ADR-0016](decisions/0016-durable-state-and-reconciliation.md) | Durable state and reconciliation, accepted | The control plane owns desired state. The helper independently owns trusted resource ownership, privileged receipts, leases, and audit events. Fresh observation resolves external reality. Unknown outcomes reconcile before retry. The database engine remains open. |
-| [ADR-0017](decisions/0017-phase-1-host-compatibility.md) | Host compatibility, accepted | Debian 13 is primary/reference; Ubuntu Server 26.04 LTS and fully updated Arch Linux with `linux-lts` are supported; Rocky Linux 10 is experimental. All use the platform-neutral helper and Docker contracts. |
+| [ADR-0017](decisions/0017-phase-1-host-compatibility.md) | Host compatibility, accepted; public designation updated for alpha.12 | Debian 13 and fully updated Arch Linux with `linux-lts` are supported. Ubuntu Server 26.04 LTS is development and validation only. Rocky Linux 10 and Podman are Experimental. |
 | [ADR-0018](decisions/0018-security-boundaries.md) | Security boundaries, proposed | What assets and actors are in the threat model? Which inputs cross browser, network, manifest, runtime, host, update, backup, and optional cloud boundaries? What is the response to a compromised application, dashboard session, update source, or privileged component? |
 | [ADR-0019](decisions/0019-helper-mandatory-access-control.md) | Helper mandatory-access-control confinement, accepted | Debian, Ubuntu, and Arch production helpers require enforcing AppArmor; Rocky experimental helpers require an enforcing dedicated SELinux domain. Policy remains outside the common protocol. |
 | [ADR-0020](decisions/0020-production-state-database.md) | Phase 1 production state database, accepted | Two physically separate SQLite files; PostgreSQL remains the fallback if one-node requirements are disproven. |

@@ -10,7 +10,8 @@
 
 The privileged helper runs as root and can reach the rootful Docker Engine socket. Unix ownership, `SO_PEERCRED`, semantic operation policy, ownership records, and systemd restrictions reduce the authority reachable from the API. They do not contain a helper compromise by themselves.
 
-Debian 13, Ubuntu 26.04 LTS, and supported Arch Linux hosts use AppArmor.
+Supported Debian 13 and Arch Linux hosts use AppArmor. Ubuntu 26.04 LTS uses
+the same AppArmor boundary for development and validation only.
 Rocky Linux 10 uses SELinux and Docker requires explicit SELinux integration
 to label containers. The two systems need different policy mechanisms. The
 helper protocol and operation model must remain distribution-neutral.
