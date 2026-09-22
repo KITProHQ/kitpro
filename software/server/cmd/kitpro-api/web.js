@@ -1,4 +1,29 @@
 (() => {
+  function operationOutcome(status, result, transportFailed = false) {
+    if (result && (result.id || result.status === "failed" || result.status === "action_required")) return "existing-operation";
+    if (transportFailed) return "unknown";
+    if (status === 401 || status === 403) return "not-submitted";
+    return status >= 400 ? "unknown" : "accepted";
+  }
+
+  function friendlyError(status, raw, outcome, operationID = "") {
+    const text = String(raw || "").toLowerCase();
+    if (outcome === "existing-operation") {
+      const identity = operationID ? ` ${operationID}` : "";
+      return `The operation${identity} exists but needs attention. Review Activity and the application state before taking another action.`;
+    }
+    if (outcome === "unknown") return "KITPro could not confirm whether it created an operation. Check Activity and the application state before trying again.";
+    if (status === 401) return "KITPro did not submit the operation because your session ended. Sign in and try again.";
+    if (status === 403) return "KITPro did not submit the operation because the request was blocked. Refresh the page and try again.";
+    if (text.includes("lan bind address")) return "Local network access is not configured for this server. Set its LAN address in KITPro's server configuration, then try again.";
+    return "KITPro did not submit the operation. Review Technical details, then try again.";
+  }
+
+  if (globalThis.KITPRO_TEST_MODE) {
+    globalThis.KITPRO_OPERATION_TEST_API = { friendlyError, operationOutcome };
+    return;
+  }
+
   const panels = [...document.querySelectorAll("[data-view]")];
   const nav = [...document.querySelectorAll("[data-nav]")];
   const title = document.querySelector("[data-view-title]");
@@ -34,17 +59,6 @@
     banner.querySelector(".progress-track").hidden = tone !== "progress";
   }
 
-  function friendlyError(status, raw) {
-    const text = String(raw || "").toLowerCase();
-    if (status === 401) return "Your session has ended. Sign in and try again.";
-    if (status === 403) return "KITPro blocked this request. Refresh the page and try again.";
-    if (text.includes("lan bind address")) return "Local network access is not configured for this server. Set its LAN address in KITPro's server configuration, then try again.";
-    if (status === 409 || text.includes("port")) return "KITPro could not apply that change because the requested network port is unavailable.";
-    if (text.includes("docker") || status === 503) return "Container services are unavailable right now. Check Docker and try again.";
-    if (text.includes("image")) return "KITPro could not download the trusted application image. Check the server connection and retry.";
-    return "KITPro could not complete this operation. You can safely retry or review Technical details.";
-  }
-
   document.querySelectorAll("form[data-async]").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -60,14 +74,18 @@
       try {
         const response = await fetch(form.action, { method: form.method || "POST", body: new FormData(form), headers: { Accept: "application/json" } });
         const body = await response.text();
-        if (!response.ok) throw Object.assign(new Error(body), { status: response.status });
         let result = {};
         try { result = JSON.parse(body); } catch (_) { /* Some successful handlers have no response body. */ }
-        if (result.status === "failed") throw Object.assign(new Error("operation failed"), { status: 503 });
+        const outcome = operationOutcome(response.status, result);
+        if (!response.ok) throw Object.assign(new Error(body), { status: response.status, outcome, operationID: result.id || "" });
+        if (result.status === "failed" || result.status === "action_required") {
+          throw Object.assign(new Error("operation requires review"), { status: response.status, outcome: "existing-operation", operationID: result.id || "" });
+        }
         announce(form.dataset.success || "Operation accepted", "KITPro will refresh this view with the latest state.", "success");
         window.setTimeout(() => location.reload(), 700);
       } catch (error) {
-        announce("Operation could not be completed", friendlyError(error.status || 0, error.message), "danger");
+        const outcome = error.outcome || operationOutcome(error.status || 0, {}, !error.status);
+        announce("Operation could not be completed", friendlyError(error.status || 0, error.message, outcome, error.operationID || ""), "danger");
         buttons.forEach((candidate) => { candidate.disabled = false; });
         if (button) button.textContent = previous;
       }
