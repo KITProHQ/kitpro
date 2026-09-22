@@ -57,10 +57,11 @@ KITPro never downloads catalog artwork at runtime.
 bytes each. Use it only for important behavior that structured storage,
 service, hardware, or backup declarations cannot already express.
 
-`lifecycle_notice` is structured display metadata. Schema version 7 validates
-its text, but it does not implement acknowledgement or alter lifecycle
-behavior. A later phase must add server-side policy before
-`require_acknowledgement` can enforce anything.
+`lifecycle_notice` supplies display text for install, availability-reducing
+operations, and runtime removal. For a `network-service` with
+`require_acknowledgement: true`, the server rejects stop, restart, update,
+recreate, and runtime-removal requests unless the request carries an explicit
+acknowledgement. Ordinary applications do not inherit this requirement.
 
 Schemas 1 through 6 remain parseable. They cannot use schema-version-7
 metadata fields. This keeps one metadata contract and prevents older manifests
@@ -187,16 +188,29 @@ revalidated against the resolved helper plan.
 
 Storage declarations contain logical IDs and container paths only. KITPro
 derives host paths under `/srv/kitpro/apps/<application>/<installation>/`; users
-cannot provide bind sources. `/`, `/etc`, `/proc`, `/sys`, `/dev`, and Docker
-socket paths are rejected.
+cannot provide bind sources. `/`, `/proc`, `/sys`, `/dev`, and Docker socket
+paths are rejected. Schema version 8 may mark a persistent read-write storage
+declaration with `system_config: true` to authorize one reviewed application
+configuration directory below `/etc/`. Without that explicit marker, `/etc`
+targets remain invalid.
 
 Environment entries are explicitly named and bounded. A required secret may
 declare the bounded `random-hex-32` generator. The helper creates 32 random
 bytes, persists the encoded value in its root-only state database, and reuses
 the value for recreation, restart, and update. A generated secret cannot also
-contain a catalog value. Secret values never appear in logs, receipts, API
-responses, or HTML. Helper database backups include generated secrets so a
-restored installation does not silently rotate them.
+contain a catalog value. Helper database backups include generated secrets so
+a restored installation does not silently rotate them.
+
+Schema version 8 may add `credential` to an individual generated-secret
+environment declaration. Its bounded public `id`, `label`, and optional
+`username` identify one administrator-facing credential without exposing the
+environment name. Presence is the explicit reveal authorization; generated
+secrets without it remain internal. The value is absent from ordinary catalog,
+application, installation, lifecycle, operation, and HTML responses. An
+authenticated, CSRF-protected POST reveal action may return only that one
+manifest-authorized value with `Cache-Control: no-store`. Reveal is repeatable
+because the helper retains and backs up the value. Credential reset is not yet
+supported.
 
 Only `no` and `unless-stopped` restart policies are allowed. Commands, when
 needed, are fixed catalog argv arrays; users cannot supply executable text or
@@ -221,6 +235,19 @@ it is not user input. Services without it retain the 20000-29999 dynamic range.
 TCP and UDP declarations may use the same container and fixed host port because
 transport is part of binding identity. A manifest remains limited to eight
 services.
+
+Schema version 8 also adds `default_exposure`. Its values are `internal`,
+`loopback`, or `lan`. It controls only the initial installation binding and
+cannot declare an address. Loopback always uses a KITPro-allocated dynamic
+port. LAN uses the administrator-configured exact LAN address and requires a
+manifest-authorized `fixed_host_port`. KITPro verifies that address and checks
+every requested transport for conflicts before asking the helper to create a
+candidate runtime.
+
+Environment names in schema version 8 may contain lowercase letters after an
+uppercase or underscore first character. This supports typed upstream names
+such as Pi-hole v6 FTL configuration without permitting arbitrary environment
+input. Schemas 1 through 7 retain the original uppercase-only rule.
 
 ## FreshRSS catalog entry
 

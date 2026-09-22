@@ -13,9 +13,10 @@ See the definitive [support matrix](../../docs/support-matrix.md).
 
 ## Runtime model
 
-- Strict, schema-versioned catalog manifests resolve to typed single- or multi-container plans. Seventeen of the 18 catalog apps are single-container; Paperless-ngx owns a web component and internal Redis broker.
+- Strict, schema-versioned catalog manifests resolve to typed single- or multi-container plans. Eighteen of the 19 catalog apps are single-container; Paperless-ngx owns a web component and internal Redis broker.
 - Installation identity, generated secrets, managed storage, exposure policy, and external-storage bindings persist independently of disposable runtime generations.
-- Services begin internal-only and may be published only on loopback or one configured LAN address. The trusted binding set supports TCP, UDP, multiple services, dynamic ports, and manifest-authorized fixed ports. Wildcard publication and host networking are rejected.
+- Generated secrets remain internal unless the trusted manifest marks one as an administrator credential. A protected POST action can reveal only that credential; ordinary APIs and initial HTML remain secret-free.
+- Services begin internal-only unless a schema-v8 manifest declares a constrained initial exposure. Pi-hole uses exact-address TCP and UDP port 53 plus a dynamic loopback admin UI. The trusted binding set supports TCP, UDP, multiple services, dynamic ports, and manifest-authorized fixed ports. Wildcard publication and host networking are rejected.
 - Hardware requests use bounded device classes. NVIDIA acceleration is certified for Ollama on the published test boundary; CPU fallback remains available.
 - External data uses administrator-registered trusted roots and manifest-declared slots. Bind sources and targets are resolved by the helper; imported data is never deleted with an app.
 - App updates use trusted release pairs, preserve identity and storage, and back up control state. Imported data and full application-data disaster recovery remain administrator responsibilities.

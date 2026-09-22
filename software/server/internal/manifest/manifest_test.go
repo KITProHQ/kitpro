@@ -86,6 +86,75 @@ func TestNetworkBindingSchemaValidation(t *testing.T) {
 	if _, err = Parse([]byte(strings.Replace(base, `"fixed_host_port":53`, `"fixed_host_port":0`, 1))); err != nil {
 		t.Fatalf("zero fixed-port default rejected: %v", err)
 	}
+	defaults := strings.Replace(base, `"id":"dns-tcp","name":"DNS TCP","protocol":"tcp","container_port":53,"fixed_host_port":53`, `"id":"dns-tcp","name":"DNS TCP","protocol":"tcp","container_port":53,"default_exposure":"lan","fixed_host_port":53`, 1)
+	defaults = strings.Replace(defaults, `"id":"dns-udp","name":"DNS UDP","protocol":"udp","container_port":53,"fixed_host_port":53`, `"id":"dns-udp","name":"DNS UDP","protocol":"udp","container_port":53,"default_exposure":"lan","fixed_host_port":53`, 1)
+	if parsed, parseErr := Parse([]byte(defaults)); parseErr != nil || parsed.Services[0].DefaultExposure != "lan" {
+		t.Fatalf("trusted default exposure rejected: %v %#v", parseErr, parsed.Services)
+	}
+	if _, err = Parse([]byte(strings.Replace(defaults, `"default_exposure":"lan","fixed_host_port":53`, `"default_exposure":"public","fixed_host_port":53`, 1))); err == nil {
+		t.Fatal("unconstrained default exposure accepted")
+	}
+	if _, err = Parse([]byte(strings.Replace(defaults, `"default_exposure":"lan","fixed_host_port":53`, `"default_exposure":"lan"`, 1))); err == nil {
+		t.Fatal("default LAN exposure without fixed port accepted")
+	}
+}
+
+func TestSchemaEightManagedSystemConfigurationAndEnvironmentNames(t *testing.T) {
+	base := strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":8`, 1)
+	base = strings.Replace(base, `"container_path":"/data","persistent":true,"read_only":false`, `"container_path":"/etc/pihole","persistent":true,"read_only":false,"system_config":true`, 1)
+	base = strings.Replace(base, `"restart":"unless-stopped"`, `"environment":[{"name":"FTLCONF_dns_listeningMode","value":"ALL"}],"restart":"unless-stopped"`, 1)
+	m, err := Parse([]byte(base))
+	if err != nil || !m.Storage[0].SystemConfig || m.Environment[0].Name != "FTLCONF_dns_listeningMode" {
+		t.Fatalf("schema-v8 system configuration rejected: %v %#v", err, m)
+	}
+	for name, invalid := range map[string]string{
+		"missing opt-in": strings.Replace(base, `,"system_config":true`, ``, 1),
+		"older schema":   strings.Replace(base, `"schema_version":8`, `"schema_version":7`, 1),
+		"read-only":      strings.Replace(base, `"read_only":false`, `"read_only":true`, 1),
+		"broad etc":      strings.Replace(base, `"container_path":"/etc/pihole"`, `"container_path":"/etc"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, parseErr := Parse([]byte(invalid)); parseErr == nil {
+				t.Fatal("unsafe system configuration accepted")
+			}
+		})
+	}
+	legacyMixedCase := strings.Replace(validV7Manifest(), `"restart":"unless-stopped"`, `"environment":[{"name":"FTLCONF_dns_listeningMode","value":"ALL"}],"restart":"unless-stopped"`, 1)
+	if _, err = Parse([]byte(legacyMixedCase)); err == nil {
+		t.Fatal("schema v7 accepted schema-v8 mixed-case environment names")
+	}
+}
+
+func TestSchemaEightCredentialPresentationIsExplicitAndBounded(t *testing.T) {
+	base := strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":8`, 1)
+	internalOnly := strings.Replace(base, `"restart":"unless-stopped"`, `"environment":[{"name":"INTERNAL_KEY","secret":true,"required":true,"generate":"random-hex-32"}],"restart":"unless-stopped"`, 1)
+	m, err := Parse([]byte(internalOnly))
+	if err != nil || len(PresentedCredentials(m)) != 0 {
+		t.Fatalf("internal generated secret became revealable: %v %#v", err, PresentedCredentials(m))
+	}
+	presented := strings.Replace(internalOnly, `"generate":"random-hex-32"`, `"generate":"random-hex-32","credential":{"id":"admin-password","label":"Admin password"}`, 1)
+	m, err = Parse([]byte(presented))
+	credential, found := FindPresentedCredential(m, "admin-password")
+	if err != nil || !found || credential.Label != "Admin password" || credential.EnvironmentName != "INTERNAL_KEY" {
+		t.Fatalf("credential presentation rejected: %v %#v", err, credential)
+	}
+	invalid := map[string]string{
+		"older schema":           strings.Replace(presented, `"schema_version":8`, `"schema_version":7`, 1),
+		"non-generated value":    strings.Replace(presented, `"secret":true,"required":true,"generate":"random-hex-32"`, `"value":"public"`, 1),
+		"invalid public ID":      strings.Replace(presented, `"id":"admin-password"`, `"id":"INTERNAL_KEY"`, 1),
+		"empty label":            strings.Replace(presented, `"label":"Admin password"`, `"label":""`, 1),
+		"untrimmed label":        strings.Replace(presented, `"label":"Admin password"`, `"label":" Admin password"`, 1),
+		"long label":             strings.Replace(presented, `"label":"Admin password"`, `"label":"`+strings.Repeat("a", 65)+`"`, 1),
+		"long username":          strings.Replace(presented, `"label":"Admin password"`, `"label":"Admin password","username":"`+strings.Repeat("a", 65)+`"`, 1),
+		"duplicate presentation": strings.Replace(presented, `}],"restart"`, `},{"name":"SECOND_KEY","secret":true,"required":true,"generate":"random-hex-32","credential":{"id":"admin-password","label":"Second"}}],"restart"`, 1),
+	}
+	for name, data := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if _, parseErr := Parse([]byte(data)); parseErr == nil {
+				t.Fatal("invalid credential presentation accepted")
+			}
+		})
+	}
 }
 
 func TestCatalogMetadataSchemaValidation(t *testing.T) {

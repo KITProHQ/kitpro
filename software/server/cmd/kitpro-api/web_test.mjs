@@ -7,7 +7,14 @@ const source = await readFile(new URL("./web.js", import.meta.url), "utf8");
 const context = vm.createContext({ KITPRO_TEST_MODE: true });
 vm.runInContext(source, context);
 
-const { friendlyError, operationOutcome } = context.KITPRO_OPERATION_TEST_API;
+const { friendlyError, operationOutcome, presentCredential } = context.KITPRO_OPERATION_TEST_API;
+
+test("credential reveal populates text content without HTML persistence", () => {
+  const target = { textContent: "••••••••••••" };
+  const value = "a".repeat(64);
+  presentCredential(target, value);
+  assert.equal(target.textContent, value);
+});
 
 test("confirmed authentication rejection is a pre-submission failure", () => {
   assert.equal(operationOutcome(401, {}), "not-submitted");

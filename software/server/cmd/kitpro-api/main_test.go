@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,50 @@ func seedFreshRSSInstallation(t *testing.T, a *app, installation string) {
 	}
 	if _, err = exposure.Upsert(context.Background(), a.db, installation, "web", exposure.Assignment{Mode: exposure.Internal}, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func localLANTestAddress(t *testing.T) string {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Skipf("cannot inspect local interfaces: %v", err)
+	}
+	for _, iface := range interfaces {
+		addresses, addressErr := iface.Addrs()
+		if addressErr != nil {
+			continue
+		}
+		for _, address := range addresses {
+			ip, _, parseErr := net.ParseCIDR(address.String())
+			if parseErr == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+				return ip.String()
+			}
+		}
+	}
+	t.Skip("no non-loopback IPv4 address is available")
+	return ""
+}
+
+func seedPiHoleInstallation(t *testing.T, a *app, installation, lanAddress string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, installation, "pihole", "2026.09.0", "running", 1, now, now); err != nil {
+		t.Fatal(err)
+	}
+	bindings := []exposure.ServiceBinding{
+		{ServiceID: "admin", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000},
+		{ServiceID: "dns-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: lanAddress, HostPort: 53},
+		{ServiceID: "dns-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: lanAddress, HostPort: 53},
+	}
+	for _, binding := range bindings {
+		fixed := 0
+		if binding.ServiceID != "admin" {
+			fixed = 53
+		}
+		if _, err := exposure.UpsertBinding(context.Background(), a.db, installation, binding, lanAddress, fixed); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -311,8 +356,138 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	request.AddCookie(csrf)
 	a.home(recorder, request)
 	body := recorder.Body.String()
-	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") || !strings.Contains(body, "Nextcloud") || !strings.Contains(body, ">NE</span>") || !strings.Contains(body, "https://github.com/nextcloud/docker") || !strings.Contains(body, "Experimental") || !strings.Contains(body, "sync-client") {
+	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") || !strings.Contains(body, "Nextcloud") || !strings.Contains(body, ">NE</span>") || !strings.Contains(body, "https://github.com/nextcloud/docker") || !strings.Contains(body, "Experimental") || !strings.Contains(body, "sync-client") || !strings.Contains(body, "Pi-hole") || !strings.Contains(body, ">PH</span>") || !strings.Contains(body, "Network Service") || !strings.Contains(body, "port 53/tcp") || !strings.Contains(body, "DNS only") {
 		t.Fatalf("catalog presentation is not curated: %s", body)
+	}
+}
+
+func TestPiHoleInstalledUIShowsInfrastructureImpactAndEndpointTypes(t *testing.T) {
+	a, _, csrf := newTestApp(t)
+	const lanAddress = "192.0.2.10"
+	seedPiHoleInstallation(t, a, "inst-pihole01", lanAddress)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(csrf)
+	a.home(recorder, request)
+	body := recorder.Body.String()
+	for _, want := range []string{
+		"Network Service",
+		"192.0.2.10:53/tcp",
+		"192.0.2.10:53/udp",
+		"http://127.0.0.1:20000",
+		"can interrupt DNS",
+		"does not revert router or client DNS settings",
+		`name="acknowledgement" value="accepted" required`,
+		"Restart application",
+		"Administration credential",
+		"Admin password",
+		`/credentials/admin-password/reveal`,
+		`data-credential-value>••••••••••••</code>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("installed Pi-hole UI missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `href="192.0.2.10:53`) || strings.Contains(body, `href="tcp://`) || strings.Contains(body, `href="udp://`) {
+		t.Fatalf("DNS endpoint rendered as a hyperlink: %s", body)
+	}
+	if strings.Contains(body, "FTLCONF_webserver_api_password") || strings.Contains(body, strings.Repeat("a", 64)) {
+		t.Fatal("initial installed-application HTML exposed secret material")
+	}
+}
+
+func TestExplicitCredentialRevealIsProtectedAndNeverPartOfOrdinaryResponses(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedPiHoleInstallation(t, a, "inst-pihole01", "192.0.2.10")
+	secret := strings.Repeat("a", 64)
+	calls := 0
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		if request.Operation != "RevealApplicationCredential" {
+			return protocol.Response{OK: true, RequestID: request.ID}, nil
+		}
+		calls++
+		if request.InstanceID != "inst-pihole01" || request.ApplicationID != "pihole" || request.CredentialID != "admin-password" {
+			t.Fatalf("credential reveal request did not use the trusted identifiers: operation=%q instance=%q application=%q credential=%q", request.Operation, request.InstanceID, request.ApplicationID, request.CredentialID)
+		}
+		return protocol.Response{OK: true, RequestID: request.ID, Result: protocol.CredentialDisclosure{ID: "admin-password", Label: "Admin password", Value: secret}}, nil
+	}
+
+	for _, target := range []string{"/", "/api/v1/apps", "/api/v1/apps/pihole", "/api/v1/installations"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.AddCookie(csrf)
+		switch {
+		case target == "/":
+			a.home(recorder, request)
+		case strings.HasPrefix(target, "/api/v1/apps"):
+			a.apps(recorder, request)
+		default:
+			a.installations(recorder, request)
+		}
+		if strings.Contains(recorder.Body.String(), secret) || strings.Contains(recorder.Body.String(), "FTLCONF_webserver_api_password") {
+			t.Fatalf("ordinary response %s exposed secret material", target)
+		}
+	}
+
+	path := "/api/v1/installations/inst-pihole01/credentials/admin-password/reveal"
+	unauthorized := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, path, nil)
+	request.Host = "127.0.0.1:8080"
+	a.guard(a.installations)(unauthorized, request)
+	if unauthorized.Code != http.StatusUnauthorized || calls != 0 {
+		t.Fatalf("anonymous reveal status=%d calls=%d", unauthorized.Code, calls)
+	}
+
+	badCSRF := httptest.NewRecorder()
+	request = authenticatedRequest(http.MethodPost, path, `{}`, session, csrf)
+	request.Header.Set("X-CSRF-Token", "bad")
+	a.guard(a.installations)(badCSRF, request)
+	if badCSRF.Code != http.StatusForbidden || calls != 0 {
+		t.Fatalf("bad-CSRF reveal status=%d calls=%d", badCSRF.Code, calls)
+	}
+
+	revealed := httptest.NewRecorder()
+	a.guard(a.installations)(revealed, authenticatedRequest(http.MethodPost, path, `{}`, session, csrf))
+	if revealed.Code != http.StatusOK || revealed.Header().Get("Cache-Control") != "no-store" || revealed.Header().Get("Location") != "" || calls != 1 {
+		t.Fatalf("explicit reveal status=%d cache=%q location=%q calls=%d", revealed.Code, revealed.Header().Get("Cache-Control"), revealed.Header().Get("Location"), calls)
+	}
+	var result protocol.CredentialDisclosure
+	if err := json.Unmarshal(revealed.Body.Bytes(), &result); err != nil || result.ID != "admin-password" || result.Label != "Admin password" || result.Username != "" || result.Value != secret {
+		t.Fatal("explicit reveal did not return the expected bounded disclosure")
+	}
+
+	for _, deniedPath := range []string{
+		"/api/v1/installations/inst-pihole01/credentials/internal-key/reveal",
+		"/api/v1/installations/inst-missing01/credentials/admin-password/reveal",
+	} {
+		denied := httptest.NewRecorder()
+		a.guard(a.installations)(denied, authenticatedRequest(http.MethodPost, deniedPath, `{}`, session, csrf))
+		if denied.Code != http.StatusNotFound || strings.Contains(denied.Body.String(), secret) {
+			t.Fatalf("unauthorized credential path status=%d", denied.Code)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("untrusted credential identifiers reached helper: %d calls", calls)
+	}
+}
+
+func TestOrdinaryGeneratedSecretDoesNotGainCredentialUIOrReveal(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, "inst-webui0001", "open-webui", "0.11.3", "running", 1, now, now); err != nil {
+		t.Fatal(err)
+	}
+	home := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(csrf)
+	a.home(home, request)
+	if strings.Contains(home.Body.String(), "/credentials/") {
+		t.Fatal("ordinary internal generated secret gained credential controls")
+	}
+	reveal := httptest.NewRecorder()
+	a.guard(a.installations)(reveal, authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-webui0001/credentials/webui-secret/reveal", `{}`, session, csrf))
+	if reveal.Code != http.StatusNotFound {
+		t.Fatalf("non-revealable generated secret status=%d", reveal.Code)
 	}
 }
 
@@ -334,7 +509,7 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &items); err != nil {
 		t.Fatal(err)
 	}
-	visible, found, foundNextcloud := 0, false, false
+	visible, found, foundNextcloud, foundPiHole := 0, false, false, false
 	for _, item := range items {
 		if catalogVisible(item.ID) {
 			visible++
@@ -351,15 +526,24 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 				t.Fatalf("incomplete Nextcloud catalog metadata: %#v", item)
 			}
 		}
+		if item.ID == "pihole" {
+			foundPiHole = true
+			if item.Category != "Networking" || item.Kind != "network-service" || item.CatalogStatus != "experimental" || item.SourceURL != "https://github.com/pi-hole/docker-pi-hole" || len(item.Limitations) != 6 {
+				t.Fatalf("incomplete Pi-hole catalog metadata: %#v", item)
+			}
+		}
 	}
-	if visible != 18 {
-		t.Fatalf("visible catalog has %d applications, want 18", visible)
+	if visible != 19 {
+		t.Fatalf("visible catalog has %d applications, want 19", visible)
 	}
 	if !found {
 		t.Fatal("Forgejo missing from catalog API")
 	}
 	if !foundNextcloud {
 		t.Fatal("Nextcloud missing from catalog API")
+	}
+	if !foundPiHole {
+		t.Fatal("Pi-hole missing from catalog API")
 	}
 
 	recorder = httptest.NewRecorder()
@@ -705,6 +889,134 @@ func TestNextcloudInstallUsesConstrainedSQLitePlan(t *testing.T) {
 	}
 }
 
+func TestPiHoleInstallUsesConstrainedNetworkServicePlan(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	lanAddress := localLANTestAddress(t)
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", lanAddress)
+	a.allocatePort = func(used map[int]bool, address string) (int, error) {
+		if address != "127.0.0.1" || used[20000] {
+			t.Fatalf("unexpected admin allocation: address=%q used=%v", address, used)
+		}
+		return 20000, nil
+	}
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.apps)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/apps/pihole/install", "", session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.Image != "docker.io/pihole/pihole@sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63" || received.ReleaseID != "2026.09.0" || received.RestartPolicy != "unless-stopped" {
+		t.Fatalf("unexpected Pi-hole release or lifecycle plan: %#v", received)
+	}
+	wantBindings := []protocol.ServiceBinding{
+		{ServiceID: "admin", Transport: "tcp", ContainerPort: 80, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+		{ServiceID: "dns-tcp", Transport: "tcp", ContainerPort: 53, Mode: "lan", HostAddress: lanAddress, HostPort: 53},
+		{ServiceID: "dns-udp", Transport: "udp", ContainerPort: 53, Mode: "lan", HostAddress: lanAddress, HostPort: 53},
+	}
+	if len(received.Bindings) != len(wantBindings) {
+		t.Fatalf("unexpected Pi-hole bindings: %#v", received.Bindings)
+	}
+	for i := range wantBindings {
+		if received.Bindings[i] != wantBindings[i] {
+			t.Fatalf("Pi-hole binding %d = %#v, want %#v", i, received.Bindings[i], wantBindings[i])
+		}
+	}
+	if len(received.Storage) != 1 || received.Storage[0].ID != "config" || received.Storage[0].ContainerPath != "/etc/pihole" || received.Storage[0].ReadOnly {
+		t.Fatalf("unexpected Pi-hole storage: %#v", received.Storage)
+	}
+	if len(received.Environment) != 2 || received.Environment[0] != (protocol.EnvVar{Name: "FTLCONF_dns_listeningMode", Value: "ALL"}) || received.Environment[1] != (protocol.EnvVar{Name: "FTLCONF_webserver_api_password", Secret: true, Generate: "random-hex-32"}) {
+		t.Fatalf("unexpected Pi-hole environment: %#v", received.Environment)
+	}
+	if len(received.Components) != 0 || len(received.Hardware) != 0 || len(received.ExternalStorage) != 0 || received.RunAs != nil || len(received.Command) != 0 {
+		t.Fatalf("Pi-hole plan acquired unexpected runtime authority: %#v", received)
+	}
+}
+
+func TestPiHoleFailedInitialInstallRecreateRestoresDefaultBindings(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	lanAddress := localLANTestAddress(t)
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", lanAddress)
+	a.allocatePort = func(used map[int]bool, address string) (int, error) {
+		return 20000, nil
+	}
+	a.hostListeners = func() ([]exposure.ServiceBinding, error) { return nil, nil }
+
+	bindings, err := a.buildServiceBindings(context.Background(), "inst-pihole01", a.catalog["pihole"].Manifest.Services, "RecreateApplication", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []protocol.ServiceBinding{
+		{ServiceID: "admin", Transport: "tcp", ContainerPort: 80, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+		{ServiceID: "dns-tcp", Transport: "tcp", ContainerPort: 53, Mode: "lan", HostAddress: lanAddress, HostPort: 53},
+		{ServiceID: "dns-udp", Transport: "udp", ContainerPort: 53, Mode: "lan", HostAddress: lanAddress, HostPort: 53},
+	}
+	if !reflect.DeepEqual(bindings, want) {
+		t.Fatalf("recreate bindings = %#v, want %#v", bindings, want)
+	}
+}
+
+func TestNetworkServiceLifecycleRequiresServerAcknowledgement(t *testing.T) {
+	for _, action := range []string{"stop", "restart", "remove", "recreate"} {
+		t.Run(action, func(t *testing.T) {
+			a, session, csrf := newTestApp(t)
+			lanAddress := localLANTestAddress(t)
+			t.Setenv("KITPRO_LAN_BIND_ADDRESS", lanAddress)
+			seedPiHoleInstallation(t, a, "inst-pihole01", lanAddress)
+			calls := 0
+			a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+				calls++
+				return protocol.Response{OK: true, RequestID: request.ID}, nil
+			}
+
+			path := "/api/v1/installations/inst-pihole01/" + action
+			denied := httptest.NewRecorder()
+			a.guard(a.installations)(denied, authenticatedRequest(http.MethodPost, path, `{}`, session, csrf))
+			if denied.Code != http.StatusPreconditionRequired || calls != 0 {
+				t.Fatalf("missing acknowledgement status=%d calls=%d body=%s", denied.Code, calls, denied.Body.String())
+			}
+
+			accepted := httptest.NewRecorder()
+			a.guard(a.installations)(accepted, authenticatedRequest(http.MethodPost, path, `{"acknowledged":true}`, session, csrf))
+			if accepted.Code != http.StatusAccepted || calls != 1 {
+				t.Fatalf("acknowledged status=%d calls=%d body=%s", accepted.Code, calls, accepted.Body.String())
+			}
+		})
+	}
+}
+
+func TestNetworkServiceUpdateRequiresServerAcknowledgement(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	lanAddress := localLANTestAddress(t)
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", lanAddress)
+	seedPiHoleInstallation(t, a, "inst-pihole01", lanAddress)
+	entry := a.catalog["pihole"]
+	release := entry.Manifest.Releases[0]
+	release.Version = "2026.09.1-test"
+	entry.Manifest.Releases = append(entry.Manifest.Releases, release)
+	a.catalog["pihole"] = entry
+	t.Setenv("KITPRO_CONTROL_BACKUP_DIR", t.TempDir())
+	calls := 0
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		calls++
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	path := "/api/v1/installations/inst-pihole01/update"
+	denied := httptest.NewRecorder()
+	a.guard(a.installations)(denied, authenticatedRequest(http.MethodPost, path, `{"release":"2026.09.1-test"}`, session, csrf))
+	if denied.Code != http.StatusPreconditionRequired || calls != 0 {
+		t.Fatalf("missing acknowledgement status=%d calls=%d body=%s", denied.Code, calls, denied.Body.String())
+	}
+	accepted := httptest.NewRecorder()
+	a.guard(a.installations)(accepted, authenticatedRequest(http.MethodPost, path, `{"release":"2026.09.1-test","acknowledged":true}`, session, csrf))
+	if accepted.Code != http.StatusAccepted || calls != 1 {
+		t.Fatalf("acknowledged update status=%d calls=%d body=%s", accepted.Code, calls, accepted.Body.String())
+	}
+}
+
 func TestAmbiguousInitialInstallTransportFailureDoesNotAdvanceGeneration(t *testing.T) {
 	a, session, csrf := newTestApp(t)
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
@@ -995,6 +1307,64 @@ func TestBindingPreflightRejectsReservedAndHostListenerConflicts(t *testing.T) {
 	requested = []exposure.ServiceBinding{{ServiceID: "web", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: port}}
 	if err = a.preflightBindings(context.Background(), "inst-other01", requested); err == nil || !strings.Contains(err.Error(), "host listener") {
 		t.Fatalf("listener conflict=%v", err)
+	}
+}
+
+func TestPiHolePort53PreflightIsTransportAndAddressAware(t *testing.T) {
+	const address = "192.0.2.10"
+	requested := []exposure.ServiceBinding{
+		{ServiceID: "dns-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: address, HostPort: 53},
+		{ServiceID: "dns-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: address, HostPort: 53},
+	}
+	for _, tc := range []struct {
+		name      string
+		reserved  []exposure.ServiceBinding
+		listeners []exposure.ServiceBinding
+		want      string
+	}{
+		{name: "neither occupied"},
+		{name: "TCP occupied UDP free", reserved: []exposure.ServiceBinding{{ServiceID: "other-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: address, HostPort: 53}}, want: "53/tcp"},
+		{name: "UDP occupied TCP free", reserved: []exposure.ServiceBinding{{ServiceID: "other-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: address, HostPort: 53}}, want: "53/udp"},
+		{name: "both occupied", reserved: []exposure.ServiceBinding{{ServiceID: "other-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: address, HostPort: 53}, {ServiceID: "other-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: address, HostPort: 53}}, want: "53/tcp"},
+		{name: "wildcard listener", listeners: []exposure.ServiceBinding{{Transport: exposure.UDP, Mode: exposure.LAN, HostAddress: "0.0.0.0", HostPort: 53}}, want: "53/udp"},
+		{name: "exact listener", listeners: []exposure.ServiceBinding{{Transport: exposure.TCP, Mode: exposure.LAN, HostAddress: address, HostPort: 53}}, want: "53/tcp"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := newTestApp(t)
+			a.hostListeners = func() ([]exposure.ServiceBinding, error) { return tc.listeners, nil }
+			for i, binding := range tc.reserved {
+				owner := fmt.Sprintf("inst-owner%02d", i)
+				if _, err := exposure.UpsertBinding(context.Background(), a.db, owner, binding, address, 53); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := a.preflightBindings(context.Background(), "inst-pihole01", requested)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("valid TCP and UDP port-53 pairing rejected: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), address+":"+tc.want) {
+				t.Fatalf("conflict=%v, want address, port, and transport %s:%s", err, address, tc.want)
+			}
+		})
+	}
+}
+
+func TestBindingConflictSummaryPreservesTrustedResolutionDetail(t *testing.T) {
+	for _, message := range []string{
+		"binding conflict: 192.0.2.10:53/tcp",
+		"binding is reserved by another KITPro installation: 192.0.2.10:53/udp",
+		"host listener 0.0.0.0:53/udp conflicts with requested 192.0.2.10:53/udp",
+	} {
+		summary, ok := safeBindingConflictSummary(errors.New(message))
+		if !ok || summary != message || operationErrorCategory(errors.New(message)) != "port_collision" {
+			t.Fatalf("conflict detail was not preserved: summary=%q ok=%v", summary, ok)
+		}
+	}
+	if summary, ok := safeBindingConflictSummary(errors.New("helper: untrusted runtime detail")); ok || summary != "" {
+		t.Fatalf("non-preflight error detail escaped: %q", summary)
 	}
 }
 

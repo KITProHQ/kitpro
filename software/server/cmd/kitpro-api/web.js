@@ -19,8 +19,12 @@
     return "KITPro did not submit the operation. Review Technical details, then try again.";
   }
 
+  function presentCredential(target, value) {
+    target.textContent = String(value);
+  }
+
   if (globalThis.KITPRO_TEST_MODE) {
-    globalThis.KITPRO_OPERATION_TEST_API = { friendlyError, operationOutcome };
+    globalThis.KITPRO_OPERATION_TEST_API = { friendlyError, operationOutcome, presentCredential };
     return;
   }
 
@@ -88,6 +92,31 @@
         announce("Operation could not be completed", friendlyError(error.status || 0, error.message, outcome, error.operationID || ""), "danger");
         buttons.forEach((candidate) => { candidate.disabled = false; });
         if (button) button.textContent = previous;
+      }
+    });
+  });
+
+  document.querySelectorAll("form[data-credential-reveal]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const container = form.closest("[data-credential]");
+      const target = container?.querySelector("[data-credential-value]");
+      const error = container?.querySelector("[data-credential-error]");
+      const button = form.querySelector("button[type=submit]");
+      if (!target || !button) return;
+      button.disabled = true;
+      if (error) error.hidden = true;
+      try {
+        const response = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error("credential reveal rejected");
+        const result = await response.json();
+        if (typeof result.value !== "string" || !/^[a-f0-9]{64}$/.test(result.value)) throw new Error("invalid credential response");
+        presentCredential(target, result.value);
+        button.textContent = "Reveal again";
+      } catch (_) {
+        if (error) error.hidden = false;
+      } finally {
+        button.disabled = false;
       }
     });
   });

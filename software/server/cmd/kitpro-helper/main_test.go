@@ -140,7 +140,7 @@ func trustedCatalogRequest(t *testing.T, appID string) protocol.Request {
 }
 
 func TestApplicationPlanValidationAcceptsEveryRealCatalogApp(t *testing.T) {
-	for _, appID := range []string{"freshrss", "mealie", "memos", "uptime-kuma"} {
+	for _, appID := range []string{"freshrss", "mealie", "memos", "pihole", "uptime-kuma"} {
 		t.Run(appID, func(t *testing.T) {
 			if err := validateApplicationPlan(trustedCatalogRequest(t, appID)); err != nil {
 				t.Fatalf("trusted catalog plan rejected: %v", err)
@@ -163,6 +163,10 @@ func TestTrustedBindingSetValidation(t *testing.T) {
 		"container-port":   func(r *protocol.Request) { r.Bindings[1].ContainerPort = 81 },
 		"fixed-port":       func(r *protocol.Request) { r.Bindings[0].HostPort = 54 },
 		"injected-service": func(r *protocol.Request) { r.Bindings[0].ServiceID = "shell" },
+		"injected-dhcp": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "dhcp", Transport: "udp", ContainerPort: 67, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 67})
+		},
+		"injected-address": func(r *protocol.Request) { r.Bindings[0].HostAddress = "10.0.0.3" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			q := request
@@ -392,6 +396,25 @@ func validNextcloudRequest() protocol.Request {
 	}
 }
 
+func validPiHoleRequest() protocol.Request {
+	return protocol.Request{
+		Version: 2, ID: "op-pihole123456789", OperationID: "op-1234567890abcdef1234567890abcdef", OperationRevision: 1, Operation: "InstallApplication",
+		ApplicationID: "pihole", ReleaseID: "2026.09.0", InstanceID: "inst-pihole01", RuntimeGeneration: 1,
+		Image:         "docker.io/pihole/pihole@sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63",
+		NetworkName:   "kitpro-net-inst-pihole01-g1",
+		DataPath:      "/srv/kitpro/apps/pihole/inst-pihole01/data",
+		RestartPolicy: "unless-stopped",
+		Environment:   []protocol.EnvVar{{Name: "FTLCONF_dns_listeningMode", Value: "ALL"}, {Name: "FTLCONF_webserver_api_password", Secret: true, Generate: "random-hex-32"}},
+		Storage:       []protocol.StorageMount{{ID: "config", ContainerPath: "/etc/pihole", HostPath: "/srv/kitpro/apps/pihole/inst-pihole01/config"}},
+		Services:      []protocol.Service{{ID: "admin", Protocol: "http", ContainerPort: 80}, {ID: "dns-tcp", Protocol: "tcp", ContainerPort: 53}, {ID: "dns-udp", Protocol: "udp", ContainerPort: 53}},
+		Bindings: []protocol.ServiceBinding{
+			{ServiceID: "admin", Transport: "tcp", ContainerPort: 80, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+			{ServiceID: "dns-tcp", Transport: "tcp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53},
+			{ServiceID: "dns-udp", Transport: "udp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53},
+		},
+	}
+}
+
 func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	if err := validateApplicationPlan(validFreshRSSRequest()); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
@@ -445,6 +468,38 @@ func TestApplicationPlanValidationAcceptsBoundedPlexPlan(t *testing.T) {
 			mutate(&q)
 			if err := validateApplicationPlan(q); err == nil {
 				t.Fatalf("accepted Plex plan mutation %s", name)
+			}
+		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsExactPiHolePlan(t *testing.T) {
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", "10.0.0.2")
+	request := validPiHoleRequest()
+	if err := validateApplicationPlan(request); err != nil {
+		t.Fatalf("valid Pi-hole plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing DNS transport": func(r *protocol.Request) { r.Bindings = r.Bindings[:2] },
+		"wrong host port":       func(r *protocol.Request) { r.Bindings[1].HostPort = 54 },
+		"wrong transport":       func(r *protocol.Request) { r.Bindings[2].Transport = "tcp" },
+		"altered container port": func(r *protocol.Request) {
+			r.Bindings[1].ContainerPort = 54
+		},
+		"injected DHCP": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "dhcp", Transport: "udp", ContainerPort: 67, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 67})
+		},
+		"extra service": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "metrics", Transport: "tcp", ContainerPort: 8080, Mode: "internal"})
+		},
+		"injected host address": func(r *protocol.Request) { r.Bindings[1].HostAddress = "10.0.0.3" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			candidate.Bindings = append([]protocol.ServiceBinding(nil), request.Bindings...)
+			mutate(&candidate)
+			if err := validateApplicationPlan(candidate); err == nil {
+				t.Fatal("tampered Pi-hole plan accepted")
 			}
 		})
 	}
@@ -727,6 +782,74 @@ func TestGeneratedEnvironmentSecretPersistsAndIsNotReturnedAsMetadata(t *testing
 	}
 	if _, err = resolvedEnvironment(db, "inst-secret01", "", []protocol.EnvVar{{Name: "BAD", Secret: true, Generate: "weak"}}); err == nil {
 		t.Fatal("weak secret generator accepted")
+	}
+}
+
+func TestRevealApplicationCredentialUsesTrustedManifestAndInstallationState(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestEnvironment := entries["pihole"].Manifest.Environment
+	declaration := make([]protocol.EnvVar, 0, len(manifestEnvironment))
+	for _, variable := range manifestEnvironment {
+		declaration = append(declaration, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret, Generate: variable.Generate})
+	}
+	resolved, err := resolvedEnvironment(db, "inst-pihole01", "", declaration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimPrefix(resolved[1], "FTLCONF_webserver_api_password=")
+	if _, err = db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,data_path,created_at,cleanup_state) VALUES(?,1,'seed','pihole','2026.09.0','active','network','/data','now','clean')`, "inst-pihole01"); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.Request{Version: 2, ID: "request-reveal01", Operation: "RevealApplicationCredential", InstanceID: "inst-pihole01", ApplicationID: "pihole", CredentialID: "admin-password"}
+	first, err := revealApplicationCredential(db, request)
+	if err != nil || first.ID != "admin-password" || first.Label != "Admin password" || first.Username != "" || first.Value != want {
+		t.Fatal("trusted credential disclosure did not match the generated runtime value")
+	}
+	second, err := revealApplicationCredential(db, request)
+	if err != nil || second.Value != first.Value {
+		t.Fatal("repeat reveal did not return the stable credential")
+	}
+	if _, err = db.Exec(`UPDATE runtime_generations SET status='removed' WHERE installation_id=?`, "inst-pihole01"); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := revealApplicationCredential(db, request)
+	if err != nil || retained.Value != first.Value {
+		t.Fatal("runtime removal discarded the retained credential")
+	}
+	if _, err = db.Exec(`UPDATE installation_secrets SET value=? WHERE installation_id=?`, strings.Repeat("b", 64), "inst-pihole01"); err != nil {
+		t.Fatal(err)
+	}
+	restored := secretValues{Version: 1, Values: []secretValue{{Component: "app", Name: "FTLCONF_webserver_api_password", Value: first.Value}}}
+	if err = replaceSecrets(context.Background(), db, "inst-pihole01", restored); err != nil {
+		t.Fatal(err)
+	}
+	afterRestore, err := revealApplicationCredential(db, request)
+	if err != nil || afterRestore.Value != first.Value {
+		t.Fatal("restored credential was not revealable")
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"arbitrary credential": func(r *protocol.Request) { r.CredentialID = "internal-key" },
+		"wrong application":    func(r *protocol.Request) { r.ApplicationID = "open-webui" },
+		"another installation": func(r *protocol.Request) { r.InstanceID = "inst-pihole02" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			mutate(&candidate)
+			if disclosure, revealErr := revealApplicationCredential(db, candidate); revealErr == nil || disclosure.Value != "" {
+				t.Fatal("unauthorized credential disclosure succeeded")
+			}
+		})
 	}
 }
 

@@ -14,6 +14,13 @@ rejected. Exposure changes require controlled
 runtime recreation; public Internet exposure, firewall automation, and
 reverse-proxy/TLS configuration are out of scope.
 
+A schema-version-8 service may declare a constrained initial
+`default_exposure`. This is used for Pi-hole's reviewed network-service profile:
+TCP and UDP DNS bind the configured exact LAN address on fixed port 53, while
+the admin HTTP service receives a dynamic loopback port. The manifest cannot
+name the address. Installation stops before helper mutation if the LAN address
+is unavailable or either transport conflicts.
+
 The API and helper carry the complete, bounded service-binding set through
 install, replacement, lifecycle, reconciliation, and repair. Each binding
 records service identity, TCP or UDP transport, container port, exposure mode,

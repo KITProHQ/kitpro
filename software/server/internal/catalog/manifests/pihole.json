@@ -1,0 +1,96 @@
+{
+  "schema_version": 8,
+  "id": "pihole",
+  "name": "Pi-hole",
+  "description": "Provide network-wide DNS filtering with a locally managed administration interface.",
+  "category": "Networking",
+  "kind": "network-service",
+  "catalog_status": "experimental",
+  "website_url": "https://pi-hole.net/",
+  "source_url": "https://github.com/pi-hole/docker-pi-hole",
+  "documentation_url": "https://docs.pi-hole.net/docker/",
+  "limitations": [
+    "This KITPro profile provides DNS only; DHCP, NTP, and other optional Pi-hole services are not exposed or supported.",
+    "KITPro uses bridge networking without host networking, privileged mode, or added Linux capabilities.",
+    "KITPro does not change router or client DNS settings; those settings remain under administrator control.",
+    "This profile does not provide high availability or secondary Pi-hole replication.",
+    "KITPro does not configure public HTTPS, a reverse proxy, or Internet publishing for the admin interface.",
+    "Stopping or removing the Pi-hole runtime can interrupt DNS for clients configured to use this instance."
+  ],
+  "lifecycle_notice": {
+    "install": "Installing Pi-hole does not change router or client DNS settings. If clients later use this server for DNS, Pi-hole becomes infrastructure-critical.",
+    "stop": "This operation can interrupt DNS for clients configured to use this Pi-hole instance.",
+    "remove": "Removing the Pi-hole runtime can interrupt DNS. KITPro retains Pi-hole application data and does not revert router or client DNS settings.",
+    "require_acknowledgement": true
+  },
+  "releases": [
+    {
+      "version": "2026.09.0",
+      "registry": "docker.io",
+      "repository": "pihole/pihole",
+      "digest": "sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63",
+      "platform": "linux/amd64"
+    }
+  ],
+  "storage": [
+    {
+      "id": "config",
+      "container_path": "/etc/pihole",
+      "persistent": true,
+      "read_only": false,
+      "system_config": true
+    }
+  ],
+  "environment": [
+    {
+      "name": "FTLCONF_dns_listeningMode",
+      "value": "ALL"
+    },
+    {
+      "name": "FTLCONF_webserver_api_password",
+      "secret": true,
+      "required": true,
+      "generate": "random-hex-32",
+      "credential": {
+        "id": "admin-password",
+        "label": "Admin password"
+      }
+    }
+  ],
+  "services": [
+    {
+      "id": "admin",
+      "name": "Admin Web Interface",
+      "protocol": "http",
+      "container_port": 80,
+      "default_exposure": "loopback"
+    },
+    {
+      "id": "dns-tcp",
+      "name": "DNS TCP",
+      "protocol": "tcp",
+      "container_port": 53,
+      "default_exposure": "lan",
+      "fixed_host_port": 53
+    },
+    {
+      "id": "dns-udp",
+      "name": "DNS UDP",
+      "protocol": "udp",
+      "container_port": 53,
+      "default_exposure": "lan",
+      "fixed_host_port": 53
+    }
+  ],
+  "restart": "unless-stopped",
+  "backup": {
+    "strategy": "cold-filesystem",
+    "storage": [
+      {
+        "component": "app",
+        "id": "config",
+        "disposition": "include"
+      }
+    ]
+  }
+}

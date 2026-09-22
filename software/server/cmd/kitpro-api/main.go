@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,7 @@ type app struct {
 	catalog       map[string]catalog.Entry
 	helperCall    func(protocol.Request) (protocol.Response, error)
 	allocatePort  func(map[int]bool, string) (int, error)
+	hostListeners func() ([]exposure.ServiceBinding, error)
 	// beforeControlProjection is a deterministic fault-injection seam. A nil
 	// hook has no production effect.
 	beforeControlProjection func() error
@@ -596,19 +598,22 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		ID, Name, Description, Release, Category, Initials, Hardware string
 		WebsiteURL, SourceURL, DocumentationURL, LogoURL             string
 		InstalledCount                                               int
-		HardwareUnavailable, Experimental                            bool
+		HardwareUnavailable, Experimental, NetworkService            bool
 		StorageSlots                                                 []storageSlotView
-		Limitations                                                  []string
+		Limitations, NetworkRequirements                             []string
+		InstallNotice                                                string
 	}
 	type installationView struct {
 		ID, Name, Description, Category, Initials, State, StateLabel, StateClass, AppID, Release string
 		AccessLabel, OpenEndpoint, AvailableRelease, HardwareLabel, HardwareClass, HardwareID    string
 		LogoURL                                                                                  string
 		Generation, InstalledCount                                                               int
-		UpdateAvailable, Experimental                                                            bool
+		UpdateAvailable, Experimental, NetworkService                                            bool
 		Services                                                                                 []serviceStatus
 		Components                                                                               []string
 		Storage                                                                                  []installedStorageView
+		Credentials                                                                              []manifest.CredentialPresentation
+		LifecycleNotice                                                                          *manifest.LifecycleNotice
 	}
 	type operationView struct {
 		Title, Initial, StatusLabel, StatusClass, Summary, RequestedAt, TimeLabel string
@@ -639,6 +644,10 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				m := entry.Manifest
 				view.Name, view.Description, view.Category, view.Initials = m.Name, m.Description, m.Category, appInitials(m.Name)
 				view.LogoURL, view.Experimental = catalogLogoURL(m.Logo), m.CatalogStatus == "experimental"
+				view.NetworkService, view.LifecycleNotice = m.Kind == "network-service", m.LifecycleNotice
+				for _, credential := range manifest.PresentedCredentials(m) {
+					view.Credentials = append(view.Credentials, manifest.CredentialPresentation{ID: credential.ID, Label: credential.Label, Username: credential.Username})
+				}
 				if len(m.Components) == 0 && len(m.Releases) > 1 {
 					candidate := m.Releases[len(m.Releases)-1].Version
 					if candidate != view.Release {
@@ -712,7 +721,18 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: m.Category, Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID], WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, LogoURL: catalogLogoURL(m.Logo), Limitations: append([]string(nil), m.Limitations...), Experimental: m.CatalogStatus == "experimental"}
+		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: m.Category, Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID], WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, LogoURL: catalogLogoURL(m.Logo), Limitations: append([]string(nil), m.Limitations...), Experimental: m.CatalogStatus == "experimental", NetworkService: m.Kind == "network-service"}
+		if m.LifecycleNotice != nil {
+			app.InstallNotice = m.LifecycleNotice.Install
+		}
+		for _, service := range m.Services {
+			transport, _ := exposure.TransportFor(service.Protocol)
+			if service.FixedHostPort != 0 {
+				app.NetworkRequirements = append(app.NetworkRequirements, fmt.Sprintf("%s requires the configured LAN address on port %d/%s", service.Name, service.FixedHostPort, transport))
+			} else if service.DefaultExposure == string(exposure.Loopback) {
+				app.NetworkRequirements = append(app.NetworkRequirements, service.Name+" uses a dynamic port on this server")
+			}
+		}
 		for _, slot := range m.ExternalStorage {
 			item := storageSlotView{ID: slot.ID, Purpose: slot.Purpose, Mode: slot.Mode}
 			for _, root := range storageRoots {
@@ -1089,7 +1109,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	if opType == "" {
 		opType = "InstallApplication"
 	}
-	if opType != "InstallApplication" && opType != "ConfigureServiceExposure" && opType != "UpdateApplication" {
+	if opType != "InstallApplication" && opType != "ConfigureServiceExposure" && opType != "UpdateApplication" && opType != "RecreateApplication" {
 		http.Error(w, "invalid operation type", 400)
 		return
 	}
@@ -1111,6 +1131,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var e error
+	bindingFailureSummary := ""
 	helperRejected := false
 	helperPending := false
 	var helperRequest protocol.Request
@@ -1121,6 +1142,8 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			helperOperation = opType
 		} else if opType == "UpdateApplication" {
 			helperOperation = "UpdateApplication"
+		} else if opType == "RecreateApplication" {
+			helperOperation = "InstallApplication"
 		}
 		q := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: id, Operation: helperOperation, OperationRevision: 1, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
 		q.RepairAction = r.URL.Query().Get("repair_action")
@@ -1151,6 +1174,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			q.Services = append(q.Services, protocol.Service{ID: s.ID, Protocol: s.Protocol, ContainerPort: s.ContainerPort})
 		}
 		q.Bindings, e = a.buildServiceBindings(r.Context(), inst, plan.Services, opType, r.URL.Query())
+		if e != nil {
+			bindingFailureSummary, _ = safeBindingConflictSummary(e)
+		}
 		for _, component := range plan.ResolvedComponents {
 			pc := protocol.Component{ID: component.ID, Image: component.ImageDigest, Restart: component.Restart, DependsOn: append([]string(nil), component.DependsOn...)}
 			if component.RunAs != nil {
@@ -1200,6 +1226,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		status = "failed"
 		failureCategory = operationErrorCategory(e)
 		summary = safeOperationSummary(failureCategory)
+		if bindingFailureSummary != "" {
+			summary = bindingFailureSummary
+		}
 		if existing == "" && helperRejected {
 			// The helper did not establish trusted runtime ownership. Preserve the
 			// installation and its data, but keep the next supported recreation at
@@ -1327,11 +1356,34 @@ func (a *app) buildServiceBindings(ctx context.Context, installation string, ser
 			return nil, err
 		}
 		binding := exposure.ServiceBinding{ServiceID: service.ID, Transport: transport, ContainerPort: service.ContainerPort, Mode: exposure.Internal, HostPort: service.FixedHostPort}
+		stored := false
 		if record, getErr := exposure.Get(ctx, a.db, installation, service.ID); getErr == nil {
 			if record.Transport != transport {
 				return nil, errors.New("stored service transport does not match trusted manifest")
 			}
 			binding.Mode, binding.HostAddress, binding.HostPort = record.Mode, record.HostAddress, record.HostPort
+			stored = true
+		}
+		if !stored && (operation == "InstallApplication" || operation == "RecreateApplication") && service.DefaultExposure != "" {
+			binding.Mode = exposure.Mode(service.DefaultExposure)
+			switch binding.Mode {
+			case exposure.Loopback:
+				binding.HostAddress = "127.0.0.1"
+			case exposure.LAN:
+				binding.HostAddress = configuredLAN
+				if configuredLAN == "" {
+					return nil, errors.New("LAN bind address not configured")
+				}
+				if err = exposure.VerifyLocalAddress(configuredLAN); err != nil {
+					return nil, errors.New("LAN bind address is not assigned")
+				}
+			}
+			if binding.Mode != exposure.Internal && service.FixedHostPort == 0 {
+				binding.HostPort, err = a.allocateDefaultServicePort(ctx, installation, binding, bindings)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 		if operation == "ConfigureServiceExposure" && target == service.ID {
 			binding.Mode = exposure.Mode(query.Get("exposure_mode"))
@@ -1361,6 +1413,42 @@ func (a *app) buildServiceBindings(ctx context.Context, installation string, ser
 		out = append(out, protocol.ServiceBinding{ServiceID: b.ServiceID, Transport: string(b.Transport), ContainerPort: b.ContainerPort, Mode: string(b.Mode), HostAddress: b.HostAddress, HostPort: b.HostPort})
 	}
 	return out, nil
+}
+
+func (a *app) allocateDefaultServicePort(ctx context.Context, installation string, binding exposure.ServiceBinding, pending []exposure.ServiceBinding) (int, error) {
+	used := map[int]bool{}
+	rows, err := a.db.QueryContext(ctx, `SELECT installation_id,transport,mode,host_address,host_port FROM installation_service_exposure WHERE host_port>0`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var owner string
+		var transport exposure.Transport
+		var mode exposure.Mode
+		var address string
+		var port int
+		if err = rows.Scan(&owner, &transport, &mode, &address, &port); err != nil {
+			return 0, err
+		}
+		candidate := binding
+		candidate.HostPort = port
+		if owner != installation && exposure.BindingsConflict(candidate, exposure.ServiceBinding{Transport: transport, Mode: mode, HostAddress: address, HostPort: port}) {
+			used[port] = true
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, current := range pending {
+		if current.Transport == binding.Transport && current.HostAddress == binding.HostAddress && current.HostPort > 0 {
+			used[current.HostPort] = true
+		}
+	}
+	if a.allocatePort != nil && binding.Transport == exposure.TCP {
+		return a.allocatePort(used, binding.HostAddress)
+	}
+	return exposure.AllocateAvailableTransport(used, binding.HostAddress, binding.Transport)
 }
 
 func (a *app) preflightBindings(ctx context.Context, installation string, requested []exposure.ServiceBinding) error {
@@ -1405,7 +1493,11 @@ func (a *app) preflightBindings(ctx context.Context, installation string, reques
 			}
 		}
 	}
-	listeners, err := exposure.HostListeners()
+	listenerSource := a.hostListeners
+	if listenerSource == nil {
+		listenerSource = exposure.HostListeners
+	}
+	listeners, err := listenerSource()
 	if err != nil {
 		return fmt.Errorf("host listener preflight unavailable: %w", err)
 	}
@@ -1422,7 +1514,7 @@ func (a *app) preflightBindings(ctx context.Context, installation string, reques
 				}
 			}
 			if !owned {
-				return fmt.Errorf("host listener already uses %s:%d/%s", want.HostAddress, want.HostPort, want.Transport)
+				return fmt.Errorf("host listener %s:%d/%s conflicts with requested %s:%d/%s", listener.HostAddress, listener.HostPort, listener.Transport, want.HostAddress, want.HostPort, want.Transport)
 			}
 		}
 	}
@@ -1522,13 +1614,27 @@ func operationErrorCategory(err error) string {
 	if strings.Contains(message, "storage unavailable") || strings.Contains(message, "storage identity changed") {
 		return "storage_unavailable"
 	}
-	if strings.Contains(message, "address already in use") || strings.Contains(message, "port is already allocated") || strings.Contains(message, "port collision") {
+	if strings.Contains(message, "address already in use") || strings.Contains(message, "port is already allocated") || strings.Contains(message, "port collision") || strings.HasPrefix(message, "binding conflict:") || strings.HasPrefix(message, "binding is reserved by another kitpro installation:") || strings.HasPrefix(message, "host listener ") {
 		return "port_collision"
 	}
 	if strings.Contains(message, "validation") || strings.Contains(message, "mismatch") || strings.Contains(message, "rejected") {
 		return "policy_rejected"
 	}
 	return "helper_failed"
+}
+
+func safeBindingConflictSummary(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	message := err.Error()
+	lower := strings.ToLower(message)
+	for _, prefix := range []string{"binding conflict:", "binding is reserved by another kitpro installation:", "host listener "} {
+		if strings.HasPrefix(lower, prefix) {
+			return message, true
+		}
+	}
+	return "", false
 }
 
 func safeOperationSummary(category string) string {
@@ -1619,8 +1725,18 @@ func (a *app) apps(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) runInstallationLifecycle(w http.ResponseWriter, r *http.Request, installationID, action string) {
 	var generation int
-	if err := a.db.QueryRowContext(r.Context(), "SELECT runtime_generation FROM installations WHERE installation_id=?", installationID).Scan(&generation); err != nil {
+	var appID string
+	if err := a.db.QueryRowContext(r.Context(), "SELECT runtime_generation,application_id FROM installations WHERE installation_id=?", installationID).Scan(&generation, &appID); err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	acknowledged, err := lifecycleAcknowledgement(r)
+	if err != nil {
+		http.Error(w, "invalid acknowledgement", http.StatusBadRequest)
+		return
+	}
+	if a.requiresLifecycleAcknowledgement(appID) && action != "start" && !acknowledged {
+		http.Error(w, "acknowledgement is required for this network service operation", http.StatusPreconditionRequired)
 		return
 	}
 	operationType := map[string]string{"start": "StartApplication", "stop": "StopApplication", "restart": "RestartApplication", "remove": "RemoveApplication"}[action]
@@ -1659,8 +1775,39 @@ func (a *app) runInstallationLifecycle(w http.ResponseWriter, r *http.Request, i
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "status": status})
 }
 
+func (a *app) requiresLifecycleAcknowledgement(appID string) bool {
+	entry, ok := a.catalog[appID]
+	return ok && entry.Manifest.Kind == "network-service" && entry.Manifest.LifecycleNotice != nil && entry.Manifest.LifecycleNotice.RequireAcknowledgement
+}
+
+func lifecycleAcknowledgement(r *http.Request) (bool, error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var input struct {
+			Acknowledged bool `json:"acknowledged"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil && err != io.EOF {
+			return false, err
+		}
+		var trailing any
+		if decoder.Decode(&trailing) != io.EOF {
+			return false, errors.New("trailing request data")
+		}
+		return input.Acknowledged, nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return false, err
+	}
+	return r.FormValue("acknowledgement") == "accepted", nil
+}
+
 func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/installations/"), "/"), "/")
+	if len(parts) == 4 && parts[1] == "credentials" && parts[3] == "reveal" {
+		a.revealApplicationCredential(w, r, parts[0], parts[2])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "reconciliation" {
 		a.installationReconciliation(w, r, parts[0])
 		return
@@ -1691,7 +1838,8 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			Release string `json:"release"`
+			Release      string `json:"release"`
+			Acknowledged bool   `json:"acknowledged"`
 		}
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
@@ -1707,6 +1855,7 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			in.Release = r.FormValue("release")
+			in.Acknowledged = r.FormValue("acknowledgement") == "accepted"
 		}
 		if in.Release == "" {
 			http.Error(w, "release is required", 400)
@@ -1720,6 +1869,10 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		entry, ok := a.catalog[appID]
 		if !ok {
 			http.Error(w, "catalog unavailable", 500)
+			return
+		}
+		if a.requiresLifecycleAcknowledgement(appID) && !in.Acknowledged {
+			http.Error(w, "acknowledgement is required for this network service operation", http.StatusPreconditionRequired)
 			return
 		}
 		found := false
@@ -1779,10 +1932,12 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			Mode string `json:"mode"`
+			Mode         string `json:"mode"`
+			Acknowledged bool   `json:"acknowledged"`
 		}
 		if r.Method == http.MethodDelete {
 			in.Mode = string(exposure.Internal)
+			in.Acknowledged = r.URL.Query().Get("acknowledgement") == "accepted"
 		} else if r.Method == http.MethodPost {
 			if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 				decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
@@ -1798,6 +1953,7 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				in.Mode = r.FormValue("mode")
+				in.Acknowledged = r.FormValue("acknowledgement") == "accepted"
 			}
 		} else {
 			http.Error(w, "method", 405)
@@ -1816,6 +1972,10 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		entry, ok := a.catalog[appID]
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if a.requiresLifecycleAcknowledgement(appID) && !in.Acknowledged {
+			http.Error(w, "acknowledgement is required for this network service operation", http.StatusPreconditionRequired)
 			return
 		}
 		var svc manifest.Service
@@ -1931,10 +2091,81 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	acknowledged, err := lifecycleAcknowledgement(r)
+	if err != nil {
+		http.Error(w, "invalid acknowledgement", http.StatusBadRequest)
+		return
+	}
+	if a.requiresLifecycleAcknowledgement(appID) && !acknowledged {
+		http.Error(w, "acknowledgement is required for this network service operation", http.StatusPreconditionRequired)
+		return
+	}
+	q.Set("operation_type", "RecreateApplication")
 	r.URL.Path = "/api/v1/operations"
 	r.URL.RawQuery = q.Encode()
 	r = r.WithContext(context.WithValue(r.Context(), internalDispatchKey{}, true))
 	a.ops(w, r)
+}
+
+func (a *app) revealApplicationCredential(w http.ResponseWriter, r *http.Request, installationID, credentialID string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var applicationID string
+	if err := a.db.QueryRowContext(r.Context(), `SELECT application_id FROM installations WHERE installation_id=?`, installationID).Scan(&applicationID); err != nil {
+		http.Error(w, "application credential unavailable", http.StatusNotFound)
+		return
+	}
+	entry, ok := a.catalog[applicationID]
+	if !ok {
+		http.Error(w, "application credential unavailable", http.StatusNotFound)
+		return
+	}
+	credential, ok := manifest.FindPresentedCredential(entry.Manifest, credentialID)
+	if !ok {
+		http.Error(w, "application credential unavailable", http.StatusNotFound)
+		return
+	}
+	response, err := a.callHelper(protocol.Request{Version: 2, ID: operations.NewRequestID(), Operation: "RevealApplicationCredential", InstanceID: installationID, ApplicationID: applicationID, CredentialID: credentialID})
+	if err != nil || !response.OK {
+		http.Error(w, "application credential unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	disclosure, err := decodeCredentialDisclosure(response.Result)
+	if err != nil || disclosure.ID != credential.ID || disclosure.Label != credential.Label || disclosure.Username != credential.Username || len(disclosure.Value) != 64 {
+		http.Error(w, "application credential unavailable", http.StatusBadGateway)
+		return
+	}
+	if _, err = hex.DecodeString(disclosure.Value); err != nil {
+		http.Error(w, "application credential unavailable", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(disclosure)
+}
+
+func decodeCredentialDisclosure(value any) (protocol.CredentialDisclosure, error) {
+	if disclosure, ok := value.(protocol.CredentialDisclosure); ok {
+		return disclosure, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return protocol.CredentialDisclosure{}, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	var disclosure protocol.CredentialDisclosure
+	if err = decoder.Decode(&disclosure); err != nil {
+		return protocol.CredentialDisclosure{}, err
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return protocol.CredentialDisclosure{}, errors.New("invalid credential disclosure")
+	}
+	return disclosure, nil
 }
 
 func (a *app) installationReconciliation(w http.ResponseWriter, r *http.Request, installationID string) {

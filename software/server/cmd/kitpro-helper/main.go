@@ -390,10 +390,47 @@ func serve(c net.Conn, api uint32, db *sql.DB, coordinator helperops.Coordinator
 			} else {
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"assignments": result}})
 			}
+		case "RevealApplicationCredential":
+			result, err := revealApplicationCredential(db, r)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "CredentialUnavailable", Error: "application credential unavailable"})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+			}
 		default:
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "operation not permitted"})
 		}
 	}
+}
+
+func revealApplicationCredential(db *sql.DB, request protocol.Request) (protocol.CredentialDisclosure, error) {
+	if request.Version != 2 || !strings.HasPrefix(request.InstanceID, "inst-") || len(request.InstanceID) < 13 || len(request.InstanceID) > 80 || request.ApplicationID == "" || request.CredentialID == "" {
+		return protocol.CredentialDisclosure{}, errors.New("invalid credential request")
+	}
+	entries, err := catalog.Load()
+	if err != nil {
+		return protocol.CredentialDisclosure{}, errors.New("trusted catalog unavailable")
+	}
+	entry, ok := entries[request.ApplicationID]
+	if !ok {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	credential, ok := manifest.FindPresentedCredential(entry.Manifest, request.CredentialID)
+	if !ok {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	var applicationID string
+	if err = db.QueryRow(`SELECT application_id FROM runtime_generations WHERE installation_id=? AND application_id=? ORDER BY runtime_generation DESC LIMIT 1`, request.InstanceID, request.ApplicationID).Scan(&applicationID); err != nil || applicationID != request.ApplicationID {
+		return protocol.CredentialDisclosure{}, errors.New("installation credential unavailable")
+	}
+	var value string
+	if err = db.QueryRow(`SELECT value FROM installation_secrets WHERE installation_id=? AND component_id=? AND name=?`, request.InstanceID, credential.ComponentID, credential.EnvironmentName).Scan(&value); err != nil || len(value) != 64 {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	if _, err = hex.DecodeString(value); err != nil {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	return protocol.CredentialDisclosure{ID: credential.ID, Label: credential.Label, Username: credential.Username, Value: value}, nil
 }
 
 func isDurableMutation(operation string) bool {

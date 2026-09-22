@@ -3,10 +3,12 @@
 KITPro ships a small trusted catalog. Every entry is strict schema-versioned
 JSON, resolves to an immutable image digest, and passes the same helper-side
 runtime validation. Catalog content cannot request host paths, Docker socket
-access, privileged mode, host namespaces, devices, capabilities, or host port
-bindings. Service exposure is an installation policy and defaults to internal.
+access, privileged mode, host namespaces, devices, or capabilities. Service
+exposure is an installation policy. Schema version 8 can authorize an exact
+fixed port and constrained initial exposure without accepting an address from
+the manifest or user.
 
-The 18 visible entries use manifest schema version 7. Their category,
+The 19 visible entries use manifest schema versions 7 and 8. Their category,
 application kind, catalog status, official links, and non-derivable limitations
 come from the manifest. The API and server-rendered catalog use that same
 source. Logo keys can reference reviewed packaged assets; entries without one
@@ -40,6 +42,7 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | IT-Tools | Developer Tools | Browser utilities | Single | Stateless | CPU | HTTP, private by default |
 | Forgejo | Developer Tools | Self-hosted Git service | Single | Managed `/data` | CPU | HTTP, private by default; no Git-over-SSH or public HTTPS |
 | Nextcloud | Productivity | File synchronization and collaboration | Single | Managed `/var/www/html` | CPU | Experimental minimal SQLite profile; browser-focused and private by default |
+| Pi-hole | Networking | Network-wide DNS filtering | Single | Managed `/etc/pihole` | CPU | Experimental Network Service; TCP/UDP 53 on the configured LAN address, dynamic loopback admin HTTP, DNS only |
 | Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
 | Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
 | Plex | Media | Media library streaming | Single | Managed config plus read-only trusted media | CPU | TCP 32400 only; reduced discovery and no automatic remote access |
@@ -47,9 +50,11 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | Audiobookshelf | Media | Audiobook streaming | Single | Managed config/metadata plus read-only trusted library | CPU | HTTP, private by default |
 | SFTPGo | Files | Scoped file access | Single | Managed config plus exclusive trusted read-write root | CPU | Web UI exposable; SFTP remains internal |
 
-All user-facing services start internal-only. An administrator may select
-loopback or one configured LAN address; wildcard publication, host networking,
-and automatic Internet exposure are unavailable.
+Ordinary user-facing services start internal-only. Pi-hole is the reviewed
+exception: its DNS services start on the configured exact LAN address at
+53/TCP and 53/UDP, and its admin HTTP service starts on a dynamic loopback
+port. Wildcard publication, host networking, and automatic Internet exposure
+remain unavailable.
 
 | Application | Release | Image identity | Persistent storage | Service | License |
 | --- | --- | --- | --- | --- | --- |
@@ -65,6 +70,7 @@ and automatic Internet exposure are unavailable.
 | IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
 | Forgejo | 16.0.5 | `codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74` | managed `data` at `/data` | HTTP 3000 | GPL-3.0-or-later |
 | Nextcloud | 34.0.4-apache | `docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1` | managed `html` at `/var/www/html` | HTTP 80 | AGPL-3.0 |
+| Pi-hole | 2026.09.0 | `docker.io/pihole/pihole@sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63` | managed `config` at `/etc/pihole` | DNS 53/TCP and 53/UDP; dynamic HTTP 80 | EUPL-1.2 |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 | Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
 | Plex | 1.43.4.10903-e5521bd8c | `docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee` | managed `/config`; trusted read-only `/data` | HTTP 32400 | Proprietary |
@@ -72,7 +78,7 @@ and automatic Internet exposure are unavailable.
 | Audiobookshelf | 2.36.0 | `ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8` | managed `/config` and `/metadata`; trusted read-only `/audiobooks` | HTTP 80 | GPL-3.0 |
 | SFTPGo | 2.7.5 | `ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e` | managed config; exclusive trusted read-write `/srv/sftpgo/data` | HTTP 8080; internal SFTP 2022/TCP | AGPL-3.0-only |
 
-The seventeen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The eighteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -131,6 +137,25 @@ temporary transcodes. Only HTTP 32400 is declared. Discovery, DLNA, companion
 ports, automatic remote access, GPU devices, and router configuration are not
 exposed or configured by KITPro. Initial claiming uses Plex's browser flow through loopback access;
 KITPro does not collect or generate `PLEX_CLAIM` tokens.
+
+Pi-hole is an experimental Network Service because clients may depend on it
+for basic DNS resolution. KITPro uses the official Docker image in bridge mode,
+sets `FTLCONF_dns_listeningMode=ALL`, and persists the complete fresh-install
+state at `/etc/pihole`. KITPro generates the
+`FTLCONF_webserver_api_password` secret once and reuses it across runtime
+replacement and update. The installed-application page can reveal this one
+manifest-authorized administration credential through an explicit protected
+action. Ordinary catalog, installation, lifecycle, and operation responses do
+not contain it, and refreshing the page conceals it again.
+
+The profile publishes only 53/TCP and 53/UDP on KITPro's configured LAN
+address. The admin HTTP service uses a separate dynamic loopback port. DHCP,
+NTP, HTTPS, host networking, privileged mode, added capabilities, firewall
+changes, router changes, and client DNS changes are absent. The stopped
+filesystem backup includes the managed `/etc/pihole` tree and generated secret;
+it excludes router and client configuration. Stop, restart, update, recreate,
+and runtime removal require server-validated acknowledgement because they can
+interrupt DNS. Runtime removal keeps the installation record and managed data.
 
 Open WebUI and Ollama remain independent installations. KITPro installation networks are isolated, and no trusted cross-installation service-discovery primitive exists. Administrators can configure a separately reachable Ollama endpoint in Open WebUI, but KITPro does not add host networking or inject an unvalidated URL.
 
@@ -210,6 +235,7 @@ The following official sources were retrieved on 2026-09-13 unless noted:
 - Forgejo (2026-09-22): [release index](https://forgejo.org/releases/), [16.0.5 download](https://forgejo.org/download/), [official Docker installation](https://forgejo.org/docs/v16.0/admin/installation/docker/), and [upgrade guidance](https://forgejo.org/docs/v16.0/admin/upgrade/)
 - Plex (2026-09-22): [official container project](https://github.com/plexinc/pms-docker), [official image tags](https://hub.docker.com/r/plexinc/pms-docker/tags), and [Plex installation guidance](https://support.plex.tv/articles/200288586-installation/)
 - Nextcloud (2026-09-22): [official container project and persistence guidance](https://github.com/nextcloud/docker), [official image tags](https://hub.docker.com/_/nextcloud), [installation wizard](https://docs.nextcloud.com/server/stable/admin_manual/installation/installation_wizard.html), and [upgrade guidance](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/upgrade.html)
+- Pi-hole (2026-09-22): [official Docker guide](https://docs.pi-hole.net/docker/), [container configuration and capabilities](https://docs.pi-hole.net/docker/configuration/), [official image source](https://github.com/pi-hole/docker-pi-hole), [2026.09.0 release](https://github.com/pi-hole/docker-pi-hole/releases/tag/2026.09.0), and [official image package](https://github.com/pi-hole/docker-pi-hole/pkgs/container/pihole)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one

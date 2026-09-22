@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "nextcloud", "ollama", "open-webui", "paperless-ngx", "plex", "sftpgo", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "nextcloud", "ollama", "open-webui", "paperless-ngx", "pihole", "plex", "sftpgo", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -37,6 +37,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"vaultwarden", "1.37.2", "docker.io/vaultwarden/server@sha256:5d326778c22f063d093d6b0c9c766a28249561632266776f2c93132ab0ad3a80", "/data", 80, nil},
 		{"home-assistant", "stable", "ghcr.io/home-assistant/home-assistant@sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa", "/config", 8123, nil},
 		{"paperless-ngx", "2.20.15", "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", "/usr/src/paperless/data", 8000, nil},
+		{"pihole", "2026.09.0", "docker.io/pihole/pihole@sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63", "/etc/pihole", 80, map[string]string{"FTLCONF_dns_listeningMode": "ALL"}},
 		{"plex", "1.43.4.10903-e5521bd8c", "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee", "/config", 32400, nil},
 		{"nextcloud", "34.0.4-apache", "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1", "/var/www/html", 80, nil},
 		{"open-webui", "0.11.3", "ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "/app/backend/data", 8080, nil},
@@ -98,11 +99,12 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		"mealie": "Food and recipes", "memos": "Notes",
 		"navidrome": "Music", "ollama": "AI", "open-webui": "AI",
 		"paperless-ngx": "Documents", "plex": "Media", "sftpgo": "Files",
+		"pihole":      "Networking",
 		"nextcloud":   "Productivity",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
 	}
-	if len(wantCategories) != 18 {
-		t.Fatal("visible catalog metadata fixture must cover all 18 applications")
+	if len(wantCategories) != 19 {
+		t.Fatal("visible catalog metadata fixture must cover all 19 applications")
 	}
 	for id, category := range wantCategories {
 		entry, ok := c[id]
@@ -111,10 +113,18 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		}
 		m := entry.Manifest
 		wantStatus := "standard"
-		if id == "nextcloud" {
+		wantKind := "application"
+		if id == "nextcloud" || id == "pihole" {
 			wantStatus = "experimental"
 		}
-		if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.Category != category || m.Kind != "application" || m.CatalogStatus != wantStatus {
+		if id == "pihole" {
+			wantKind = "network-service"
+		}
+		wantSchema := manifest.CatalogMetadataSchemaVersion
+		if id == "pihole" {
+			wantSchema = manifest.NetworkBindingSchemaVersion
+		}
+		if m.SchemaVersion != wantSchema || m.Category != category || m.Kind != wantKind || m.CatalogStatus != wantStatus {
 			t.Fatalf("incomplete metadata for %s: %#v", id, m)
 		}
 		if m.WebsiteURL == "" && m.SourceURL == "" && m.DocumentationURL == "" {
@@ -126,6 +136,55 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 	}
 	if c["busybox"].Manifest.SchemaVersion != manifest.BackupSchemaVersion {
 		t.Fatal("busybox must remain a schema-v6 compatibility fixture")
+	}
+}
+
+func TestPiHoleProfileIsConstrained(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c["pihole"].Manifest
+	if m.SchemaVersion != manifest.NetworkBindingSchemaVersion || m.ID != "pihole" || m.Name != "Pi-hole" || m.Category != "Networking" || m.Kind != "network-service" || m.CatalogStatus != "experimental" {
+		t.Fatalf("unexpected Pi-hole identity or metadata: %#v", m)
+	}
+	if m.WebsiteURL != "https://pi-hole.net/" || m.SourceURL != "https://github.com/pi-hole/docker-pi-hole" || m.DocumentationURL != "https://docs.pi-hole.net/docker/" || m.Logo != "" || len(m.Limitations) != 6 {
+		t.Fatalf("unexpected Pi-hole presentation metadata: %#v", m)
+	}
+	for _, required := range []string{"DNS only", "DHCP", "NTP", "host networking", "Linux capabilities", "router or client DNS", "high availability", "interrupt DNS"} {
+		found := false
+		for _, limitation := range m.Limitations {
+			found = found || strings.Contains(limitation, required)
+		}
+		if !found {
+			t.Fatalf("Pi-hole limitations do not mention %s: %#v", required, m.Limitations)
+		}
+	}
+	if m.LifecycleNotice == nil || !m.LifecycleNotice.RequireAcknowledgement || m.LifecycleNotice.Install == "" || m.LifecycleNotice.Stop == "" || m.LifecycleNotice.Remove == "" {
+		t.Fatalf("Pi-hole lifecycle notice is incomplete: %#v", m.LifecycleNotice)
+	}
+	if len(m.Releases) != 1 || m.Releases[0].Version != "2026.09.0" || m.Releases[0].Registry != "docker.io" || m.Releases[0].Repository != "pihole/pihole" || m.Releases[0].Digest != "sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63" || m.Releases[0].Platform != "linux/amd64" {
+		t.Fatalf("unexpected Pi-hole release: %#v", m.Releases)
+	}
+	if len(m.Storage) != 1 || m.Storage[0].ID != "config" || m.Storage[0].ContainerPath != "/etc/pihole" || !m.Storage[0].Persistent || m.Storage[0].ReadOnly || !m.Storage[0].SystemConfig {
+		t.Fatalf("unexpected Pi-hole storage: %#v", m.Storage)
+	}
+	if len(m.Environment) != 2 || m.Environment[0].Name != "FTLCONF_dns_listeningMode" || m.Environment[0].Value != "ALL" || m.Environment[1].Name != "FTLCONF_webserver_api_password" || !m.Environment[1].Secret || !m.Environment[1].Required || m.Environment[1].Generate != "random-hex-32" || m.Environment[1].Credential == nil || m.Environment[1].Credential.ID != "admin-password" || m.Environment[1].Credential.Label != "Admin password" || m.Environment[1].Credential.Username != "" {
+		t.Fatalf("unexpected Pi-hole environment: %#v", m.Environment)
+	}
+	if len(m.Services) != 3 || m.Services[0] != (manifest.Service{ID: "admin", Name: "Admin Web Interface", Protocol: "http", ContainerPort: 80, DefaultExposure: "loopback"}) || m.Services[1] != (manifest.Service{ID: "dns-tcp", Name: "DNS TCP", Protocol: "tcp", ContainerPort: 53, DefaultExposure: "lan", FixedHostPort: 53}) || m.Services[2] != (manifest.Service{ID: "dns-udp", Name: "DNS UDP", Protocol: "udp", ContainerPort: 53, DefaultExposure: "lan", FixedHostPort: 53}) {
+		t.Fatalf("unexpected Pi-hole services: %#v", m.Services)
+	}
+	for _, service := range m.Services {
+		if service.ContainerPort == 67 || service.ContainerPort == 123 || service.ContainerPort == 443 {
+			t.Fatalf("Pi-hole profile exposes an optional service: %#v", service)
+		}
+	}
+	if len(m.Components) != 0 || len(m.ExternalStorage) != 0 || len(m.Hardware) != 0 || len(m.Command) != 0 || m.RunAs != nil {
+		t.Fatalf("Pi-hole acquired unexpected runtime authority: %#v", m)
+	}
+	if m.Restart != "unless-stopped" || m.Backup == nil || m.Backup.Strategy != "cold-filesystem" || len(m.Backup.Storage) != 1 || m.Backup.Storage[0] != (manifest.BackupStorage{Component: "app", ID: "config", Disposition: "include"}) {
+		t.Fatalf("unexpected Pi-hole lifecycle policy: restart=%q backup=%#v", m.Restart, m.Backup)
 	}
 }
 

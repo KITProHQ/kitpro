@@ -56,6 +56,21 @@ The dashboard is the supported client for installing an application, starting
 or stopping a runtime, removing a runtime while keeping its data, and
 recreating a runtime with the same installation identity and storage.
 
+For a catalog `network-service` whose lifecycle notice requires
+acknowledgement, the API returns `428 Precondition Required` unless stop,
+restart, update, recreate, runtime removal, or exposure replacement includes
+an explicit acknowledgement. JSON requests use `"acknowledged": true`; browser
+forms use `acknowledgement=accepted`. Ordinary applications are unaffected.
+
+`POST /api/v1/installations/{id}/credentials/{credential}/reveal` deliberately
+reveals one administrator credential authorized by the installed application's
+embedded manifest. The public credential ID is not an environment-variable
+name. The endpoint uses the normal authenticated session, Origin, Host, and
+CSRF checks and returns `Cache-Control: no-store`. No GET, catalog,
+installation, lifecycle, or operation response contains the value. Reveal is
+repeatable; refresh discards the displayed value from the page. Credential
+enumeration and reset are not supported.
+
 `GET /api/v1/operations` returns up to 20 recent operation records. `GET
 /api/v1/operations/{id}` returns one record with this public shape:
 
@@ -127,7 +142,9 @@ policy mode (`internal`, `loopback`, or `lan`). Host addresses, host ports,
 container ports, protocols, and Docker binding objects are not client inputs.
 
 `DELETE /api/v1/installations/{id}/services/{service}/exposure` returns the
-service to `internal` and retains its assigned port for stable re-enable.
+service to `internal` and retains its assigned port for stable re-enable. A
+network service requiring acknowledgement uses
+`?acknowledgement=accepted` on this DELETE endpoint.
 
 ## Application updates
 

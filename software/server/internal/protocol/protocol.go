@@ -55,6 +55,7 @@ type Request struct {
 	RunAs           *RuntimeIdentity         `json:"run_as,omitempty"`
 	BackupID        string                   `json:"backup_id,omitempty"`
 	RepairAction    string                   `json:"repair_action,omitempty"`
+	CredentialID    string                   `json:"credential_id,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -120,6 +121,16 @@ type Response struct {
 	ErrorCode         string `json:"error_code,omitempty"`
 	Error             string `json:"error,omitempty"`
 	Retryable         bool   `json:"retryable,omitempty"`
+}
+
+// CredentialDisclosure is returned only by the explicit reveal operation.
+// It must never be persisted in operation state, logged, or embedded in normal
+// application resources.
+type CredentialDisclosure struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Username string `json:"username,omitempty"`
+	Value    string `json:"value"`
 }
 
 // SemanticOperationID returns the durable mutation identity. The request ID

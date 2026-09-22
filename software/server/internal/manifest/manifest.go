@@ -24,6 +24,8 @@ const NetworkBindingSchemaVersion = 8
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var logoPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
+var legacyEnvPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
+var v8EnvPattern = regexp.MustCompile(`^[A-Z_][A-Za-z0-9_]{0,63}$`)
 
 var catalogCategories = map[string]bool{
 	"AI": true, "Developer Tools": true, "Documents": true,
@@ -60,8 +62,8 @@ type Manifest struct {
 	LifecycleNotice  *LifecycleNotice  `json:"lifecycle_notice,omitempty"`
 }
 
-// LifecycleNotice is display metadata. Runtime acknowledgement remains a
-// separate, future policy so catalog text cannot authorize lifecycle changes.
+// LifecycleNotice supplies trusted display text and opts infrastructure-sensitive
+// application kinds into the API's generic lifecycle acknowledgement policy.
 type LifecycleNotice struct {
 	Install                string `json:"install,omitempty"`
 	Stop                   string `json:"stop,omitempty"`
@@ -80,8 +82,11 @@ type Storage struct {
 	ContainerPath string `json:"container_path"`
 	Persistent    bool   `json:"persistent"`
 	ReadOnly      bool   `json:"read_only"`
-	OwnerUID      int    `json:"owner_uid,omitempty"`
-	OwnerGID      int    `json:"owner_gid,omitempty"`
+	// SystemConfig explicitly marks a trusted managed application directory
+	// below /etc. Ordinary storage declarations remain unable to target /etc.
+	SystemConfig bool `json:"system_config,omitempty"`
+	OwnerUID     int  `json:"owner_uid,omitempty"`
+	OwnerGID     int  `json:"owner_gid,omitempty"`
 }
 
 // RuntimeIdentity is a trusted numeric primary identity. Supplementary groups,
@@ -115,17 +120,36 @@ type BackupStorage struct {
 	Disposition string `json:"disposition"`
 }
 type Env struct {
-	Name     string `json:"name"`
-	Value    string `json:"value,omitempty"`
-	Secret   bool   `json:"secret,omitempty"`
-	Generate string `json:"generate,omitempty"`
-	Required bool   `json:"required,omitempty"`
+	Name       string                  `json:"name"`
+	Value      string                  `json:"value,omitempty"`
+	Secret     bool                    `json:"secret,omitempty"`
+	Generate   string                  `json:"generate,omitempty"`
+	Required   bool                    `json:"required,omitempty"`
+	Credential *CredentialPresentation `json:"credential,omitempty"`
+}
+
+// CredentialPresentation opts one generated secret into deliberate
+// administrator disclosure. Its public ID is distinct from the environment
+// name so browser markup never exposes the runtime's internal secret name.
+type CredentialPresentation struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Username string `json:"username,omitempty"`
+}
+
+// PresentedCredential is derived only from a validated embedded manifest.
+// ComponentID and EnvironmentName remain helper-side lookup details.
+type PresentedCredential struct {
+	ID, Label, Username, ComponentID, EnvironmentName string
 }
 type Service struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Protocol      string `json:"protocol"`
 	ContainerPort int    `json:"container_port"`
+	// DefaultExposure is trusted install policy. It selects only an existing
+	// constrained exposure mode; it cannot supply a host address or port.
+	DefaultExposure string `json:"default_exposure,omitempty"`
 	// FixedHostPort authorizes KITPro to bind this exact host port. It is a
 	// trusted catalog policy, never a user-selected value.
 	FixedHostPort int `json:"fixed_host_port,omitempty"`
@@ -265,8 +289,11 @@ func Validate(m Manifest) error {
 	}
 	seen = map[string]bool{}
 	for _, s := range m.Storage {
-		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath) {
+		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath, s.SystemConfig) {
 			return fmt.Errorf("invalid storage declaration")
+		}
+		if err := validateSystemConfigStorage(s, m.SchemaVersion); err != nil {
+			return err
 		}
 		seen[s.ID] = true
 		if err := validateStorageOwnership(s); err != nil {
@@ -275,7 +302,7 @@ func Validate(m Manifest) error {
 	}
 	seen = map[string]bool{}
 	for _, e := range m.Environment {
-		if !regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`).MatchString(e.Name) || seen[e.Name] || (e.Required && e.Value != "") {
+		if !validEnvironmentName(e.Name, m.SchemaVersion) || seen[e.Name] || (e.Required && e.Value != "") {
 			return fmt.Errorf("invalid environment declaration")
 		}
 		seen[e.Name] = true
@@ -310,6 +337,9 @@ func Validate(m Manifest) error {
 		if s.FixedHostPort != 0 && (m.SchemaVersion < NetworkBindingSchemaVersion || s.FixedHostPort < 1 || s.FixedHostPort > 65535) {
 			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
 		}
+		if err := validateDefaultExposure(s, m.SchemaVersion); err != nil {
+			return err
+		}
 		seen[s.ID] = true
 		seenPort[portProtocol] = true
 	}
@@ -342,6 +372,9 @@ func Validate(m Manifest) error {
 			return fmt.Errorf("component %s: %w", c.ID, err)
 		}
 	}
+	if err := validateCredentialPresentations(m); err != nil {
+		return err
+	}
 	for _, c := range m.Components {
 		for _, dep := range c.DependsOn {
 			if !componentIDs[dep] {
@@ -351,6 +384,68 @@ func Validate(m Manifest) error {
 	}
 	if err := validateBackupPolicy(m); err != nil {
 		return err
+	}
+	return nil
+}
+
+// PresentedCredentials returns the administrator-facing credential inventory
+// authorized by the trusted manifest. It never contains secret values.
+func PresentedCredentials(m Manifest) []PresentedCredential {
+	result := make([]PresentedCredential, 0)
+	for _, item := range m.Environment {
+		if item.Credential != nil {
+			result = append(result, PresentedCredential{ID: item.Credential.ID, Label: item.Credential.Label, Username: item.Credential.Username, EnvironmentName: item.Name})
+		}
+	}
+	for _, component := range m.Components {
+		for _, item := range component.Environment {
+			if item.Credential != nil {
+				result = append(result, PresentedCredential{ID: item.Credential.ID, Label: item.Credential.Label, Username: item.Credential.Username, ComponentID: component.ID, EnvironmentName: item.Name})
+			}
+		}
+	}
+	return result
+}
+
+func FindPresentedCredential(m Manifest, id string) (PresentedCredential, bool) {
+	for _, credential := range PresentedCredentials(m) {
+		if credential.ID == id {
+			return credential, true
+		}
+	}
+	return PresentedCredential{}, false
+}
+
+func validateCredentialPresentations(m Manifest) error {
+	seen := map[string]bool{}
+	validate := func(item Env) error {
+		credential := item.Credential
+		if credential == nil {
+			return nil
+		}
+		if m.SchemaVersion < NetworkBindingSchemaVersion {
+			return fmt.Errorf("credential presentation requires schema version 8")
+		}
+		if !item.Secret || !item.Required || item.Generate != "random-hex-32" || item.Value != "" {
+			return fmt.Errorf("credential presentation requires a generated secret")
+		}
+		if !idPattern.MatchString(credential.ID) || seen[credential.ID] || !validCatalogText(credential.Label, 64) || !optionalCatalogText(credential.Username, 64) {
+			return fmt.Errorf("invalid credential presentation")
+		}
+		seen[credential.ID] = true
+		return nil
+	}
+	for _, item := range m.Environment {
+		if err := validate(item); err != nil {
+			return err
+		}
+	}
+	for _, component := range m.Components {
+		for _, item := range component.Environment {
+			if err := validate(item); err != nil {
+				return fmt.Errorf("component %s: %w", component.ID, err)
+			}
+		}
 	}
 	return nil
 }
@@ -479,7 +574,7 @@ func validateExternalStorage(items []ExternalStorage, managed []Storage) error {
 		targets[item.ContainerPath] = true
 	}
 	for _, item := range items {
-		if !idPattern.MatchString(item.ID) || seen[item.ID] || targets[item.ContainerPath] || (item.Mode != "read-only" && item.Mode != "read-write") || !safeContainerPath(item.ContainerPath) || item.Purpose == "" || len(item.Purpose) > 80 || strings.ContainsAny(item.Purpose, "\r\n") {
+		if !idPattern.MatchString(item.ID) || seen[item.ID] || targets[item.ContainerPath] || (item.Mode != "read-only" && item.Mode != "read-write") || !safeContainerPath(item.ContainerPath, false) || item.Purpose == "" || len(item.Purpose) > 80 || strings.ContainsAny(item.Purpose, "\r\n") {
 			return fmt.Errorf("invalid external storage declaration")
 		}
 		seen[item.ID] = true
@@ -488,8 +583,44 @@ func validateExternalStorage(items []ExternalStorage, managed []Storage) error {
 	return nil
 }
 
-func safeContainerPath(path string) bool {
-	return strings.HasPrefix(path, "/") && !strings.Contains(path, "..") && path != "/" && !strings.HasPrefix(path, "/proc") && !strings.HasPrefix(path, "/sys") && !strings.HasPrefix(path, "/dev") && !strings.HasPrefix(path, "/etc") && !containsRuntimeSocket(path)
+func safeContainerPath(path string, systemConfig bool) bool {
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "..") || path == "/" || strings.HasPrefix(path, "/proc") || strings.HasPrefix(path, "/sys") || strings.HasPrefix(path, "/dev") || containsRuntimeSocket(path) {
+		return false
+	}
+	if strings.HasPrefix(path, "/etc") {
+		return systemConfig && strings.HasPrefix(path, "/etc/") && path != "/etc/"
+	}
+	return !systemConfig
+}
+
+func validateSystemConfigStorage(storage Storage, schemaVersion int) error {
+	if !storage.SystemConfig {
+		return nil
+	}
+	if schemaVersion < NetworkBindingSchemaVersion || !storage.Persistent || storage.ReadOnly {
+		return fmt.Errorf("managed system configuration requires schema version 8 persistent read-write storage")
+	}
+	return nil
+}
+
+func validateDefaultExposure(service Service, schemaVersion int) error {
+	if service.DefaultExposure == "" {
+		return nil
+	}
+	if schemaVersion < NetworkBindingSchemaVersion || (service.DefaultExposure != "internal" && service.DefaultExposure != "loopback" && service.DefaultExposure != "lan") {
+		return fmt.Errorf("default exposure requires schema version 8 and a constrained mode")
+	}
+	if service.DefaultExposure == "lan" && service.FixedHostPort == 0 {
+		return fmt.Errorf("default LAN exposure requires a trusted fixed host port")
+	}
+	return nil
+}
+
+func validEnvironmentName(name string, schemaVersion int) bool {
+	if schemaVersion >= NetworkBindingSchemaVersion {
+		return v8EnvPattern.MatchString(name)
+	}
+	return legacyEnvPattern.MatchString(name)
 }
 
 func containsRuntimeSocket(path string) bool {
@@ -539,8 +670,11 @@ func componentsHaveHardware(components []Component) bool {
 func validateComponentFields(c Component, schemaVersion int) error {
 	seen := map[string]bool{}
 	for _, s := range c.Storage {
-		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath) {
+		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath, s.SystemConfig) {
 			return fmt.Errorf("invalid storage declaration")
+		}
+		if err := validateSystemConfigStorage(s, schemaVersion); err != nil {
+			return err
 		}
 		seen[s.ID] = true
 		if err := validateStorageOwnership(s); err != nil {
@@ -549,7 +683,7 @@ func validateComponentFields(c Component, schemaVersion int) error {
 	}
 	seen = map[string]bool{}
 	for _, e := range c.Environment {
-		if !regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`).MatchString(e.Name) || seen[e.Name] || (e.Required && e.Value != "") || (e.Secret && e.Value != "") {
+		if !validEnvironmentName(e.Name, schemaVersion) || seen[e.Name] || (e.Required && e.Value != "") || (e.Secret && e.Value != "") {
 			return fmt.Errorf("invalid environment declaration")
 		}
 		if (e.Generate != "" && (!e.Secret || !e.Required)) || (e.Generate != "" && e.Generate != "random-hex-32") {
@@ -574,6 +708,9 @@ func validateComponentFields(c Component, schemaVersion int) error {
 		}
 		if s.FixedHostPort != 0 && (schemaVersion < NetworkBindingSchemaVersion || s.FixedHostPort < 1 || s.FixedHostPort > 65535) {
 			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
+		}
+		if err := validateDefaultExposure(s, schemaVersion); err != nil {
+			return err
 		}
 		seen[s.ID], ports[key] = true, true
 	}

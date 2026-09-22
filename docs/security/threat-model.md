@@ -251,7 +251,7 @@ Attack path:
 2. The script reads displayed data and invokes API actions with the active session.
 3. The script attempts to steal persistent credentials or bypass confirmations.
 
-Required outcome: the frontend has no helper or runtime credential. Session secrets are unavailable to script where the authentication design permits. APIs do not return stored application or backup secrets. High-impact operations require server-enforced checks that UI code cannot remove.
+Required outcome: the frontend has no helper or runtime credential. Session secrets are unavailable to script where the authentication design permits. Ordinary APIs do not return stored application or backup secrets. One explicit authenticated, Origin-checked, CSRF-protected POST action may disclose a single generated application credential only when the trusted embedded manifest authorizes its public credential ID. The response is not cacheable and normal HTML never contains the value before that action. High-impact operations require server-enforced checks that UI code cannot remove.
 
 ### Scenario: exposed container-runtime socket
 
@@ -582,7 +582,7 @@ The exact credential, recovery, session, and multi-factor design remains for ADR
 
 Secrets need an inventory, owner, consumer list, creation source, rotation path, deletion behavior, and backup policy. A value without these properties is unmanaged.
 
-The web process should receive a secret only when its product responsibility needs the plaintext. The frontend should not receive stored secret values. The helper receives only secrets required for the current privileged operation, and managed containers receive only their declared application secrets.
+The web process should receive a secret only when its product responsibility needs the plaintext. The frontend receives a stored application credential only in the response to an explicit manifest-authorized reveal action. The helper receives only secrets required for the current privileged operation, and managed containers receive only their declared application secrets.
 
 Secret redaction happens before log and audit serialization. A display-time filter leaves copies in files and databases. Diagnostic exports apply the same rule.
 
