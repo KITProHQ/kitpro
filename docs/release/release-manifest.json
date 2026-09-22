@@ -1,14 +1,23 @@
 {
-  "kitpro_version": "0.1.0-alpha.11",
-  "source_commit": "1eed6b0a2199e927a9647e50206e89f6cfc19995",
-  "supported_platforms": ["debian-13-amd64", "ubuntu-26.04-amd64", "arch-x86_64-linux-lts"],
-  "schema_version": 4,
+  "kitpro_version": "0.1.0-alpha.12",
+  "source_commit": "ada9555ab680613f8b56f6f0762abce6f0955670",
+  "source_tree": "196206df49ec0f21df509c011f9c06f6c56ab788",
+  "release_url": "https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12",
+  "supported_platforms": ["debian-13-amd64", "arch-x86_64-linux-lts"],
+  "experimental_platforms": ["rocky-linux-10", "podman"],
+  "schema_version": 13,
   "catalog_schema_version": 2,
   "artifacts": [
-    {"path": "kitpro-server_0.1.0-alpha.11_amd64.deb", "package_family": "deb", "architecture": "amd64", "size": 8052172, "sha256": "0a832e5e9b8d55d0b21c8331b4a80b7caeba148627d387870ed50c2d6eda8399"},
-    {"path": "kitpro-server-0.1.0_alpha11-1-x86_64.pkg.tar.zst", "package_family": "pacman", "architecture": "x86_64", "size": 5825195, "sha256": "4fa242cadaff977b4bbefbafae65852a7272ebab1ba3dfbf067f7290bfec0722"}
+    {"path": "kitpro-server_0.1.0.alpha12_amd64.deb", "package_family": "deb", "architecture": "amd64", "size": 8392468, "sha256": "29541da98fdba7fed0c4f7facec66d936c2da2487b8fedb562e289655fa8ac25"},
+    {"path": "kitpro-debian-upgrade", "package_family": "deb-transition-wrapper", "architecture": "amd64", "size": 12033, "sha256": "8ddffc0070aec9576a7704a7b3f588ea7d0939dbed1c787a3c19ebcfd5489bb0"},
+    {"path": "kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst", "package_family": "pacman", "architecture": "x86_64", "size": 6178199, "sha256": "2fe6b51c370c2e9399da9291c31ad2af6bb09934c1a872f502db0c8c615d12f6"},
+    {"path": "kitpro-server-0.1.0_alpha12-1-upgrade.sh", "package_family": "pacman-transition-wrapper", "architecture": "x86_64", "size": 12627, "sha256": "0eab8578715fcaed71b27739036961e0e20fa48c5571a87e3351048513963f67"}
   ],
-  "sbom": {"path": "kitpro-server_0.1.0-alpha.11_amd64.cdx.json", "size": 13788, "sha256": "1414c192b9a56f80661b8ba5f58e7ee1fa4d4be1ae97d80d4854f88b4fcf5584"},
-  "build_metadata": {"path": "kitpro-server_0.1.0-alpha.11.build.json", "sha256": "4d689d09fbe0a22ebb5cfcaecb8e8598468d18282b02c44cd2ccfd009be4cc2e"},
+  "sbom": {"path": "kitpro-server_0.1.0.alpha12_amd64.cdx.json", "size": 13678, "sha256": "2f365f08afeb81c693ae7b4b0af59452b1220f08c432aa47a99a02a805bf6f27"},
+  "build_metadata": [
+    {"path": "kitpro-server_0.1.0.alpha12_amd64.deb.build.json", "size": 390, "sha256": "a7ffbe35e4ddc448077ae4da3ff3a3fc57811525b7caeac16ed0081f16b0842f"},
+    {"path": "kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst.build.json", "size": 392, "sha256": "0ced35a74321fc9786775a64b644b56abc018f1773a3635bd604e5e4e8fd1856"}
+  ],
+  "checksums": {"path": "kitpro-alpha12-SHA256SUMS", "size": 764},
   "build_policy": {"go": "go1.27.x", "cgo": false, "flags": ["-trimpath", "-buildvcs=false", "-s", "-w"], "source_date_epoch": "source commit timestamp"}
 }

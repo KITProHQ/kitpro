@@ -3,18 +3,18 @@
 | Platform | Status | Boundary |
 | --- | --- | --- |
 | Debian 13 amd64 | Supported | Rootful Docker, enforcing AppArmor |
-| Ubuntu 26.04 LTS amd64 | Supported | Rootful Docker, enforcing AppArmor |
+| Ubuntu 26.04 LTS amd64 | Development evidence only | Not part of the public support baseline |
 | Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor; no partial upgrades |
-| Rocky Linux 10 amd64 | Experimental | Validate SELinux and Docker integration before use |
+| Rocky Linux 10 amd64 | Experimental | Podman and SELinux development work is not promoted by alpha.12 |
 
 ## Capability matrix
 
 | Capability | Debian 13 | Ubuntu 26.04 LTS | Arch Linux `linux-lts` | Rocky Linux 10 |
 | --- | --- | --- | --- | --- |
-| Basic KITPro | Certified | Certified | Certified | Experimental |
-| Enforcing AppArmor | Required and certified | Required and certified | Required and certified | Not applicable; SELinux integration not certified |
-| Rootful Docker | Required and certified | Required and certified | Required and certified | Experimental |
-| 15-app trusted catalog | Certified | Certified | Certified | Experimental |
+| Basic KITPro | Certified | Development evidence only | Certified | Experimental |
+| Enforcing AppArmor | Required and certified | Development evidence only | Required and certified | Not applicable; SELinux path remains Experimental |
+| Rootful Docker | Required and certified | Development evidence only | Required and certified | Podman path remains Experimental |
+| 15-app trusted catalog | Certified | Development evidence only | Certified | Experimental |
 | Multi-container Paperless-ngx | Certified | Certified | Certified | Not certified |
 | Trusted external storage | Certified | Smoke certified | Smoke certified | Not certified |
 | Ollama CPU | Certified | Certified | Certified | Not certified |
@@ -50,7 +50,7 @@ Ollama and Jellyfin declare optional NVIDIA access. Ollama inference is live-cer
 Navidrome and Audiobookshelf use read-only imported libraries. SFTPGo is the
 first read-write consumer and requires an exclusive root. Navidrome and SFTPGo
 passed live authenticated install, exact-mount, private-exposure, and reboot
-smoke tests on Debian, Ubuntu, and Arch. Audiobookshelf received full Debian
+smoke tests on Debian and Arch. Ubuntu results remain development evidence. Audiobookshelf received full Debian
 acceptance with the same packaged schema and helper boundary.
 
 KITPro does not mount or credential network shares. The operating system must

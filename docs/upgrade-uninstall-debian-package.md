@@ -2,6 +2,25 @@
 
 ## Upgrade
 
+### Alpha.11 to alpha.12
+
+This transition must use `kitpro-debian-upgrade`. Raw `apt install` and
+`dpkg -i` are unsupported for alpha.11 to alpha.12.
+
+```sh
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+chmod +x kitpro-debian-upgrade
+sudo ./kitpro-debian-upgrade ./kitpro-server_0.1.0.alpha12_amd64.deb
+```
+
+The wrapper checks the frozen package hash, package name, installed version,
+target version, and architecture. It validates both existing databases and
+creates the complete verified backup set before invoking APT. The schema 7 to
+schema 13 migration is supported and validated. Downgrading after migration is
+unsupported.
+
+### Later supported upgrades
+
 Install the newer local package with APT or `dpkg -i`. Before unpacking an
 upgrade, the new package stops KITPro writers and asks each currently installed
 binary to create a SQLite `VACUUM INTO` backup. The production backup code opens
