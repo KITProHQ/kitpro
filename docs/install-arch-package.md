@@ -42,6 +42,35 @@ The transaction fails closed unless Docker is active and AppArmor is enabled.
 The API listens on `127.0.0.1:8080` by default. Use an SSH tunnel and open
 `http://127.0.0.1:8080/setup` to create the first local administrator.
 
+## Upgrade from alpha.11 to alpha.12
+
+The alpha.11 package does not contain the pacman pre-transaction hook needed to
+stop an unsafe upgrade before package files are changed. For this one bootstrap
+transition, verify both the alpha.12 package and its upgrade wrapper, then run:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+sudo ./kitpro-server-0.1.0_alpha12-1-upgrade.sh \
+  ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
+```
+
+Do not use raw `pacman -U` for the alpha.11-to-alpha.12 upgrade. The wrapper
+extracts the incoming maintenance binaries, installs a temporary pacman
+pre-transaction hook, verifies both existing databases, and creates verified
+WAL-safe backups before pacman may modify package files. If validation fails,
+the transaction is aborted and the existing package and databases remain
+unchanged. KITPro does not attempt to repair corrupt databases during upgrade.
+
+Alpha.12 installs the same fail-closed gate permanently for future package
+upgrades. Fresh installs may continue to use `pacman -U` directly.
+
+If preflight reports a corrupt or unreadable database, do not delete, replace,
+or attempt to repair it during the package transaction. Preserve the reported
+database path, confirm that the installed package version has not changed with
+`pacman -Q kitpro-server`, and report the failure with the package version and
+redacted pacman output. Database contents can include sensitive application
+metadata and should not be attached to a public issue.
+
 ## Configuration
 
 Arch package configuration is `/etc/conf.d/kitpro-server`. Set
@@ -73,8 +102,10 @@ sudo ./kitpro-server-0.1.0_alpha12-1-upgrade.sh \
 ## Later updates and removal
 
 Always perform full Arch updates with `pacman -Syu`; partial upgrades are not
-supported. A KITPro package upgrade backs up and migrates control/helper state
-before services restart. Downgrades are unsupported after schema migration.
+supported. After the alpha.12 bootstrap transition, the installed pacman hook
+backs up and validates control/helper state before package files change, and
+the package migrates that state before services restart. Downgrades are
+unsupported after schema migration.
 
 `pacman -R kitpro-server` removes package-owned binaries, units, and the
 AppArmor profile. It deliberately retains `/etc/conf.d/kitpro-server`, the

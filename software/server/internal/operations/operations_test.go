@@ -8,7 +8,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestRecoverAcceptedFailsClosed(t *testing.T) {
+func TestRecoverAcceptedPreservesProjection(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestRecoverAcceptedFailsClosed(t *testing.T) {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
 	var status, summary string
-	if err = db.QueryRow(`SELECT status,summary FROM operations WHERE id='one'`).Scan(&status, &summary); err != nil || status != "failed" || summary == "" {
+	if err = db.QueryRow(`SELECT status,summary FROM operations WHERE id='one'`).Scan(&status, &summary); err != nil || status != "accepted" || summary != "awaiting helper state" {
 		t.Fatalf("status=%q summary=%q err=%v", status, summary, err)
 	}
 	if err = db.QueryRow(`SELECT status FROM operations WHERE id='two'`).Scan(&status); err != nil || status != "succeeded" {

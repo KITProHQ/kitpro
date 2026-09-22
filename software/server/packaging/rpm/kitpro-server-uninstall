@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+
+# Stop KITPro's generated Quadlet services and archive or purge KITPro state.
+
+set -Eeuo pipefail
+
+MODE=preserve
+ACKNOWLEDGED=false
+QUADLET_DIR=${KITPRO_QUADLET_DIR:-/etc/containers/systemd}
+RUNTIME_DIR=${KITPRO_RUNTIME_CONFIG_DIR:-/etc/kitpro-server/runtime}
+ARCHIVE_ROOT=/var/lib/kitpro-helper/uninstall-preserved
+
+usage() {
+    cat <<'EOF'
+Usage: kitpro-server-uninstall [--preserve-data|--purge-data --acknowledge-destroy-data|--restore]
+
+--preserve-data stops KITPro containers and archives generated Quadlets,
+environment files, and runtime metadata. Application data, databases,
+configuration, secrets, backups, and logs are retained. This is the default.
+
+--restore restores the most recent preserved runtime configuration. RPM package
+installation uses this after an uninstall/reinstall cycle.
+
+--purge-data permanently deletes KITPro application data and control state. It
+requires --acknowledge-destroy-data. Podman, images used by other applications,
+firewalld configuration, and unrelated SELinux policy are never removed.
+EOF
+}
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+    case "$1" in
+        --preserve-data) MODE=preserve ;;
+        --purge-data) MODE=purge ;;
+        --restore) MODE=restore ;;
+        --acknowledge-destroy-data) ACKNOWLEDGED=true ;;
+        --help|-h) usage; exit 0 ;;
+        *) die "unknown option: $1" ;;
+    esac
+    shift
+done
+
+[[ "$EUID" -eq 0 ]] || die "run as root"
+
+restore_runtime() {
+    local current=$ARCHIVE_ROOT/current
+    [[ -L "$current" ]] || return 0
+    local archive
+    archive=$(readlink -e "$current") || die "preserved runtime archive is unavailable"
+    install -d -m 0755 "$QUADLET_DIR"
+    install -d -m 0700 "$RUNTIME_DIR"
+    local source target
+    if [[ -d "$archive/quadlet" ]]; then
+        while IFS= read -r -d '' source; do
+            target=$QUADLET_DIR/${source##*/}
+            [[ ! -e "$target" ]] || die "refusing to overwrite $target"
+            cp -a -- "$source" "$target"
+        done < <(find "$archive/quadlet" -maxdepth 1 -type f -name 'kitpro-*' -print0)
+    fi
+    if [[ -d "$archive/runtime" ]]; then
+        while IFS= read -r -d '' source; do
+            target=$RUNTIME_DIR/${source##*/}
+            [[ ! -e "$target" ]] || die "refusing to overwrite $target"
+            cp -a -- "$source" "$target"
+        done < <(find "$archive/runtime" -maxdepth 1 -type f -name 'kitpro-*' -print0)
+    fi
+    systemctl daemon-reload
+    if [[ -f "$archive/active-units" ]]; then
+        while IFS= read -r unit; do
+            [[ "$unit" =~ ^kitpro-[a-z0-9-]+(-(network|volume|pod))?\.service$ ]] || die "invalid preserved unit name: $unit"
+            systemctl start "$unit"
+        done < "$archive/active-units"
+    fi
+}
+
+unit_for_source() {
+    local name=${1##*/}
+    case "$name" in
+        *.container) printf '%s.service\n' "${name%.container}" ;;
+        *.network) printf '%s-network.service\n' "${name%.network}" ;;
+        *.volume) printf '%s-volume.service\n' "${name%.volume}" ;;
+        *.pod) printf '%s-pod.service\n' "${name%.pod}" ;;
+        *) return 1 ;;
+    esac
+}
+
+record_active_runtime() {
+    local destination=$1 source unit
+    : > "$destination"
+    if [[ -d "$QUADLET_DIR" ]]; then
+        while IFS= read -r -d '' source; do
+            unit=$(unit_for_source "$source") || continue
+            systemctl is-active --quiet "$unit" && printf '%s\n' "$unit" >> "$destination"
+        done < <(find "$QUADLET_DIR" -maxdepth 1 -type f \( -name 'kitpro-*.container' -o -name 'kitpro-*.network' -o -name 'kitpro-*.volume' -o -name 'kitpro-*.pod' \) -print0)
+    fi
+}
+
+stop_runtime() {
+    local source unit
+    if [[ -d "$QUADLET_DIR" ]]; then
+        while IFS= read -r -d '' source; do
+            unit=$(unit_for_source "$source") || continue
+            systemctl stop "$unit" 2>/dev/null || true
+        done < <(find "$QUADLET_DIR" -maxdepth 1 -type f \( -name 'kitpro-*.container' -o -name 'kitpro-*.network' -o -name 'kitpro-*.volume' -o -name 'kitpro-*.pod' \) -print0)
+    fi
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+}
+
+archive_runtime() {
+    local active_units=$1 stamp archive source
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    archive=$ARCHIVE_ROOT/$stamp
+    install -d -m 0700 "$archive/quadlet" "$archive/runtime"
+    install -m 0600 "$active_units" "$archive/active-units"
+    if [[ -d "$QUADLET_DIR" ]]; then
+        while IFS= read -r -d '' source; do
+            cp -a -- "$source" "$archive/quadlet/"
+            rm -f -- "$source"
+        done < <(find "$QUADLET_DIR" -maxdepth 1 -type f \( -name 'kitpro-*.container' -o -name 'kitpro-*.network' -o -name 'kitpro-*.volume' -o -name 'kitpro-*.pod' -o -name 'kitpro-*.kube' \) -print0)
+    fi
+    if [[ -d "$RUNTIME_DIR" ]]; then
+        while IFS= read -r -d '' source; do
+            cp -a -- "$source" "$archive/runtime/"
+            rm -f -- "$source"
+        done < <(find "$RUNTIME_DIR" -maxdepth 1 -type f -name 'kitpro-*' -print0)
+    fi
+    ln -sfn "$archive" "$ARCHIVE_ROOT/current"
+    systemctl daemon-reload
+    printf 'KITPro runtime configuration archived at %s\n' "$archive"
+}
+
+case "$MODE" in
+    restore)
+        restore_runtime
+        ;;
+    preserve)
+        active_units=$(mktemp)
+        trap 'rm -f -- "$active_units"' EXIT
+        record_active_runtime "$active_units"
+        stop_runtime
+        archive_runtime "$active_units"
+        ;;
+    purge)
+        [[ "$ACKNOWLEDGED" == true ]] || die "--purge-data requires --acknowledge-destroy-data"
+        stop_runtime
+        if [[ -d "$QUADLET_DIR" ]]; then
+            find "$QUADLET_DIR" -maxdepth 1 -type f \( -name 'kitpro-*.container' -o -name 'kitpro-*.network' -o -name 'kitpro-*.volume' -o -name 'kitpro-*.pod' -o -name 'kitpro-*.kube' \) -delete
+        fi
+        rm -rf -- /etc/kitpro-server /srv/kitpro/apps /var/lib/kitpro-api /var/lib/kitpro-helper /var/log/kitpro
+        install -d -m 0750 /run/kitpro
+        : > /run/kitpro/purge-complete
+        systemctl daemon-reload
+        printf 'KITPro application data and control state purged. Podman and unrelated host configuration were retained.\n'
+        ;;
+esac

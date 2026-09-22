@@ -4,13 +4,18 @@ These scripts prepare and test already-created disposable reference VMs. They do
 
 The scripts deliberately separate three concerns:
 
-- [`install-docker.sh`](../install-docker.sh) owns cross-distribution Docker repository, package, service, and verification behavior.
+- [`install-docker.sh`](../install-docker.sh) owns the Debian and Arch development Docker setup.
+- [`install-rocky.sh`](../install-rocky.sh) owns the Rocky 10 native Podman setup.
 - [`verify-host.sh`](verify-host.sh) performs read-only reference-host acceptance checks.
 - The preparation and fixture runners own disposable validation setup. They do not add users to the Docker group, alter SELinux mode, or change firewall policy.
 
 ## Safety gate
 
-Create a clean VM and take a hypervisor snapshot named `clean-os` before running a preparation script. After Docker installation and verification, create `docker-installed` before running the fixture. Both preparation and fixture execution require `--acknowledge-disposable-vm`. The fixture runner also rejects the wrong distribution, an existing fixture identity, existing fixed test paths, existing fixture units, or Docker objects bearing its test-only managed label. The exact provisioning and snapshot sequence is in [`docs/testing/platform-provisioning-plan.md`](../../docs/testing/platform-provisioning-plan.md).
+Create a clean VM and take a hypervisor snapshot named `clean-os` before running
+a preparation script. Use a `docker-installed` snapshot for the Debian fixture
+or a `podman-installed` snapshot for Rocky. Mutation and recovery runners
+require `--acknowledge-disposable-vm`. The exact provisioning sequence is in
+[`docs/testing/platform-provisioning-plan.md`](../../docs/testing/platform-provisioning-plan.md).
 
 Do not run these scripts on a workstation, production host, or Docker host with important workloads. Snapshot restoration is the authoritative cleanup.
 
@@ -41,18 +46,20 @@ sudo tools/platform-validation/verify-host.sh --platform rocky10
 sudo tools/platform-validation/prepare-rocky.sh \
   --acknowledge-disposable-vm \
   --yes
-sudo tools/platform-validation/run-privilege-fixture.sh \
-  --platform rocky10 \
+sudo tools/platform-validation/validate-rocky-runtime.sh \
   --acknowledge-disposable-vm
 ```
 
-Rocky commonly includes Podman-related packages. Do not remove them implicitly. Review any conflict list before opting into `--remove-conflicts`. Docker documents the RHEL repository; KITPro is testing that repository on Rocky and does not claim Docker certification for Rocky.
+The preparation path installs Podman, crun, container-selinux, firewalld, and
+diagnostics from Rocky's native repositories. It does not add Docker's
+repository, install Docker, disable firewalld, or alter SELinux mode.
 
 Stop if SELinux is not Enforcing or if an AVC blocks the test. Follow [`docs/testing/selinux-rocky.md`](../../docs/testing/selinux-rocky.md); do not disable enforcement or generate broad policy.
 
-The 2026-09-12 run showed that Enforcing host mode alone does not prove Docker uses SELinux labels. Record `docker info` security options plus the container's host process context, `ProcessLabel`, and `MountLabel`. Treat an unconfined `spc_t` container as a failed security expectation even when `getenforce` reports `Enforcing`.
-
-The Rocky runner fails if Docker does not report `name=selinux`, either container label is empty, or the host process runs as `spc_t`. The installer enables Docker's documented SELinux integration only when SELinux is enabled and no `/etc/docker/daemon.json` already exists. It preserves existing administrator configuration rather than attempting an unsafe shell-level JSON merge, and verification fails if an Enforcing host still lacks effective Docker SELinux integration. It does not change SELinux mode, install custom policy, or alter firewalld.
+The 2026-09-12 Docker results remain historical evidence only. They do not
+certify the Podman path. The native runner requires `container_t`, non-empty
+process and mount labels, and no recent unexplained AVC. Follow the current
+[`Rocky validation checklist`](../../docs/testing/rocky-linux-10-validation.md).
 
 ## Capturing an immutable record
 

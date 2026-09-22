@@ -5,6 +5,35 @@ constrained application definitions, not Docker Compose. Unknown fields,
 duplicate keys, oversized documents, unknown schema versions, and invalid
 values are rejected before a helper request is created.
 
+## Backup policy (schema version 6)
+
+Schema version 6 requires one typed `backup` policy. The strategy is
+`metadata-only`, `cold-filesystem`, or `cold-sqlite-filesystem`.
+
+```json
+{
+  "schema_version": 6,
+  "backup": {
+    "strategy": "cold-sqlite-filesystem",
+    "storage": [
+      {"component": "app", "id": "data", "disposition": "include"}
+    ]
+  }
+}
+```
+
+The policy must account for every persistent managed storage declaration once.
+The disposition is `include` or `exclude-ephemeral`. A single-container
+application uses component `app`. The manifest cannot supply a host path,
+archive path, dump command, restore command, or shell command.
+
+External storage is absent from the policy because format version 1 never
+copies imported data. The backup archive records the trusted binding as an
+excluded external reference.
+
+See [application backup format version 1](architecture/application-backup-format-v1.md)
+for the archive fields and compatibility rules.
+
 ## Runtime identity and managed ownership (schema version 5)
 
 Schema version 5 lets a trusted manifest run a container under one numeric

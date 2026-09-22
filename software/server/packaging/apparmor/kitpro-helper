@@ -4,6 +4,7 @@
   #include <abstractions/base>
   /usr/libexec/kitpro-helper rix,
   capability chown,
+  capability dac_read_search,
   /etc/passwd r,
   /run/kitpro/** rw,
   /var/lib/kitpro-helper/ rw,

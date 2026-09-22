@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "id": "audiobookshelf",
   "name": "Audiobookshelf",
   "description": "Organize and stream audiobooks with managed metadata and a read-only library.",
@@ -15,10 +15,12 @@
     {"id": "audiobooks", "container_path": "/audiobooks", "mode": "read-only", "required": true, "purpose": "Audiobook library"}
   ],
   "environment": [
-    {"name": "TZ", "value": "UTC"}
+    {"name": "TZ", "value": "UTC"},
+    {"name": "PORT", "value": "13378"}
   ],
   "services": [
-    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80}
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 13378}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "config", "disposition": "include"}, {"component": "app", "id": "metadata", "disposition": "include"}]}
 }

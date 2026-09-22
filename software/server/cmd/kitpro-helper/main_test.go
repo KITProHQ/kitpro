@@ -2,17 +2,96 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
+	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
+	"github.com/kitpro/kitpro/software/server/internal/lifecycle"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
+	"github.com/kitpro/kitpro/software/server/internal/multicontainer"
+	"github.com/kitpro/kitpro/software/server/internal/ownership"
+	"github.com/kitpro/kitpro/software/server/internal/platform"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 )
+
+type startupLifecycleRuntime struct {
+	networks   map[string]containers.NetworkObservation
+	containers map[string]containers.ContainerObservation
+}
+
+func (r *startupLifecycleRuntime) PullImage(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) ObserveImage(context.Context, string) (containers.ImageObservation, error) {
+	return containers.ImageObservation{}, errors.New("not used")
+}
+func (r *startupLifecycleRuntime) CreateLifecycleNetwork(context.Context, string, map[string]string) (containers.NetworkObservation, error) {
+	return containers.NetworkObservation{}, errors.New("not used")
+}
+func (r *startupLifecycleRuntime) ObserveNetwork(_ context.Context, name string) (containers.NetworkObservation, error) {
+	return r.networks[name], nil
+}
+func (r *startupLifecycleRuntime) CreateLifecycleContainer(context.Context, containers.ContainerPlan) (string, error) {
+	return "", errors.New("not used")
+}
+func (r *startupLifecycleRuntime) ObserveContainer(_ context.Context, id string) (containers.ContainerObservation, error) {
+	if observed, ok := r.containers[id]; ok {
+		return observed, nil
+	}
+	return containers.ContainerObservation{State: containers.RuntimeMissing}, nil
+}
+func (r *startupLifecycleRuntime) StartContainer(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) StopContainer(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) RemoveContainer(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) RemoveLifecycleNetwork(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) WaitContainer(context.Context, string, containers.RuntimeState, time.Duration) (containers.ContainerObservation, error) {
+	return containers.ContainerObservation{}, errors.New("not used")
+}
+
+func TestRuntimeSocketNamesAreRejected(t *testing.T) {
+	for _, value := range []string{"/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock"} {
+		if !containsRuntimeSocket(value) {
+			t.Fatalf("runtime socket was not recognized: %s", value)
+		}
+	}
+	if containsRuntimeSocket("/srv/kitpro/apps/podman.socket/data") {
+		t.Fatal("ordinary path was treated as a runtime socket")
+	}
+}
+
+func TestSelectRuntimeUsesExplicitOrInstallablePlatform(t *testing.T) {
+	rocky := platform.Platform{ID: "rocky", Version: "10.1", ContainerRuntime: "podman", Installable: true}
+	if got, err := selectRuntime("", rocky); err != nil || got != "podman" {
+		t.Fatalf("Rocky runtime = %q, %v", got, err)
+	}
+	if got, err := selectRuntime("docker", rocky); err != nil || got != "docker" {
+		t.Fatalf("explicit runtime = %q, %v", got, err)
+	}
+	if _, err := selectRuntime("containerd", rocky); err == nil {
+		t.Fatal("unknown explicit runtime accepted")
+	}
+	rhel := platform.Platform{ID: "rhel", Version: "10.0", ContainerRuntime: "podman", Installable: false}
+	if _, err := selectRuntime("", rhel); err == nil {
+		t.Fatal("unvalidated RHEL host silently accepted")
+	}
+}
 
 func TestExpectedAPIUIDFromConfiguredNumericValue(t *testing.T) {
 	t.Setenv("KITPRO_API_UID", "1234")
@@ -73,6 +152,146 @@ func TestExpectedAPIUIDRejectsInvalidNumericValue(t *testing.T) {
 	t.Setenv("KITPRO_API_UID", "not-a-uid")
 	if _, err := expectedAPIUID(); err == nil {
 		t.Fatal("invalid UID accepted")
+	}
+}
+
+func openAlpha11HelperFixture(t *testing.T, name string) *sql.DB {
+	t.Helper()
+	db, err := state.Open(filepath.Join(t.TempDir(), name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	script, err := os.ReadFile(filepath.Join("..", "..", "internal", "state", "testdata", "alpha11_helper_schema7.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(string(script)); err != nil {
+		t.Fatal(err)
+	}
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func TestAlpha11LegacyMultiBackfillsAndReconcilesAtStartup(t *testing.T) {
+	db := openAlpha11HelperFixture(t, "valid.db")
+	if count, err := backfillLegacyMultiAtStartup(context.Background(), db); err != nil || count != 1 {
+		t.Fatalf("backfill count=%d err=%v", count, err)
+	}
+	var componentCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runtime_components WHERE installation_id='inst-paperless1' AND runtime_generation=1`).Scan(&componentCount); err != nil || componentCount != 2 {
+		t.Fatalf("component count=%d err=%v", componentCount, err)
+	}
+	networkName := "kitpro-net-inst-paperless1-g1"
+	networkID := "network-paperless"
+	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: "inst-paperless1", "com.kitpro.runtime-generation": "1"}
+	runtime := &startupLifecycleRuntime{
+		networks: map[string]containers.NetworkObservation{networkName: {Exists: true, ID: networkID, Name: networkName}},
+		containers: map[string]containers.ContainerObservation{
+			"paperless-broker": {Exists: true, ID: "paperless-broker", Name: "kitpro-paperless-ngx-inst-paperless1-broker-g1", ImageReference: "docker.io/library/redis@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7", State: containers.RuntimeRunning, Labels: labels, Networks: map[string]containers.NetworkAttachment{networkName: {NetworkID: networkID}}},
+			"paperless-web":    {Exists: true, ID: "paperless-web", Name: "kitpro-paperless-ngx-inst-paperless1-web-g1", ImageReference: "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", State: containers.RuntimeRunning, Labels: labels, Networks: map[string]containers.NetworkAttachment{networkName: {NetworkID: networkID}}},
+		},
+	}
+	if count, err := lifecycle.ReconcileAll(context.Background(), lifecycle.Store{DB: db}, runtime); err != nil || count != 2 {
+		// The exact alpha.11 fixture also contains one migrated single install.
+		t.Fatalf("reconciled=%d err=%v", count, err)
+	}
+	result, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), "inst-paperless1")
+	if err != nil || result.State != lifecycle.ReconciliationConsistent || result.RuntimeState != "running" {
+		t.Fatalf("reconciliation=%#v err=%v", result, err)
+	}
+	single, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), "inst-busybox01")
+	if err != nil || single.CheckedGeneration != 1 || single.State != lifecycle.ReconciliationRuntimeMissing {
+		t.Fatalf("migrated single reconciliation=%#v err=%v", single, err)
+	}
+}
+
+func migratedBusyBoxRuntime(restart string) *startupLifecycleRuntime {
+	installation := "inst-busybox01"
+	network := "kitpro-net-" + installation + "-g1"
+	labels := map[string]string{
+		ownership.LabelManaged:          "true",
+		ownership.LabelInstance:         installation,
+		ownership.LabelResource:         "application",
+		"com.kitpro.application":        "busybox",
+		"com.kitpro.release":            "1.37.0",
+		"com.kitpro.runtime-generation": "1",
+	}
+	return &startupLifecycleRuntime{
+		networks: map[string]containers.NetworkObservation{network: {Exists: true, ID: "busybox-network", Name: network}},
+		containers: map[string]containers.ContainerObservation{
+			"busybox-runtime": {
+				Exists: true, ID: "busybox-runtime", Name: "kitpro-busybox-inst-busybox01-g1",
+				ImageID: "sha256:busybox", ImageReference: "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0",
+				State: containers.RuntimeRestarting, Labels: labels, RestartPolicy: restart,
+				Mounts:   []containers.MountObservation{{Source: "/srv/kitpro/apps/busybox/inst-busybox01/data", Destination: "/data"}},
+				Networks: map[string]containers.NetworkAttachment{network: {NetworkID: "busybox-network"}}, NetworkMode: network,
+				PortBindings: map[string][]containers.PortBinding{},
+			},
+		},
+	}
+}
+
+func TestMigratedSingleConfigurationIsTrustedBeforeHashRecording(t *testing.T) {
+	t.Run("exact restarting runtime", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "exact-single.db")
+		runtime := migratedBusyBoxRuntime("unless-stopped")
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err != nil {
+			t.Fatal(err)
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash == "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), "inst-busybox01")
+		if err != nil || result.State != lifecycle.ReconciliationDegraded || result.RuntimeState != "restarting" || result.RecommendedAction != lifecycle.RepairNone || !hasLifecycleMismatch(result, lifecycle.MismatchActiveContainerUnstable) {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	})
+
+	t.Run("configuration drift", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "drifted-single.db")
+		runtime := migratedBusyBoxRuntime("always")
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err == nil {
+			t.Fatal("drifted migrated runtime was trusted")
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash != "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), "inst-busybox01")
+		if err != nil || result.State != lifecycle.ReconciliationActionRequired || !hasLifecycleMismatch(result, lifecycle.MismatchConfiguration) {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	})
+}
+
+func hasLifecycleMismatch(result lifecycle.ReconciliationResult, want lifecycle.MismatchCode) bool {
+	for _, code := range result.MismatchCodes {
+		if code == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAlpha11AmbiguousLegacyMultiBecomesActionRequired(t *testing.T) {
+	db := openAlpha11HelperFixture(t, "ambiguous.db")
+	if _, err := db.Exec(`UPDATE component_ownership SET image_digest='docker.io/example/mismatch@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE installation_id='inst-paperless1' AND component_id='web'`); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := backfillLegacyMultiAtStartup(context.Background(), db); err != nil || count != 1 {
+		t.Fatalf("backfill count=%d err=%v", count, err)
+	}
+	var generations int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runtime_generations WHERE installation_id='inst-paperless1'`).Scan(&generations); err != nil || generations != 0 {
+		t.Fatalf("ambiguous topology was guessed: generations=%d err=%v", generations, err)
+	}
+	result, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), "inst-paperless1")
+	if err != nil || result.State != lifecycle.ReconciliationActionRequired || len(result.MismatchCodes) != 1 || result.MismatchCodes[0] != lifecycle.MismatchOwnershipAmbiguous {
+		t.Fatalf("reconciliation=%#v err=%v", result, err)
 	}
 }
 
@@ -189,6 +408,93 @@ func TestTrustedRecreationRequiresGenerationAndStablePort(t *testing.T) {
 	}
 }
 
+func TestLegacyMultiOwnershipBackfillsOnlyExactTrustedTopology(t *testing.T) {
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := entries["paperless-ngx"].Manifest
+	nodes := make([]manifest.Component, 0, len(trusted.Components))
+	request := protocol.Request{InstanceID: "inst-paperless01", ApplicationID: trusted.ID, ReleaseID: trusted.Releases[0].Version, RuntimeGeneration: 5, NetworkName: "kitpro-net-inst-paperless01-g5", DataPath: "/srv/kitpro/apps/paperless-ngx/inst-paperless01/data", ExposureMode: "internal"}
+	for _, component := range trusted.Components {
+		var image string
+		for _, release := range trusted.Releases {
+			if release.Version == component.Release {
+				image = release.Registry + "/" + release.Repository + "@" + release.Digest
+			}
+		}
+		request.Components = append(request.Components, protocol.Component{ID: component.ID, Image: image, DependsOn: append([]string(nil), component.DependsOn...)})
+		nodes = append(nodes, manifest.Component{ID: component.ID, DependsOn: append([]string(nil), component.DependsOn...)})
+	}
+	topology, err := multicontainer.BuildTopology(nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name                                                       string
+		tamperImage, missing, mixedGeneration, unexpectedComponent bool
+	}{
+		{name: "exact"},
+		{name: "unexpected-image", tamperImage: true},
+		{name: "missing-component", missing: true},
+		{name: "mixed-generation", mixedGeneration: true},
+		{name: "unexpected-component", unexpectedComponent: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, openErr := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			defer db.Close()
+			if openErr = state.Migrate(context.Background(), db, true); openErr != nil {
+				t.Fatal(openErr)
+			}
+			for index, component := range request.Components {
+				if testCase.missing && index == len(request.Components)-1 {
+					continue
+				}
+				image := component.Image
+				if testCase.tamperImage && index == 0 {
+					image += "-tampered"
+				}
+				componentID := component.ID
+				if testCase.unexpectedComponent && index == 0 {
+					componentID = "unexpected"
+				}
+				generation := 4
+				if testCase.mixedGeneration && index == len(request.Components)-1 {
+					generation = 5
+				}
+				if _, openErr = db.Exec(`INSERT INTO component_ownership(installation_id,component_id,container_id,container_name,network_name,image_digest,runtime_generation,created_at) VALUES(?,?,?,?,?,?,?,'now')`, request.InstanceID, componentID, "container-"+componentID, "name-"+componentID, "legacy-network", image, generation); openErr != nil {
+					t.Fatal(openErr)
+				}
+			}
+			migrationErr := backfillLegacyMulti(db, request, topology, trusted)
+			if testCase.name != "exact" {
+				if migrationErr == nil {
+					t.Fatal("ambiguous legacy ownership was migrated")
+				}
+				return
+			}
+			if migrationErr != nil {
+				t.Fatal(migrationErr)
+			}
+			var status, hash string
+			var components int
+			if openErr = db.QueryRow(`SELECT status,topology_hash FROM runtime_generations WHERE installation_id=? AND runtime_generation=4`, request.InstanceID).Scan(&status, &hash); openErr != nil {
+				t.Fatal(openErr)
+			}
+			if openErr = db.QueryRow(`SELECT COUNT(*) FROM runtime_components WHERE installation_id=? AND runtime_generation=4`, request.InstanceID).Scan(&components); openErr != nil {
+				t.Fatal(openErr)
+			}
+			if status != "verification_required" || hash != topology.Hash || components != len(request.Components) {
+				t.Fatalf("status=%s hash=%s components=%d", status, hash, components)
+			}
+		})
+	}
+}
+
 func TestTrustedApplicationUpdateMayChangePinnedReleaseOnlyThroughUpdateOperation(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
 	if err != nil {
@@ -213,36 +519,6 @@ func TestTrustedApplicationUpdateMayChangePinnedReleaseOnlyThroughUpdateOperatio
 	base.Operation = "UpdateApplication"
 	if err = validateTrustedRecreation(db, base); err != nil {
 		t.Fatalf("trusted update transition rejected: %v", err)
-	}
-}
-
-func TestRuntimeRemovalRetainsTrustedInstallationForRecreate(t *testing.T) {
-	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err = state.Migrate(context.Background(), db, true); err != nil {
-		t.Fatal(err)
-	}
-	base := validFreshRSSRequest()
-	_, err = db.Exec(`INSERT INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation,application_id,release_id,exposure_mode,service_id,host_address,host_port,container_port,service_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, base.InstanceID, "container", "name", base.NetworkName, base.Image, base.DataPath, "now", 1, base.ApplicationID, base.ReleaseID, "loopback", "web", "127.0.0.1", 20000, 80, "http")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = markRuntimeRemoved(db, base.InstanceID); err != nil {
-		t.Fatal(err)
-	}
-	var containerID, containerName, networkName string
-	if err = db.QueryRow(`SELECT container_id,container_name,network_name FROM ownership WHERE instance_id=?`, base.InstanceID).Scan(&containerID, &containerName, &networkName); err != nil {
-		t.Fatalf("trusted installation was deleted: %v", err)
-	}
-	if containerID != "" || containerName != "" || networkName != "" {
-		t.Fatalf("disposable runtime identity retained: %q %q %q", containerID, containerName, networkName)
-	}
-	base.RuntimeGeneration, base.HostPort = 2, 20000
-	if err = validateTrustedRecreation(db, base); err != nil {
-		t.Fatalf("recreate after intentional runtime removal rejected: %v", err)
 	}
 }
 

@@ -53,7 +53,7 @@ func Validate(a Assignment, configuredLAN string) error {
 	return nil
 }
 
-func DockerProtocol(protocol string) (string, error) {
+func ContainerProtocol(protocol string) (string, error) {
 	switch protocol {
 	case "http", "https", "tcp":
 		return "tcp", nil
@@ -62,7 +62,10 @@ func DockerProtocol(protocol string) (string, error) {
 	}
 }
 
-// ObservedBindingsExact compares Docker's decoded HostConfig.PortBindings to
+// DockerProtocol is retained for source compatibility with older callers.
+func DockerProtocol(protocol string) (string, error) { return ContainerProtocol(protocol) }
+
+// ObservedBindingsExact compares a runtime's decoded HostConfig.PortBindings to
 // the trusted installation-service assignment. Any missing, extra, wildcard,
 // or changed binding is security drift.
 func ObservedBindingsExact(a Assignment, containerPort int, protocol string, bindings map[string]any) bool {
@@ -72,11 +75,11 @@ func ObservedBindingsExact(a Assignment, containerPort int, protocol string, bin
 	if Validate(a, a.Address) != nil || containerPort < 1 || containerPort > 65535 {
 		return false
 	}
-	dockerProtocol, err := DockerProtocol(protocol)
+	runtimeProtocol, err := ContainerProtocol(protocol)
 	if err != nil || len(bindings) != 1 {
 		return false
 	}
-	key := fmt.Sprintf("%d/%s", containerPort, dockerProtocol)
+	key := fmt.Sprintf("%d/%s", containerPort, runtimeProtocol)
 	raw, ok := bindings[key]
 	if !ok {
 		return false

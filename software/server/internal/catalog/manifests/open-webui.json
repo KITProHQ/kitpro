@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 6,
   "id": "open-webui",
   "name": "Open WebUI",
   "description": "Private AI chat workspace that connects to a separately configured model backend.",
@@ -16,5 +16,6 @@
   "services": [
     {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8080}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
 }

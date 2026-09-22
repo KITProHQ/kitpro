@@ -16,6 +16,7 @@ const MultiContainerSchemaVersion = 2
 const HardwareSchemaVersion = 3
 const ExternalStorageSchemaVersion = 4
 const RuntimeIdentitySchemaVersion = 5
+const BackupSchemaVersion = 6
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -35,6 +36,7 @@ type Manifest struct {
 	Hardware        []Accelerator     `json:"hardware,omitempty"`
 	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
 	RunAs           *RuntimeIdentity  `json:"run_as,omitempty"`
+	Backup          *BackupPolicy     `json:"backup,omitempty"`
 }
 type Release struct {
 	Version    string `json:"version"`
@@ -67,6 +69,20 @@ type ExternalStorage struct {
 	Mode          string `json:"mode"`
 	Required      bool   `json:"required,omitempty"`
 	Purpose       string `json:"purpose"`
+}
+
+// BackupPolicy identifies authoritative managed storage without exposing an
+// application-controlled command surface. External storage is intentionally
+// absent: format version 1 records those bindings but never copies their data.
+type BackupPolicy struct {
+	Strategy string          `json:"strategy"`
+	Storage  []BackupStorage `json:"storage,omitempty"`
+}
+
+type BackupStorage struct {
+	Component   string `json:"component"`
+	ID          string `json:"id"`
+	Disposition string `json:"disposition"`
 }
 type Env struct {
 	Name     string `json:"name"`
@@ -113,6 +129,7 @@ type Plan struct {
 	Hardware                                                                          []Accelerator
 	ExternalStorage                                                                   []ExternalStorage
 	RunAs                                                                             *RuntimeIdentity
+	Backup                                                                            *BackupPolicy
 }
 
 // ResolvedComponent is the helper-facing, digest-pinned component plan. It is
@@ -150,7 +167,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion && m.SchemaVersion != RuntimeIdentitySchemaVersion {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion && m.SchemaVersion != RuntimeIdentitySchemaVersion && m.SchemaVersion != BackupSchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -170,6 +187,12 @@ func Validate(m Manifest) error {
 	}
 	if m.SchemaVersion < RuntimeIdentitySchemaVersion && (m.RunAs != nil || storageHasOwnership(m.Storage) || componentsHaveRuntimeIdentity(m.Components)) {
 		return fmt.Errorf("runtime identity requires schema version 5")
+	}
+	if m.SchemaVersion < BackupSchemaVersion && m.Backup != nil {
+		return fmt.Errorf("backup policy requires schema version 6")
+	}
+	if m.SchemaVersion == BackupSchemaVersion && m.Backup == nil {
+		return fmt.Errorf("schema version 6 requires backup policy")
 	}
 	if err := validateRuntimeIdentity(m.RunAs); err != nil {
 		return err
@@ -201,7 +224,7 @@ func Validate(m Manifest) error {
 	}
 	seen = map[string]bool{}
 	for _, s := range m.Storage {
-		if !idPattern.MatchString(s.ID) || seen[s.ID] || !strings.HasPrefix(s.ContainerPath, "/") || strings.Contains(s.ContainerPath, "..") || s.ContainerPath == "/" || strings.HasPrefix(s.ContainerPath, "/proc") || strings.HasPrefix(s.ContainerPath, "/sys") || strings.HasPrefix(s.ContainerPath, "/dev") || strings.HasPrefix(s.ContainerPath, "/etc") || strings.Contains(s.ContainerPath, "docker.sock") {
+		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath) {
 			return fmt.Errorf("invalid storage declaration")
 		}
 		seen[s.ID] = true
@@ -282,6 +305,61 @@ func Validate(m Manifest) error {
 			}
 		}
 	}
+	if err := validateBackupPolicy(m); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBackupPolicy(m Manifest) error {
+	if m.Backup == nil {
+		return nil
+	}
+	strategy := m.Backup.Strategy
+	if strategy != "metadata-only" && strategy != "cold-filesystem" && strategy != "cold-sqlite-filesystem" {
+		return fmt.Errorf("invalid backup strategy")
+	}
+
+	declared := map[string]Storage{}
+	for _, item := range m.Storage {
+		if item.Persistent {
+			declared["app/"+item.ID] = item
+		}
+	}
+	for _, component := range m.Components {
+		for _, item := range component.Storage {
+			if item.Persistent {
+				declared[component.ID+"/"+item.ID] = item
+			}
+		}
+	}
+	if strategy == "metadata-only" {
+		if len(declared) != 0 || len(m.Backup.Storage) != 0 {
+			return fmt.Errorf("metadata-only backup cannot declare persistent storage")
+		}
+		return nil
+	}
+	if len(declared) == 0 || len(m.Backup.Storage) != len(declared) {
+		return fmt.Errorf("backup policy must classify every persistent storage declaration")
+	}
+	seen := map[string]bool{}
+	included := 0
+	for _, item := range m.Backup.Storage {
+		if item.Component == "" || item.ID == "" || (item.Disposition != "include" && item.Disposition != "exclude-ephemeral") {
+			return fmt.Errorf("invalid backup storage policy")
+		}
+		key := item.Component + "/" + item.ID
+		if _, ok := declared[key]; !ok || seen[key] {
+			return fmt.Errorf("backup storage policy references unknown or duplicate storage")
+		}
+		seen[key] = true
+		if item.Disposition == "include" {
+			included++
+		}
+	}
+	if included == 0 {
+		return fmt.Errorf("backup policy must include authoritative storage")
+	}
 	return nil
 }
 
@@ -306,7 +384,16 @@ func validateExternalStorage(items []ExternalStorage, managed []Storage) error {
 }
 
 func safeContainerPath(path string) bool {
-	return strings.HasPrefix(path, "/") && !strings.Contains(path, "..") && path != "/" && !strings.HasPrefix(path, "/proc") && !strings.HasPrefix(path, "/sys") && !strings.HasPrefix(path, "/dev") && !strings.HasPrefix(path, "/etc") && !strings.Contains(path, "docker.sock")
+	return strings.HasPrefix(path, "/") && !strings.Contains(path, "..") && path != "/" && !strings.HasPrefix(path, "/proc") && !strings.HasPrefix(path, "/sys") && !strings.HasPrefix(path, "/dev") && !strings.HasPrefix(path, "/etc") && !containsRuntimeSocket(path)
+}
+
+func containsRuntimeSocket(path string) bool {
+	for _, component := range strings.Split(path, "/") {
+		if component == "docker.sock" || component == "podman.sock" || component == "containerd.sock" {
+			return true
+		}
+	}
+	return false
 }
 
 func componentsHaveExternalStorage(components []Component) bool {
@@ -347,7 +434,7 @@ func componentsHaveHardware(components []Component) bool {
 func validateComponentFields(c Component) error {
 	seen := map[string]bool{}
 	for _, s := range c.Storage {
-		if !idPattern.MatchString(s.ID) || seen[s.ID] || !strings.HasPrefix(s.ContainerPath, "/") || strings.Contains(s.ContainerPath, "..") || s.ContainerPath == "/" || strings.HasPrefix(s.ContainerPath, "/proc") || strings.HasPrefix(s.ContainerPath, "/sys") || strings.HasPrefix(s.ContainerPath, "/dev") || strings.HasPrefix(s.ContainerPath, "/etc") || strings.Contains(s.ContainerPath, "docker.sock") {
+		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath) {
 			return fmt.Errorf("invalid storage declaration")
 		}
 		seen[s.ID] = true
@@ -438,7 +525,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 	if !idPattern.MatchString(instance) || network == "" || strings.ContainsAny(network, "/.\\") || !strings.HasPrefix(dataPath, "/srv/kitpro/apps/") || strings.Contains(dataPath, "..") || strings.ContainsAny(dataPath, "\\\r\n") {
 		return Plan{}, fmt.Errorf("invalid instance paths")
 	}
-	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...), RunAs: m.RunAs}
+	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...), RunAs: m.RunAs, Backup: cloneBackupPolicy(m.Backup)}
 	for _, c := range m.Components {
 		var cr Release
 		for _, candidate := range m.Releases {
@@ -451,6 +538,13 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 		p.ResolvedComponents = append(p.ResolvedComponents, resolved)
 	}
 	return p, nil
+}
+
+func cloneBackupPolicy(policy *BackupPolicy) *BackupPolicy {
+	if policy == nil {
+		return nil
+	}
+	return &BackupPolicy{Strategy: policy.Strategy, Storage: append([]BackupStorage(nil), policy.Storage...)}
 }
 func (p Plan) Hash() string {
 	b, _ := json.Marshal(p)

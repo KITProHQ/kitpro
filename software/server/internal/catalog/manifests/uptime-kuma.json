@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 6,
   "id": "uptime-kuma",
   "name": "Uptime Kuma",
   "description": "Monitor websites and network services from a self-hosted dashboard.",
@@ -12,5 +12,6 @@
   }],
   "storage": [{"id": "data", "container_path": "/app/data", "persistent": true, "read_only": false}],
   "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 3001}],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
 }

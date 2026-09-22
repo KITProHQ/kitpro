@@ -10,6 +10,7 @@ User=kitpro-api
 Group=kitpro-api
 EnvironmentFile=-/etc/default/kitpro-server
 EnvironmentFile=-/etc/conf.d/kitpro-server
+EnvironmentFile=-/etc/sysconfig/kitpro-server
 Environment=KITPRO_HELPER_SOCKET=/run/kitpro/helper.sock
 NoNewPrivileges=yes
 PrivateTmp=yes

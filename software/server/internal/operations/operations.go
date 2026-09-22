@@ -22,6 +22,14 @@ type Record struct {
 
 func NewID() string { b := make([]byte, 16); _, _ = rand.Read(b); return "op-" + hex.EncodeToString(b) }
 
+// NewRequestID identifies one transport exchange. It must never be reused as
+// the semantic idempotency key for privileged work.
+func NewRequestID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return "req-" + hex.EncodeToString(b)
+}
+
 // NewInstallation returns a stable identity for an installed application.
 func NewInstallation() string {
 	b := make([]byte, 8)
@@ -40,11 +48,11 @@ func Update(ctx context.Context, db *sql.DB, id, status, summary string) error {
 	return e
 }
 
-// RecoverAccepted closes operations whose in-process helper call was lost when
-// the API restarted. The desired installation remains available for an
-// explicit, idempotent recreate; success is never inferred after a crash.
+// RecoverAccepted intentionally preserves accepted projections. The helper is
+// authoritative for privileged execution and the API can resolve these records
+// through GetOperation after restart; API process death is not execution proof.
 func RecoverAccepted(ctx context.Context, db *sql.DB) (int64, error) {
-	result, err := db.ExecContext(ctx, "UPDATE operations SET status='failed',summary='interrupted by API restart; retry safely' WHERE status='accepted'")
+	result, err := db.ExecContext(ctx, "UPDATE operations SET summary=CASE WHEN summary='' THEN 'awaiting helper state' ELSE summary END WHERE status='accepted'")
 	if err != nil {
 		return 0, err
 	}

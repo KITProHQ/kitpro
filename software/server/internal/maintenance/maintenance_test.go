@@ -24,7 +24,7 @@ func TestPrepareUpgradeCreatesValidatedBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != 7 {
+	if result.SchemaVersion != 13 {
 		t.Fatalf("schema version = %d", result.SchemaVersion)
 	}
 	if err = backup.Verify(context.Background(), result.BackupPath); err != nil {

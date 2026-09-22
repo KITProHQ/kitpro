@@ -4,15 +4,9 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 server_dir=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 repo_dir=$(git -C "$server_dir" rev-parse --show-toplevel)
-public_version=$(tr -d '\n' < "$repo_dir/VERSION")
-default_version=$(printf '%s\n' "$public_version" | sed -E 's/-alpha\.([0-9]+)$/~alpha\1/')
-version=${1:-$default_version}
+version=${1:-0.1.0~alpha1}
 output_dir=${2:-$server_dir/dist}
 architecture=amd64
-case $version in
-    *~alpha*) public_version=$(printf '%s\n' "$version" | sed -E 's/~alpha([0-9]+)$/-alpha.\1/') ;;
-    *) public_version=$version ;;
-esac
 
 if command -v dpkg >/dev/null 2>&1; then
     if ! dpkg --validate-version "$version" >/dev/null 2>&1; then
@@ -50,7 +44,7 @@ install -d "$control" "$root/usr/bin" "$root/usr/libexec" \
     "$root/usr/share/doc/kitpro-server" "$root/usr/share/man/man8" \
     "$root/usr/share/lintian/overrides"
 
-ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=$public_version -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=$source_commit -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=$build_date"
+ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=$version -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=$source_commit -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=$build_date"
 (cd "$server_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$root/usr/bin/kitpro-api" ./cmd/kitpro-api)
 (cd "$server_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$root/usr/libexec/kitpro-helper" ./cmd/kitpro-helper)
 
@@ -61,6 +55,9 @@ install -m 0644 "$script_dir/tmpfiles/kitpro.conf" "$root/usr/lib/tmpfiles.d/"
 install -m 0644 "$script_dir/apparmor/kitpro-helper" "$root/etc/apparmor.d/usr.libexec.kitpro-helper"
 install -m 0644 "$script_dir/apparmor/kitpro-helper" "$root/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 install -m 0644 "$script_dir/debian/kitpro-server.default" "$root/etc/default/kitpro-server"
+sed -e "s/@KITPRO_PACKAGE_VERSION@/$version/g" \
+    "$script_dir/debian/kitpro-debian-upgrade" > "$root/usr/libexec/kitpro-debian-upgrade"
+chmod 0755 "$root/usr/libexec/kitpro-debian-upgrade"
 install -m 0644 "$script_dir/debian/README.Debian" "$root/usr/share/doc/kitpro-server/"
 install -m 0644 "$script_dir/debian/copyright" "$root/usr/share/doc/kitpro-server/"
 install -m 0644 "$script_dir/debian/lintian-overrides" "$root/usr/share/lintian/overrides/kitpro-server"
@@ -102,11 +99,17 @@ else
 fi
 
 (cd "$output_dir" && sha256sum "$(basename "$package")" > "$(basename "$package").sha256")
+package_sha256=$(sha256sum "$package" | awk '{print $1}')
+upgrade_wrapper="$output_dir/kitpro-debian-upgrade"
+sed -e "s/@KITPRO_PACKAGE_SHA256@/$package_sha256/g" \
+    -e "s/@KITPRO_PACKAGE_VERSION@/$version/g" \
+    "$script_dir/debian/kitpro-debian-upgrade" > "$upgrade_wrapper"
+chmod 0755 "$upgrade_wrapper"
+(cd "$output_dir" && sha256sum "$(basename "$upgrade_wrapper")" > "$(basename "$upgrade_wrapper").sha256")
 cat > "$package.build.json" <<EOF
 {
   "package": "kitpro-server",
-  "version": "$public_version",
-  "package_version": "$version",
+  "version": "$version",
   "architecture": "$architecture",
   "source_commit": "$source_commit",
   "source_tree_dirty": $source_tree_dirty,

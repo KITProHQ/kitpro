@@ -4,6 +4,16 @@ KITPro Server for Debian
 Docker Engine is an external prerequisite. The package does not install Docker
 and never adds the API account to the docker group.
 
+The alpha.11 to alpha.12 upgrade must be run with the package-bound
+kitpro-debian-upgrade wrapper distributed beside the alpha.12 package. Raw
+"apt install ./package.deb" and "dpkg -i package.deb" are unsupported for this
+one transition because alpha.11's abort handler cannot recover cleanly from a
+failed database preflight. Fresh alpha.12 installs use the normal package path.
+
+Alpha.12 installs a permanent Debian upgrade gate for future upgrades. It
+validates both databases and promotes a complete paired backup set before dpkg
+is allowed to unpack the replacement package.
+
 The dashboard listens on 127.0.0.1:8080 by default. For first setup, connect an
 SSH tunnel to the server and open http://127.0.0.1:8080/setup locally.
 

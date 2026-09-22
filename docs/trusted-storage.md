@@ -32,9 +32,37 @@ the original mount, then recreate the application. Do not create an empty
 directory as a substitute for a missing NAS mount.
 
 **Permission denied** means the container process cannot read the imported
-files or the root was deliberately mounted read-only. Adjust host filesystem
-permissions without granting write access unless the application and root both
-require it.
+files, SELinux does not permit the existing label, or the root was deliberately
+mounted read-only. A read-only bind mount does not bypass either normal file
+permissions or SELinux.
+
+On Rocky Linux, inspect the exact registered root before changing it:
+
+```sh
+ls -ldZ /mnt/example-media
+namei -l /mnt/example-media
+```
+
+For a dedicated local directory that the administrator has approved for
+container access, label that directory only. Do not relabel `/mnt`, `/srv`, or
+an unrelated parent tree:
+
+```sh
+sudo semanage fcontext -a -t container_file_t '/mnt/example-media(/.*)?'
+sudo restorecon -Rv /mnt/example-media
+```
+
+This label permits container domains to attempt access; Unix ownership and
+mode bits and KITPro's read-only/read-write binding policy still apply. The
+change is persistent and shared by any container domain, so use it only for a
+dedicated trusted root. To undo the administrator-added rule, remove that exact
+file-context expression and restore the distribution context.
+
+NFS and SMB mounts may need a mount-specific SELinux context or a narrowly
+justified SELinux setting instead of relabeling remote files. Follow the
+storage provider and Rocky SELinux guidance; do not disable enforcement or add
+an unexplained boolean. See
+[`security/selinux-rocky-podman.md`](security/selinux-rocky-podman.md).
 
 **Mount identity changed** after replacing storage means KITPro cannot know
 whether the new filesystem is intended. Register it as a new trusted root and

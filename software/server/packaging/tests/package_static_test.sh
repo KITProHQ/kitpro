@@ -27,21 +27,23 @@ tar -xJf "$unpack/data.tar.xz" -C "$unpack/data"
 
 test -x "$unpack/data/usr/bin/kitpro-api"
 test -x "$unpack/data/usr/libexec/kitpro-helper"
+test -x "$unpack/data/usr/libexec/kitpro-debian-upgrade"
+test -x "$first/kitpro-debian-upgrade"
+test "$(sha256sum "$first/kitpro-debian-upgrade" | awk '{print $1}')" = "$(sha256sum "$second/kitpro-debian-upgrade" | awk '{print $1}')"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-helper "$unpack/control/conffiles"
 grep -q 'profile_source=/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper' "$unpack/control/postinst"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-helper.socket"
 test -f "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
+grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
 grep -q '^Version: 0.1.0~alpha3$' "$unpack/control/control"
-test "$("$unpack/data/usr/bin/kitpro-api" --version | awk '{print $2}')" = 0.1.0-alpha.3
-test "$("$unpack/data/usr/libexec/kitpro-helper" --version | awk '{print $2}')" = 0.1.0-alpha.3
 grep -q '^Depends: adduser, apparmor, systemd$' "$unpack/control/control"
 grep -q 'Environment=KITPRO_API_USER=kitpro-api' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-helper$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
-grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
-grep -q '^AmbientCapabilities=CAP_CHOWN$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
-if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|DAC_READ_SEARCH|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"; then
+grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"; then
     echo "helper gained an unapproved capability" >&2
     exit 1
 fi
@@ -49,7 +51,9 @@ grep -q '^/usr/libexec/kitpro-helper flags=(attach_disconnected) {$' "$unpack/da
 grep -q '^  deny network inet,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  deny network inet6,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q 'apparmor_parser -r -W -T' "$unpack/control/postinst"
+grep -q '^systemctl daemon-reload$' "$unpack/control/postinst"
 if grep -R -E '__API_UID__|RestrictSUIDSGID|docker group|0\.0\.0\.0' "$unpack/data/usr/lib/systemd/system" "$unpack/data/etc/default"; then
     echo "unsafe or unresolved package configuration found" >&2
     exit 1
@@ -66,5 +70,14 @@ fi
 for script in preinst postinst prerm postrm; do
     sh -n "$unpack/control/$script"
 done
+grep -q '^set -eu$' "$unpack/control/preinst"
+grep -Fq 'alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper' "$unpack/control/preinst"
+grep -Fq '/usr/libexec/kitpro-debian-upgrade --preflight-installed' "$unpack/control/preinst"
+grep -Fq 'abort-upgrade|abort-install|abort-remove|abort-deconfigure)' "$unpack/control/postinst"
+grep -Fq 'Never migrate with code that was' "$unpack/control/postinst"
+grep -Fq 'package SHA-256 does not match this upgrade wrapper' "$first/kitpro-debian-upgrade"
+grep -Fq "embedded_package_version='0.1.0~alpha3'" "$first/kitpro-debian-upgrade"
+grep -Fq "embedded_package_sha256='$(sha256sum "$one" | awk '{print $1}')'" "$first/kitpro-debian-upgrade"
+grep -Fq 'kitpro-debian-upgrade wrapper' "$unpack/data/usr/share/doc/kitpro-server/README.Debian"
 
 echo "package static tests: PASS"

@@ -1,11 +1,13 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -13,9 +15,12 @@ import (
 const MaxFrame = 64 * 1024
 
 type Request struct {
-	Version   int    `json:"version"`
-	ID        string `json:"request_id"`
-	Operation string `json:"operation"`
+	Version           int    `json:"version"`
+	ID                string `json:"request_id"`
+	OperationID       string `json:"operation_id,omitempty"`
+	Operation         string `json:"operation"`
+	OperationRevision int    `json:"operation_revision,omitempty"`
+	Deadline          string `json:"deadline,omitempty"`
 	// InstanceID is the stable installed-application identity; runtime
 	// incarnations are distinguished by RuntimeGeneration.
 	InstanceID        string                   `json:"instance_id"`
@@ -44,6 +49,8 @@ type Request struct {
 	RootPath          string                   `json:"root_path,omitempty"`
 	RootMode          string                   `json:"root_mode,omitempty"`
 	RunAs             *RuntimeIdentity         `json:"run_as,omitempty"`
+	BackupID          string                   `json:"backup_id,omitempty"`
+	RepairAction      string                   `json:"repair_action,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -91,14 +98,62 @@ type HardwareRequirement struct {
 	CPUFallback bool   `json:"cpu_fallback,omitempty"`
 }
 type Response struct {
-	OK        bool   `json:"ok"`
-	RequestID string `json:"request_id,omitempty"`
-	Result    any    `json:"result,omitempty"`
-	Error     string `json:"error,omitempty"`
+	OK                bool   `json:"ok"`
+	RequestID         string `json:"request_id,omitempty"`
+	OperationID       string `json:"operation_id,omitempty"`
+	State             string `json:"state,omitempty"`
+	Phase             string `json:"phase,omitempty"`
+	ActiveOperationID string `json:"active_operation_id,omitempty"`
+	Result            any    `json:"result,omitempty"`
+	ErrorCode         string `json:"error_code,omitempty"`
+	Error             string `json:"error,omitempty"`
+	Retryable         bool   `json:"retryable,omitempty"`
+}
+
+// SemanticOperationID returns the durable mutation identity. The request ID
+// fallback keeps protocol-v1 read paths and focused handler tests compatible;
+// protocol-v2 mutations are required to provide OperationID explicitly.
+func (r Request) SemanticOperationID() string {
+	if r.OperationID != "" {
+		return r.OperationID
+	}
+	return r.ID
+}
+
+// Canonical returns the bounded semantic request representation used for
+// idempotency. Transport request IDs, semantic operation IDs, deadlines, and
+// generated secret values cannot change the hash. JSON struct encoding fixes
+// field order, while omitempty makes nil and empty collections equivalent.
+// Slice order is retained because command, component, dependency, and manifest
+// order participate in the existing trusted-plan contract.
+func Canonical(r Request) ([]byte, error) {
+	r.ID = ""
+	r.OperationID = ""
+	r.Deadline = ""
+	for i := range r.Environment {
+		if r.Environment[i].Secret {
+			r.Environment[i].Value = ""
+		}
+	}
+	for i := range r.Components {
+		for j := range r.Components[i].Environment {
+			if r.Components[i].Environment[j].Secret {
+				r.Components[i].Environment[j].Value = ""
+			}
+		}
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxFrame {
+		return nil, errors.New("canonical request too large")
+	}
+	return b, nil
 }
 
 func Hash(r Request) (string, error) {
-	b, e := json.Marshal(r)
+	b, e := Canonical(r)
 	if e != nil {
 		return "", e
 	}
@@ -117,7 +172,10 @@ func Read(r io.Reader) (Request, error) {
 	if _, e := io.ReadFull(r, b); e != nil {
 		return Request{}, e
 	}
-	d := json.NewDecoder(strings.NewReader(string(b)))
+	if err := rejectDuplicateKeys(b); err != nil {
+		return Request{}, err
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	var q Request
 	if e := d.Decode(&q); e != nil {
@@ -128,6 +186,69 @@ func Read(r io.Reader) (Request, error) {
 		return q, errors.New("trailing JSON")
 	}
 	return q, nil
+}
+
+func rejectDuplicateKeys(data []byte) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	if err := readUniqueValue(d); err != nil {
+		return err
+	}
+	if token, err := d.Token(); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("trailing JSON token %v", token)
+	}
+	return nil
+}
+
+func readUniqueValue(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("object key is not a string")
+			}
+			if seen[key] {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = true
+			if err := readUniqueValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("invalid object termination")
+		}
+	case '[':
+		for d.More() {
+			if err := readUniqueValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("invalid array termination")
+		}
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
+	return nil
 }
 
 func ReadResponse(r io.Reader) (Response, error) {

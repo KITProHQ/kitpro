@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 6,
   "id": "paperless-ngx",
   "name": "Paperless-ngx",
   "description": "Document management with a web application and internal Redis broker.",
@@ -14,5 +14,6 @@
   "components": [
     {"id": "broker", "release": "redis-7.4.11", "storage": [{"id": "data", "container_path": "/data", "persistent": true, "read_only": false}], "services": [{"id": "redis", "name": "Redis", "protocol": "tcp", "container_port": 6379}], "restart": "unless-stopped"},
     {"id": "web", "release": "2.20.15", "environment": [{"name": "PAPERLESS_REDIS", "value": "redis://broker:6379"}], "storage": [{"id": "data", "container_path": "/usr/src/paperless/data", "persistent": true, "read_only": false}, {"id": "media", "container_path": "/usr/src/paperless/media", "persistent": true, "read_only": false}, {"id": "consume", "container_path": "/usr/src/paperless/consume", "persistent": true, "read_only": false}, {"id": "export", "container_path": "/usr/src/paperless/export", "persistent": true, "read_only": false}], "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8000}], "depends_on": ["broker"], "restart": "unless-stopped"}
-  ]
+  ],
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "broker", "id": "data", "disposition": "exclude-ephemeral"}, {"component": "web", "id": "data", "disposition": "include"}, {"component": "web", "id": "media", "disposition": "include"}, {"component": "web", "id": "consume", "disposition": "include"}, {"component": "web", "id": "export", "disposition": "include"}]}
 }

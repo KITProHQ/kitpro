@@ -1,5 +1,2 @@
 *.deb
 *.pkg.tar.zst
-*.cdx.json
-*.build.json
-*.sha256

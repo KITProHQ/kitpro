@@ -1,17 +1,25 @@
 # Rocky Linux 10 experimental-support backlog
 
-Rocky Linux 10 is a secondary experimental KITPro host. This backlog does not block Debian 13 Phase 1 work or change the platform-neutral helper and Docker contracts.
+Rocky Linux 10 is a promotion-ready experimental KITPro host. It uses the
+shared catalog and helper protocol through the Podman/Quadlet runtime adapter.
+The old Docker experiment remains evidence for portability but is not the
+target path. Support designation and RPM publication remain separate release
+actions.
 
 | Work | Current evidence | Completion requirement |
 | --- | --- | --- |
-| Clean corrected installation | `NOT RUN` from a clean snapshot | Run `tools/install-docker.sh` from `clean-os`. Verify that it creates or preserves safe daemon configuration, restarts Docker when required, reports `name=selinux`, and leaves SELinux Enforcing. |
-| `selinux-enabled` installer regression | Repository render and restart-required tests pass | Add host-level cases for absent, valid, invalid, and conflicting `daemon.json` files. The installer must not overwrite administrator configuration. |
-| Dedicated helper SELinux domain | `PASS` for test-only feasibility: a dedicated domain compiled/loaded and ran under Enforcing; production packaging remains open | Define a packaged executable transition and grant only the measured Unix-socket, state, audit, filesystem, and Docker-socket access. Do not use a broad permissive domain. |
-| Socket, runtime, and state labels | `PASS` for test-only types and relabeling; package lifecycle not run | Define dedicated types and verify creation, restart, package upgrade, relabel, and removal behavior. |
-| firewalld regression | One real no-port run passed | Test Docker zone and forwarding behavior across install, restart, application-network creation, cleanup, and future loopback publication without rewriting global policy. |
-| Rocky package upgrades | `NOT RUN` | Test supported point-release and security updates from a recorded snapshot. |
-| Docker upgrades | `NOT RUN` | Test Engine API compatibility, SELinux configuration preservation, networking, ownership checks, and service recovery across each supported Docker update. |
-| Rollback | `NOT RUN` | Define and test package, daemon-configuration, helper-policy, and Docker-version rollback without disabling SELinux. |
+| Clean native installation | `PASS` on Rocky Linux 10.2 with Podman 5.8.2, crun 1.27, Quadlet, firewalld, and SELinux Enforcing; Docker was absent | Keep the immutable [`2026-09-15 acceptance result`](../testing/results/2026-09-15-rocky10-podman-clean-host-acceptance.md) as the baseline and rerun it after runtime/package changes. |
+| Reproducible RPM build | Spec, builder, and static tests exist | Build `kitpro-server` and `kitpro-selinux` twice on Rocky 10 and compare payloads, metadata, and checksums. |
+| Dedicated helper SELinux domain | No helper-specific AVC occurred during the full native acceptance run; the current RPM needs only standard application-data contexts | Reconsider a narrow helper transition only if observed required operations demonstrate a policy need. Do not install speculative allow rules or a permissive domain. |
+| Managed and imported storage labels | `PASS` for private managed `:Z`, exact imported-root labeling, read-only and read-write access, MCS isolation, UID/GID behavior, and restored managed labels | Validate NFS/CIFS on a separately available mount. |
+| firewalld regression | `PASS` for private, exact loopback, exact LAN, reboot, and uninstall under Rocky's default `StrictForwardPorts=no` | Add generation-aware explicit forward rules before claiming compatibility with an administrator-enabled `StrictForwardPorts=yes`. |
+| Quadlet recovery | `PASS` for DNS, Paperless dependency recovery, slow image/start behavior, container kill, daemon reload, and host reboot | Rerun after material Podman or Quadlet generator changes. |
+| Rocky package upgrades | `PASS` for native alpha11 through alpha19 DNF upgrades, backups, migration, daemon reload, secrets, data, and health | Rerun after lifecycle-script or schema changes. |
+| Remove/reinstall and purge | `PASS`; running state and data returned after reinstall, while acknowledged purge retained imported storage, Podman/images, firewalld, and unrelated SELinux policy | Rerun after lifecycle-script changes. |
+| Full visible catalog | All 15 visible applications passed after the recorded runtime-neutral acceptance fixes | Rerun catalog acceptance when manifests or normalized runtime-plan behavior change. |
+| Application-data backup and restore | `PASS`; Ollama, Open WebUI, and Paperless-ngx passed on Rocky/Podman, including generated secrets, SQLite, media, excluded Redis, restart, reboot, SELinux labels, and AVC review | Preserve the immutable [`2026-09-16 acceptance result`](../testing/results/2026-09-16-application-backup-restore-acceptance.md) and rerun after backup format or restore lifecycle changes. |
 | x86-64-v3 documentation | The validation CPU passed | Document the requirement before users install Rocky. Provide a preflight check and explain that older AMD and Intel systems may be incompatible. |
 
-Keep Rocky experimental until the clean-install, helper-domain, upgrade, and rollback rows pass. Record each real-host run as a new immutable result.
+The applicable technical promotion gates now pass. Keep the published product
+label experimental until the support designation is approved and RPMs are
+released. Record each later real-host run as a new immutable result.

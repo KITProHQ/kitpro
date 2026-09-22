@@ -39,5 +39,12 @@ These rules apply to every implementation and supported application. A change th
 35. The helper independently revalidates hardware intent, discovers the host, resolves exact devices, persists assignments, and treats missing, changed, extra, or ambiguous mappings as security drift.
 36. Imported storage is reachable only through administrator-registered trusted roots and manifest-declared logical slots. Application requests cannot contain raw host paths or bind syntax.
 37. The helper canonicalizes roots, rejects symlink and protected-path escapes, records filesystem identity, enforces read-only/read-write ceilings, and treats unavailable, changed, missing, extra, or weakened mounts as security drift.
+38. A semantic operation ID is immutable. The helper returns the existing result for an exact canonical replay and rejects the same ID with different semantic contents.
+39. Request IDs identify transport exchanges only. Losing an API or browser response never authorizes a second destructive mutation under a new semantic operation without reconciliation.
+40. A runtime generation becomes active only after every required component is freshly observed in the requested runtime state and the fenced helper transaction commits. Preparation or partial start never advances the active generation.
+41. Multi-component start order follows the persisted dependency-first topology. Stop and removal use the reverse order. Per-component intent, dispatch, and observed outcome remain durable across interruption.
+42. The previous working generation remains retained and stopped when recovery may need it. Cleanup debt is recorded separately from replacement success and never deletes persistent application storage.
+43. Restore records exact path identity and each filesystem-swap phase before mutation. An unresolved restore blocks other lifecycle mutation for that installation; ambiguous mixed trees require explicit recovery rather than path guessing.
+44. Runtime `running`, desired state, reconciliation classification, and application readiness are distinct facts. KITPro never labels an application healthy solely because its container process is running.
 
 The detailed rationale, actors, threats, and tests are in the [threat model](threat-model.md), [ADR-0016](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0018](../decisions/0018-security-boundaries.md).

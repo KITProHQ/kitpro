@@ -1,0 +1,7 @@
+policy_module(kitpro, 1.0.0)
+
+# KITPro-managed application data uses the standard container file type. Each
+# private mount receives an MCS label from Podman's :Z handling at runtime.
+gen_require(`
+    type container_file_t;
+')

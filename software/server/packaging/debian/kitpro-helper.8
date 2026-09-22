@@ -6,9 +6,9 @@ kitpro-helper \- confined privileged helper for KITPro Server
 .SH DESCRIPTION
 .B kitpro-helper
 accepts only typed KITPro operations from the authenticated API service UID over
-a Unix socket. It talks to Docker Engine directly and does not invoke a shell,
-Docker CLI, or Compose. It is normally socket-activated by systemd and confined
-by AppArmor.
+a Unix socket. It uses the host's selected Docker or Podman adapter and never
+accepts arbitrary runtime requests or shell commands. It is normally
+socket-activated by systemd and confined by the host security adapter.
 .SH FILES
 .TP
 .I /var/lib/kitpro-helper/helper.db
