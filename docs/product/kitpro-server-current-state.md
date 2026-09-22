@@ -1,6 +1,6 @@
 # KITPro Server Current State
 
-Status date: 2026-09-15. This is the primary factual source for the KITPro Server launch-video script. It describes released behavior and validated boundaries, not roadmap intent.
+Status date: 2026-09-21. This page describes released behavior and validated boundaries, not roadmap intent. The separate launch-video baseline remains an alpha.11 historical record.
 
 ## What KITPro Server is
 
@@ -92,7 +92,7 @@ That backup is not a complete application-data or host disaster-recovery system.
 | Platform | Status | Exact boundary |
 | --- | --- | --- |
 | Debian 13 amd64 | Supported | Rootful Docker and enforcing AppArmor |
-| Ubuntu 26.04 LTS amd64 | Supported | Rootful Docker and enforcing AppArmor |
+| Ubuntu 26.04 LTS amd64 | Development evidence only | Not part of the public support baseline |
 | Arch Linux x86_64 | Supported | Fully updated official repositories, `linux-lts`, rootful Docker, and enforcing AppArmor; no partial upgrades |
 | Rocky Linux 10 amd64 | Experimental | Not certified; SELinux and Docker integration require further validation |
 
@@ -100,7 +100,8 @@ The [support matrix](../support-matrix.md) is definitive for platform-specific c
 
 ## Package formats
 
-- Debian and Ubuntu: `.deb`
+- Debian: `.deb`
+- Ubuntu: development evidence for the `.deb` path, not part of the public baseline
 - Arch Linux: `.pkg.tar.zst`
 
 Published releases also include SHA-256 checksums, build metadata, a release manifest, and a CycloneDX JSON SBOM.
@@ -111,7 +112,7 @@ KITPro is licensed under the Apache License 2.0. Catalog applications retain the
 
 ## Current release
 
-The current public release is [`v0.1.0-alpha.11`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11), published as a GitHub prerelease from source commit `1eed6b0a2199e927a9647e50206e89f6cfc19995`.
+The current public release is [`v0.1.0-alpha.12`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12), published as a GitHub prerelease from source commit `ada9555ab680613f8b56f6f0762abce6f0955670`.
 
 ## Known limitations
 

@@ -1,17 +1,17 @@
 # Known alpha limitations
 
-Status date: 2026-09-15. These limits apply to the current public release, `v0.1.0-alpha.11`.
+Status date: 2026-09-21. These limits apply to the current public release, `v0.1.0-alpha.12`.
 
 ## Platform and runtime
 
-- Only Debian 13 amd64, Ubuntu 26.04 LTS amd64, and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor are certified.
-- Rocky Linux 10 amd64 is experimental. Its SELinux and Docker integration are not certified.
+- The public baseline is Debian 13 amd64 and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor.
+- Rocky Linux 10 and Podman remain Experimental and are not promoted by alpha.12.
 - The catalog is intentionally limited. Arbitrary Compose, shell commands, capabilities, privileged mode, host networking, devices, bind mounts, and user-supplied manifests are not accepted.
 - LAN exposure binds one configured host address. Wildcard/public-Internet exposure, reverse proxies, domains, and TLS automation are outside the current scope.
 
 ## Hardware acceleration
 
-- NVIDIA Ollama inference is validated on the supported Debian, Ubuntu, and Arch boundaries with an RTX A2000 12GB and NVIDIA Container Toolkit 1.20.0. Other driver, toolkit, and GPU combinations remain unvalidated.
+- NVIDIA Ollama inference is validated on the supported Debian and Arch boundaries with an RTX A2000 12GB and NVIDIA Container Toolkit 1.20.0. Ubuntu results are development evidence only. Other driver, toolkit, and GPU combinations remain unvalidated.
 - KITPro currently accepts one unambiguous GPU. Multi-GPU selection and scheduling are not implemented.
 - KITPro grants bounded device access but does not schedule GPU work or reserve VRAM when applications share one GPU.
 - AMD device scoping has limited evidence, but AMD compute workloads are not live-certified.
@@ -27,6 +27,9 @@ Status date: 2026-09-15. These limits apply to the current public release, `v0.1
 - Imported external data is not included in KITPro control-plane backups. Root reassociation after restore is explicit.
 - A complete automatic application-data backup, host-to-host restore, or disaster-recovery workflow is not implemented.
 - Rollback of irreversible upstream schema migrations is not promised.
+- Runtime running state is not the same as application readiness.
+- Same-port replacement can have a bounded cutover interruption.
+- Failed restore or cleanup trees may require later cleanup. Some cleanup debt requires an explicit repair action.
 
 ## Application and network boundaries
 
@@ -42,3 +45,4 @@ Status date: 2026-09-15. These limits apply to the current public release, `v0.1
 - Application updates are trusted-catalog and administrator initiated.
 - Native package managers remain authoritative for KITPro package updates.
 - Pre-update backups protect bounded control-plane state, not imported external data or the complete host.
+- Downgrades after the alpha.11 schema 7 to alpha.12 schema 13 migration are unsupported.

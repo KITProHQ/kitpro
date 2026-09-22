@@ -19,18 +19,43 @@ supported.
    uses only Arch official repository packages and does not grant the invoking
    user Docker group membership.
 
-## Install
+## Fresh alpha.12 install
 
-Builds use `makepkg` as a non-root account. Install the resulting package with:
+These commands are for a new installation. Existing alpha.11 users must use
+the guarded upgrade path in the next section.
+
+Download and verify the published package:
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U kitpro-server-VERSION-1-x86_64.pkg.tar.zst
+curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
+curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-alpha12-SHA256SUMS
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+sudo pacman -U ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
 ```
 
 The transaction fails closed unless Docker is active and AppArmor is enabled.
 The API listens on `127.0.0.1:8080` by default. Use an SSH tunnel and open
 `http://127.0.0.1:8080/setup` to create the first local administrator.
+
+## Upgrade from alpha.11
+
+Do not use raw `pacman -U` for this transition. Download the wrapper and exact
+alpha.12 package, verify both, then run:
+
+```sh
+curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-server-0.1.0_alpha12-1-upgrade.sh
+curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
+curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-alpha12-SHA256SUMS
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+chmod +x kitpro-server-0.1.0_alpha12-1-upgrade.sh
+sudo ./kitpro-server-0.1.0_alpha12-1-upgrade.sh \
+  ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
+```
+
+The wrapper verifies the exact package, establishes a temporary fail-closed
+pre-transaction gate, and performs the supported transition. Alpha.12 installs
+permanent native upgrade protection for future upgrades. The schema 7 to
+schema 13 migration is supported and validated; downgrades are unsupported.
 
 ## Configuration
 

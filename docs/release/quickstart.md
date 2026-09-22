@@ -1,14 +1,18 @@
 # KITPro Server public alpha quickstart
 
-Download the package and matching `SHA256SUMS` from the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11). Use the version and filename from that release.
+Download the package and `kitpro-alpha12-SHA256SUMS` from the [v0.1.0-alpha.12 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12). Use the exact public filenames below.
 
-## Debian 13 or Ubuntu 26.04 LTS
+## Fresh install
+
+These commands are only for hosts without an existing KITPro alpha.11 package.
+
+## Debian 13
 
 Requirements: amd64, rootful Docker, systemd, and an enforcing AppArmor kernel/userspace setup.
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing
-sudo apt install ./kitpro-server_VERSION_amd64.deb
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_0.1.0.alpha12_amd64.deb
 sudo systemctl status kitpro-api kitpro-helper
 ```
 
@@ -20,12 +24,39 @@ Requirements: x86_64, a fully updated system using official repositories, `linux
 
 ```sh
 sudo pacman -Syu
-sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./kitpro-server-VERSION-1-x86_64.pkg.tar.zst
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+sudo pacman -U ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
 sudo systemctl status kitpro-api kitpro-helper
 ```
 
 Reboot into `linux-lts` after installing or changing the kernel/AppArmor boundary before expecting the helper to pass readiness checks.
+
+## Upgrade from alpha.11
+
+Do not use raw package-manager commands for this one transition.
+
+### Debian
+
+```sh
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+chmod +x kitpro-debian-upgrade
+sudo ./kitpro-debian-upgrade ./kitpro-server_0.1.0.alpha12_amd64.deb
+```
+
+### Arch Linux
+
+```sh
+sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
+chmod +x kitpro-server-0.1.0_alpha12-1-upgrade.sh
+sudo ./kitpro-server-0.1.0_alpha12-1-upgrade.sh \
+  ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
+```
+
+The Debian wrapper validates existing state and creates the complete backup
+set before invoking APT. The Arch wrapper installs a temporary fail-closed
+pre-transaction gate. Alpha.12 installs permanent native upgrade protection
+for future upgrades. Alpha.11 schema 7 to alpha.12 schema 13 migration is
+supported and validated. Downgrading after migration is unsupported.
 
 ## First run
 
@@ -38,4 +69,4 @@ Reboot into `linux-lts` after installing or changing the kernel/AppArmor boundar
 
 Managed data lives under `/srv/kitpro/apps/<application>/<installation>/` and survives runtime recreation. Imported data stays at the administrator-approved root and is not deleted or backed up by KITPro. Package migrations and trusted app updates protect control state, not the complete external library.
 
-See the [Debian/Ubuntu guide](../install-debian-package.md), [Arch guide](../install-arch-package.md), [support matrix](../support-matrix.md), and [known limitations](known-limitations.md).
+See the [Debian guide](../install-debian-package.md), [Arch guide](../install-arch-package.md), [support matrix](../support-matrix.md), and [known limitations](known-limitations.md).

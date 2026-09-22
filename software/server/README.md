@@ -4,9 +4,10 @@ KITPro Server is a Go control plane and narrowly privileged helper for trusted s
 
 ## Supported production boundary
 
-- Debian 13 amd64 and Ubuntu 26.04 LTS amd64: `.deb`, rootful Docker, enforcing AppArmor.
+- Debian 13 amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Arch Linux x86_64: native package, `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor.
-- Rocky Linux 10 amd64: experimental, not certified.
+- Ubuntu 26.04 LTS amd64: development evidence for the `.deb` path, not part of the public baseline.
+- Rocky Linux 10 amd64 and Podman: Experimental, not promoted by alpha.12.
 
 See the definitive [support matrix](../../docs/support-matrix.md).
 
@@ -38,7 +39,7 @@ Build packages with the version documented in the release manifest:
 ./packaging/build-arch-package.sh 0.1.0_alpha11
 ```
 
-Do not infer a public release from a source version. Use the [v0.1.0-alpha.11 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11) for published artifacts.
+Do not infer a public release from a source version. Use the [v0.1.0-alpha.12 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12) for published artifacts. Its frozen source is commit `ada9555ab680613f8b56f6f0762abce6f0955670` on `release/0.1.0-alpha.12-prep`.
 
 ## Contributor references
 

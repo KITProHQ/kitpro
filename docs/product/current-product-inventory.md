@@ -1,6 +1,6 @@
 # KITPro Server current product inventory
 
-Status date: 2026-09-15. This page records shipped source behavior and validated boundaries, not roadmap intent.
+Status date: 2026-09-21. This page records shipped source behavior and validated boundaries, not roadmap intent.
 
 ## Product and distribution
 
@@ -8,10 +8,10 @@ Status date: 2026-09-15. This page records shipped source behavior and validated
 | --- | --- |
 | Product | KITPro Server public alpha |
 | License | Apache License 2.0 for KITPro source; catalog applications retain their upstream licenses |
-| Current release | [`v0.1.0-alpha.11`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.11), published prerelease |
-| Packages | Debian/Ubuntu `.deb`; Arch `.pkg.tar.zst`; CycloneDX JSON SBOM and SHA-256 checksums in the published release |
-| Supported systems | Debian 13 amd64; Ubuntu 26.04 LTS amd64; Arch Linux x86_64 under the documented `linux-lts` boundary |
-| Experimental | Rocky Linux 10 amd64 |
+| Current release | [`v0.1.0-alpha.12`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12), published prerelease |
+| Packages | Debian `.deb`; Arch `.pkg.tar.zst`; transition wrappers, CycloneDX JSON SBOM, build metadata, and SHA-256 checksums in the published release |
+| Supported systems | Debian 13 amd64; Arch Linux x86_64 under the documented `linux-lts` boundary |
+| Experimental | Rocky Linux 10 amd64 and Podman-related work |
 | Public source | <https://github.com/KITProHQ/kitpro> |
 | Product page | <https://kitpro.us/server> |
 | Releases | <https://github.com/KITProHQ/kitpro/releases> |
