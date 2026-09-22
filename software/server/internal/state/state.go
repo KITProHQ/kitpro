@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 13
+	target := 14
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -398,6 +398,49 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=13"); err != nil {
+			return err
+		}
+	}
+	if n < 14 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS runtime_generation_bindings (
+				installation_id TEXT NOT NULL,
+				runtime_generation INTEGER NOT NULL,
+				service_id TEXT NOT NULL,
+				transport TEXT NOT NULL CHECK(transport IN ('tcp','udp')),
+				container_port INTEGER NOT NULL CHECK(container_port BETWEEN 1 AND 65535),
+				mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')),
+				host_address TEXT NOT NULL DEFAULT '',
+				host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port BETWEEN 0 AND 65535),
+				PRIMARY KEY(installation_id,runtime_generation,service_id),
+				FOREIGN KEY(installation_id,runtime_generation) REFERENCES runtime_generations(installation_id,runtime_generation) ON DELETE RESTRICT
+			);
+			INSERT OR IGNORE INTO runtime_generation_bindings(installation_id,runtime_generation,service_id,transport,container_port,mode,host_address,host_port)
+				SELECT installation_id,runtime_generation,service_id,CASE WHEN service_protocol='udp' THEN 'udp' ELSE 'tcp' END,container_port,exposure_mode,host_address,host_port
+				FROM runtime_generations WHERE service_id<>'' AND container_port BETWEEN 1 AND 65535;`)
+		} else {
+			_, err = tx.ExecContext(ctx, `DROP INDEX IF EXISTS installation_service_exposure_binding_unique;
+			ALTER TABLE installation_service_exposure RENAME TO installation_service_exposure_v13;
+			CREATE TABLE installation_service_exposure (
+				installation_id TEXT NOT NULL,
+				service_id TEXT NOT NULL,
+				transport TEXT NOT NULL DEFAULT 'tcp' CHECK(transport IN ('tcp','udp')),
+				mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')),
+				host_address TEXT NOT NULL DEFAULT '',
+				host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port BETWEEN 0 AND 65535),
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(installation_id,service_id)
+			);
+			INSERT INTO installation_service_exposure(installation_id,service_id,transport,mode,host_address,host_port,created_at,updated_at)
+				SELECT installation_id,service_id,'tcp',mode,host_address,host_port,created_at,updated_at FROM installation_service_exposure_v13;
+			DROP TABLE installation_service_exposure_v13;
+			CREATE UNIQUE INDEX installation_service_exposure_binding_unique ON installation_service_exposure(host_address,host_port,transport) WHERE mode <> 'internal';`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=14"); err != nil {
 			return err
 		}
 	}

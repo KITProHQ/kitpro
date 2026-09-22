@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/ownership"
 )
 
@@ -66,7 +67,7 @@ func (r MultiRunner) Operate(ctx context.Context, installation, operationID stri
 	if generation.Status != "active" || len(generation.Components) < 2 {
 		return Result{}, errors.New("active multi-component generation unavailable")
 	}
-	plan := MultiPlan{OperationID: operationID, InstallationID: installation, ApplicationID: generation.ApplicationID, ReleaseID: generation.ReleaseID, Generation: generation.Generation, ExpectedGeneration: generation.Generation, FencingToken: fencingToken, NetworkName: generation.NetworkName, PlanHash: generation.PlanHash, TopologyHash: generation.TopologyHash, DataPath: generation.DataPath, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort, ContainerPort: generation.ContainerPort, ServiceProtocol: generation.ServiceProtocol}
+	plan := MultiPlan{OperationID: operationID, InstallationID: installation, ApplicationID: generation.ApplicationID, ReleaseID: generation.ReleaseID, Generation: generation.Generation, ExpectedGeneration: generation.Generation, FencingToken: fencingToken, NetworkName: generation.NetworkName, PlanHash: generation.PlanHash, TopologyHash: generation.TopologyHash, DataPath: generation.DataPath, Bindings: generation.Bindings}
 	for _, component := range generation.Components {
 		plan.Components = append(plan.Components, MultiComponentPlan{ID: component.ID, Image: component.Image, ContainerName: component.ContainerName, DependsOn: component.DependsOn, StartOrdinal: component.StartOrdinal})
 	}
@@ -138,7 +139,7 @@ func (r MultiRunner) Operate(ctx context.Context, installation, operationID stri
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: map[string]string{"start": "running", "stop": "stopped", "restart": "running", "remove": "runtime_removed"}[action], NetworkName: generation.NetworkName, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort, Components: map[string]string{}}
+	result := Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: map[string]string{"start": "running", "stop": "stopped", "restart": "running", "remove": "runtime_removed"}[action], NetworkName: generation.NetworkName, Bindings: generation.Bindings, Components: map[string]string{}}
 	for _, component := range generation.Components {
 		result.Components[component.ID] = component.ContainerID
 	}
@@ -825,5 +826,5 @@ func multiResult(plan MultiPlan) Result {
 	for _, component := range plan.Components {
 		components[component.ID] = component.ContainerName
 	}
-	return Result{Generation: plan.Generation, ReleaseID: plan.ReleaseID, RuntimeState: "running", NetworkName: plan.NetworkName, ExposureMode: plan.ExposureMode, ServiceID: plan.ServiceID, HostAddress: plan.HostAddress, HostPort: plan.HostPort, Components: components}
+	return Result{Generation: plan.Generation, ReleaseID: plan.ReleaseID, RuntimeState: "running", NetworkName: plan.NetworkName, Bindings: exposure.Normalize(plan.Bindings), Components: components}
 }

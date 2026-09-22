@@ -210,10 +210,17 @@ the security validation. Catalog content is trusted product input, but image
 trust is independently anchored by digest. Remote catalog downloads,
 signatures, and application upgrades are future work.
 
-Catalog services declare only internal ports and protocols. Exposure is an
-installation policy: `internal` (default), constrained loopback, or an
-administrator-configured LAN address. Manifests never contain host addresses,
-host ports, Docker port-binding objects, or firewall rules.
+Catalog services declare internal ports and one of `http`, `https`, `tcp`, or
+`udp`. Exposure is an installation policy: `internal` (default), constrained
+loopback, or an administrator-configured LAN address. Manifests never contain
+host addresses, Docker port-binding objects, or firewall rules.
+
+Schema version 8 adds optional `fixed_host_port` to a service. This field is a
+trusted catalog authorization for one exact port, including a privileged port;
+it is not user input. Services without it retain the 20000-29999 dynamic range.
+TCP and UDP declarations may use the same container and fixed host port because
+transport is part of binding identity. A manifest remains limited to eight
+services.
 
 ## FreshRSS catalog entry
 

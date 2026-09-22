@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/helperops"
 	"github.com/kitpro/kitpro/software/server/internal/operations"
 	"github.com/kitpro/kitpro/software/server/internal/ownership"
@@ -190,7 +191,7 @@ func newHarness(t *testing.T, existing bool) harness {
 		t.Fatal(err)
 	}
 	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: "inst-one", ownership.LabelResource: "application", "com.kitpro.runtime-generation": "2", "com.kitpro.operation": op}
-	plan := Plan{OperationID: op, InstallationID: "inst-one", ApplicationID: "app", ReleaseID: "new", Generation: expected + 1, ExpectedGeneration: expected, FencingToken: decision.FencingToken, Image: req.Image, NetworkName: req.NetworkName, ContainerName: "kitpro-app-inst-one-g2", PlanHash: "plan", DataPath: "/data", ExposureMode: "internal", Container: containers.ContainerPlan{Image: req.Image, Name: "kitpro-app-inst-one-g2", Network: req.NetworkName, Labels: labels, RestartPolicy: "unless-stopped", Storage: []containers.StorageMount{{HostPath: "/data", ContainerPath: "/data"}}}}
+	plan := Plan{OperationID: op, InstallationID: "inst-one", ApplicationID: "app", ReleaseID: "new", Generation: expected + 1, ExpectedGeneration: expected, FencingToken: decision.FencingToken, Image: req.Image, NetworkName: req.NetworkName, ContainerName: "kitpro-app-inst-one-g2", PlanHash: "plan", DataPath: "/data", Container: containers.ContainerPlan{Image: req.Image, Name: "kitpro-app-inst-one-g2", Network: req.NetworkName, Labels: labels, RestartPolicy: "unless-stopped", Storage: []containers.StorageMount{{HostPath: "/data", ContainerPath: "/data"}}}}
 	return harness{db: db, runtime: rt, coordinator: coord, plan: plan}
 }
 
@@ -212,6 +213,27 @@ func TestReplacementCommitsOneActiveAndRetainsPrevious(t *testing.T) {
 	}
 	if h.runtime.containers["old-id"].State != containers.RuntimeStopped {
 		t.Fatal("old generation was not retained stopped")
+	}
+}
+
+func TestMultipleBindingsPersistThroughCommitAndReconciliation(t *testing.T) {
+	h := newHarness(t, true)
+	h.plan.Bindings = []exposure.ServiceBinding{{ServiceID: "dns-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "admin", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000}, {ServiceID: "dns-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}}
+	h.plan.Container.PortBindings = map[string][]containers.PortBinding{"80/tcp": {{HostIP: "127.0.0.1", HostPort: "20000"}}, "53/tcp": {{HostIP: "10.0.0.2", HostPort: "53"}}, "53/udp": {{HostIP: "10.0.0.2", HostPort: "53"}}}
+	result, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Bindings) != 3 {
+		t.Fatalf("result bindings=%#v", result.Bindings)
+	}
+	current, err := (Store{DB: h.db}).Current(context.Background(), h.plan.InstallationID)
+	if err != nil || len(current.Bindings) != 3 || current.Bindings[2].Transport != exposure.UDP {
+		t.Fatalf("stored bindings=%#v err=%v", current.Bindings, err)
+	}
+	reconciled, err := (Reconciler{Runtime: h.runtime, Store: Store{DB: h.db}}).Reconcile(context.Background(), h.plan.InstallationID)
+	if err != nil || reconciled.Projection == nil || len(reconciled.Projection.Bindings) != 3 {
+		t.Fatalf("reconciliation projection=%#v err=%v", reconciled.Projection, err)
 	}
 }
 

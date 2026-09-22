@@ -14,7 +14,7 @@ func TestAssignmentPersistenceAndStableReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err = db.Exec(`CREATE TABLE installation_service_exposure (installation_id TEXT NOT NULL, service_id TEXT NOT NULL, mode TEXT NOT NULL, host_address TEXT NOT NULL DEFAULT '', host_port INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(installation_id,service_id)); CREATE UNIQUE INDEX exposure_bind_unique ON installation_service_exposure(host_address,host_port) WHERE mode <> 'internal'`); err != nil {
+	if _, err = db.Exec(`CREATE TABLE installation_service_exposure (installation_id TEXT NOT NULL, service_id TEXT NOT NULL, transport TEXT NOT NULL CHECK(transport IN ('tcp','udp')), mode TEXT NOT NULL, host_address TEXT NOT NULL DEFAULT '', host_port INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(installation_id,service_id)); CREATE UNIQUE INDEX exposure_bind_unique ON installation_service_exposure(host_address,host_port,transport) WHERE mode <> 'internal'`); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

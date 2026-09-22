@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -194,7 +195,7 @@ func TestApplicationUpdateUsesTrustedReleaseAndPreservesInstallation(t *testing.
 	m.Releases = append(m.Releases, manifest.Release{Version: "1.29.1-maintenance", Registry: m.Releases[0].Registry, Repository: m.Releases[0].Repository, Digest: m.Releases[0].Digest, Platform: m.Releases[0].Platform})
 	a.catalog["freshrss"] = catalog.Entry{Manifest: m}
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
-		if request.Operation != "UpdateApplication" || request.ReleaseID != "1.29.1-maintenance" || request.InstanceID != "inst-12345678" || request.RuntimeGeneration != 2 || request.ExposureMode != "loopback" || request.HostPort != 20000 {
+		if request.Operation != "UpdateApplication" || request.ReleaseID != "1.29.1-maintenance" || request.InstanceID != "inst-12345678" || request.RuntimeGeneration != 2 || len(request.Bindings) != 1 || request.Bindings[0].Mode != "loopback" || request.Bindings[0].HostPort != 20000 {
 			t.Fatalf("unexpected update request: %#v", request)
 		}
 		return protocol.Response{OK: true, RequestID: request.ID}, nil
@@ -426,7 +427,7 @@ func TestExposureLoopbackRecreatesRuntimeAndPersistsAssignment(t *testing.T) {
 	a.allocatePort = func(used map[int]bool, address string) (int, error) { return 20000, nil }
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
 		received = request
-		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committedLifecycleResult{Generation: 2, ReleaseID: request.ReleaseID, RuntimeState: "running", ExposureMode: request.ExposureMode, ServiceID: request.ServiceID, HostAddress: request.HostAddress, HostPort: request.HostPort}}, nil
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committedLifecycleResult{Generation: 2, ReleaseID: request.ReleaseID, RuntimeState: "running", Bindings: exposureBindings(request.Bindings)}}, nil
 	}
 
 	path := "/api/v1/installations/inst-12345678/services/web/exposure"
@@ -436,11 +437,11 @@ func TestExposureLoopbackRecreatesRuntimeAndPersistsAssignment(t *testing.T) {
 		t.Fatalf("exposure status %d: %s", recorder.Code, recorder.Body.String())
 	}
 	request := received
-	if request.Operation != "ConfigureServiceExposure" || request.ExposureMode != "loopback" || request.HostAddress != "127.0.0.1" || request.HostPort < exposure.FirstPort || request.HostPort > exposure.LastPort || request.ContainerPort != 80 || request.ServiceProtocol != "http" {
+	if request.Operation != "ConfigureServiceExposure" || len(request.Bindings) != 1 || request.Bindings[0].Mode != "loopback" || request.Bindings[0].HostAddress != "127.0.0.1" || request.Bindings[0].HostPort < exposure.FirstPort || request.Bindings[0].HostPort > exposure.LastPort || request.Bindings[0].ContainerPort != 80 || request.Bindings[0].Transport != "tcp" {
 		t.Fatalf("unexpected helper request: %#v", request)
 	}
 	record, err := exposure.Get(context.Background(), a.db, "inst-12345678", "web")
-	if err != nil || record.HostPort != request.HostPort || record.Mode != exposure.Loopback {
+	if err != nil || record.HostPort != request.Bindings[0].HostPort || record.Mode != exposure.Loopback {
 		t.Fatalf("assignment not persisted: %#v %v", record, err)
 	}
 	var generation int
@@ -524,12 +525,12 @@ func TestExposureDisableRetainsPortAndReenableReusesIt(t *testing.T) {
 			t.Fatalf("%s assignment %#v: %v", step.mode, record, err)
 		}
 	}
-	if len(requests) != 3 || requests[1].ExposureMode != "internal" || requests[1].HostAddress != "" || requests[1].HostPort != 20000 || requests[2].HostPort != 20000 {
+	if len(requests) != 3 || len(requests[1].Bindings) != 1 || requests[1].Bindings[0].Mode != "internal" || requests[1].Bindings[0].HostAddress != "" || requests[1].Bindings[0].HostPort != 20000 || requests[2].Bindings[0].HostPort != 20000 {
 		t.Fatalf("disable/re-enable helper requests: %#v", requests)
 	}
 	recreate := httptest.NewRecorder()
 	a.guard(a.installations)(recreate, authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-12345678/recreate", "", session, csrf))
-	if recreate.Code != http.StatusAccepted || len(requests) != 4 || requests[3].ExposureMode != "loopback" || requests[3].HostPort != 20000 {
+	if recreate.Code != http.StatusAccepted || len(requests) != 4 || requests[3].Bindings[0].Mode != "loopback" || requests[3].Bindings[0].HostPort != 20000 {
 		t.Fatalf("recreate did not retain exposure: status=%d requests=%#v", recreate.Code, requests)
 	}
 	var generation int
@@ -630,7 +631,7 @@ func TestForgejoInstallUsesConstrainedRuntimePlan(t *testing.T) {
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if received.Image != "codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74" || received.ReleaseID != "16.0.5" || received.ExposureMode != "internal" || received.RestartPolicy != "unless-stopped" {
+	if received.Image != "codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74" || received.ReleaseID != "16.0.5" || len(received.Bindings) != 1 || received.Bindings[0].Mode != "internal" || received.RestartPolicy != "unless-stopped" {
 		t.Fatalf("unexpected Forgejo release or lifecycle plan: %#v", received)
 	}
 	if len(received.Components) != 0 || len(received.Hardware) != 0 || len(received.ExternalStorage) != 0 || received.RunAs != nil || len(received.Command) != 0 {
@@ -661,7 +662,7 @@ func TestPlexInstallUsesReadOnlyExternalMediaPlan(t *testing.T) {
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if received.Image != "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee" || received.ReleaseID != "1.43.4.10903-e5521bd8c" || received.ExposureMode != "internal" || received.RestartPolicy != "unless-stopped" {
+	if received.Image != "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee" || received.ReleaseID != "1.43.4.10903-e5521bd8c" || len(received.Bindings) != 1 || received.Bindings[0].Mode != "internal" || received.RestartPolicy != "unless-stopped" {
 		t.Fatalf("unexpected Plex release or lifecycle plan: %#v", received)
 	}
 	if len(received.Components) != 0 || len(received.Hardware) != 0 || received.RunAs != nil || len(received.Command) != 0 || len(received.Environment) != 0 {
@@ -690,7 +691,7 @@ func TestNextcloudInstallUsesConstrainedSQLitePlan(t *testing.T) {
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if received.Image != "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1" || received.ReleaseID != "34.0.4-apache" || received.ExposureMode != "internal" || received.RestartPolicy != "unless-stopped" {
+	if received.Image != "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1" || received.ReleaseID != "34.0.4-apache" || len(received.Bindings) != 1 || received.Bindings[0].Mode != "internal" || received.RestartPolicy != "unless-stopped" {
 		t.Fatalf("unexpected Nextcloud release or lifecycle plan: %#v", received)
 	}
 	if len(received.Components) != 0 || len(received.Hardware) != 0 || len(received.ExternalStorage) != 0 || received.RunAs != nil || len(received.Command) != 0 || len(received.Environment) != 0 {
@@ -771,7 +772,7 @@ func TestResponseLossAfterHelperCommitProjectsStoredResultWithoutRedispatch(t *t
 			return protocol.Response{}, fmt.Errorf("response lost after commit")
 		case "GetOperation":
 			lookupCalls++
-			return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committedLifecycleResult{Generation: 1, ReleaseID: accepted.ReleaseID, RuntimeState: "running", ExposureMode: accepted.ExposureMode, ServiceID: accepted.ServiceID, HostAddress: accepted.HostAddress, HostPort: accepted.HostPort}}, nil
+			return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: committedLifecycleResult{Generation: 1, ReleaseID: accepted.ReleaseID, RuntimeState: "running", Bindings: exposureBindings(accepted.Bindings)}}, nil
 		default:
 			return protocol.Response{}, fmt.Errorf("unexpected operation")
 		}
@@ -805,7 +806,7 @@ func TestOperationStatusRepairsStaleControlProjectionFromCommittedHelperTruth(t 
 		if request.Operation != "GetOperation" || request.OperationID != operationID {
 			return protocol.Response{}, fmt.Errorf("unexpected request %#v", request)
 		}
-		return protocol.Response{OK: true, RequestID: request.ID, OperationID: operationID, State: "succeeded", Result: committedLifecycleResult{Generation: 2, ReleaseID: "1.30.0", RuntimeState: "running", ExposureMode: "loopback", ServiceID: "web", HostAddress: "127.0.0.1", HostPort: 20000}}, nil
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: operationID, State: "succeeded", Result: committedLifecycleResult{Generation: 2, ReleaseID: "1.30.0", RuntimeState: "running", Bindings: []exposure.ServiceBinding{{ServiceID: "web", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000}}}}, nil
 	}
 	recorder := httptest.NewRecorder()
 	a.guard(a.ops)(recorder, authenticatedRequest(http.MethodGet, "/api/v1/operations/"+operationID, "", session, csrf))
@@ -832,7 +833,7 @@ func TestHelperSuccessProjectionFailureSelfHealsWithoutRedispatch(t *testing.T) 
 	a.allocatePort = func(map[int]bool, string) (int, error) { return 20000, nil }
 	mutationCalls, lookupCalls := 0, 0
 	var operationID string
-	committed := committedLifecycleResult{Generation: 2, ReleaseID: "1.29.1", RuntimeState: "running", ExposureMode: "loopback", ServiceID: "web", HostAddress: "127.0.0.1", HostPort: 20000}
+	committed := committedLifecycleResult{Generation: 2, ReleaseID: "1.29.1", RuntimeState: "running", Bindings: []exposure.ServiceBinding{{ServiceID: "web", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000}}}
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
 		switch request.Operation {
 		case "ConfigureServiceExposure":
@@ -909,7 +910,7 @@ func TestReconciliationEndpointSeparatesObservationFromDurableMutation(t *testin
 func TestReconciliationProjectionPreservesAdministratorIntentAndIsRepeatable(t *testing.T) {
 	a, _, _ := newTestApp(t)
 	seedFreshRSSInstallation(t, a, "inst-12345678")
-	value := reconciliationResult{InstallationID: "inst-12345678", CheckedGeneration: 1, State: "runtime_missing", RuntimeState: "missing", ObservedAt: "2026-09-19T00:00:00Z", MismatchCodes: []string{"active_container_missing"}, RecommendedAction: "recreate_generation", Projection: &committedLifecycleResult{Generation: 1, ReleaseID: "1.29.1", RuntimeState: "missing", ExposureMode: "internal", ServiceID: "web"}}
+	value := reconciliationResult{InstallationID: "inst-12345678", CheckedGeneration: 1, State: "runtime_missing", RuntimeState: "missing", ObservedAt: "2026-09-19T00:00:00Z", MismatchCodes: []string{"active_container_missing"}, RecommendedAction: "recreate_generation", Projection: &committedLifecycleResult{Generation: 1, ReleaseID: "1.29.1", RuntimeState: "missing", Bindings: []exposure.ServiceBinding{{ServiceID: "web", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Internal}}}}
 	for i := 0; i < 2; i++ {
 		if _, err := a.projectReconciliation(context.Background(), "op-reconcile", value); err != nil {
 			t.Fatal(err)
@@ -957,5 +958,62 @@ func TestServiceStatusAndUIAreSafe(t *testing.T) {
 	if err != nil || len(statuses) != 1 || statuses[0].Endpoint != "http://127.0.0.1:20000" {
 		encoded, _ := json.Marshal(statuses)
 		t.Fatalf("service status %s: %v", encoded, err)
+	}
+}
+
+func TestNonHTTPServiceStatusIsEndpointOnly(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	a.catalog["network-fixture"] = catalog.Entry{Manifest: manifest.Manifest{ID: "network-fixture", Services: []manifest.Service{{ID: "dns", Name: "DNS", Protocol: "udp", ContainerPort: 53, FixedHostPort: 53}}}}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES('inst-network01','network-fixture','1','running',1,?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exposure.UpsertBinding(context.Background(), a.db, "inst-network01", exposure.ServiceBinding{ServiceID: "dns", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}, "10.0.0.2", 53); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := a.serviceStatuses(context.Background(), "inst-network01")
+	if err != nil || len(statuses) != 1 || statuses[0].Endpoint != "10.0.0.2:53/udp" || statuses[0].OpenEndpoint != "" {
+		t.Fatalf("non-HTTP status=%#v err=%v", statuses, err)
+	}
+}
+
+func TestBindingPreflightRejectsReservedAndHostListenerConflicts(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	if _, err := exposure.UpsertBinding(context.Background(), a.db, "inst-reserved01", exposure.ServiceBinding{ServiceID: "dns", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 25001}, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	requested := []exposure.ServiceBinding{{ServiceID: "other", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 25001}}
+	if err := a.preflightBindings(context.Background(), "inst-other01", requested); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved conflict=%v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("sandbox does not permit listener fixture: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	requested = []exposure.ServiceBinding{{ServiceID: "web", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: port}}
+	if err = a.preflightBindings(context.Background(), "inst-other01", requested); err == nil || !strings.Contains(err.Error(), "host listener") {
+		t.Fatalf("listener conflict=%v", err)
+	}
+}
+
+func TestUpdateAndRecreateBindingPlansPreserveEveryService(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	services := []manifest.Service{{ID: "admin", Name: "Admin", Protocol: "http", ContainerPort: 80}, {ID: "dns-tcp", Name: "DNS TCP", Protocol: "tcp", ContainerPort: 53, FixedHostPort: 53}, {ID: "dns-udp", Name: "DNS UDP", Protocol: "udp", ContainerPort: 53, FixedHostPort: 53}}
+	for _, binding := range []exposure.ServiceBinding{{ServiceID: "admin", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Internal, HostPort: 20000}, {ServiceID: "dns-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.Internal, HostPort: 53}, {ServiceID: "dns-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.Internal, HostPort: 53}} {
+		fixed := 0
+		if binding.ServiceID != "admin" {
+			fixed = 53
+		}
+		if _, err := exposure.UpsertBinding(context.Background(), a.db, "inst-network01", binding, "", fixed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, operation := range []string{"UpdateApplication", "InstallApplication"} {
+		bindings, err := a.buildServiceBindings(context.Background(), "inst-network01", services, operation, nil)
+		if err != nil || len(bindings) != 3 || bindings[0].ServiceID != "admin" || bindings[1].ServiceID != "dns-tcp" || bindings[2].Transport != "udp" || bindings[2].HostPort != 53 {
+			t.Fatalf("%s bindings=%#v err=%v", operation, bindings, err)
+		}
 	}
 }

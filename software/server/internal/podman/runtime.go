@@ -503,7 +503,7 @@ func validatePlan(plan containers.ContainerPlan) error {
 	}
 	for key, bindings := range plan.PortBindings {
 		parts := strings.Split(key, "/")
-		if len(parts) != 2 || parts[1] != "tcp" {
+		if len(parts) != 2 || (parts[1] != "tcp" && parts[1] != "udp") {
 			return fmt.Errorf("invalid port binding")
 		}
 		for _, binding := range bindings {

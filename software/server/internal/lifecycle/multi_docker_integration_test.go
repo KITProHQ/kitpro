@@ -65,7 +65,7 @@ func TestDockerMultiComponentReplacementAndRetention(t *testing.T) {
 
 	makePlan := func(generation, expected int, operationID string, token int64) MultiPlan {
 		network := fmt.Sprintf("kitpro-multi-contract-%s-g%d", suffix, generation)
-		plan := MultiPlan{OperationID: operationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: generation, ExpectedGeneration: expected, FencingToken: token, NetworkName: network, PlanHash: fmt.Sprintf("plan-%d", generation), TopologyHash: "db-web", DataPath: dataRoot, ExposureMode: "internal", RollbackSafe: true}
+		plan := MultiPlan{OperationID: operationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: generation, ExpectedGeneration: expected, FencingToken: token, NetworkName: network, PlanHash: fmt.Sprintf("plan-%d", generation), TopologyHash: "db-web", DataPath: dataRoot, RollbackSafe: true}
 		for ordinal, id := range []string{"db", "web"} {
 			depends := []string{}
 			if id == "web" {
@@ -258,7 +258,7 @@ func TestDockerSingleStateOperationsPreserveStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: installation, ownership.LabelResource: "application", "com.kitpro.runtime-generation": "1", "com.kitpro.operation": installRequest.OperationID}
-	plan := Plan{OperationID: installRequest.OperationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: 1, FencingToken: installDecision.FencingToken, Image: image, NetworkName: network, ContainerName: containerName, PlanHash: "single-state-contract", DataPath: dataRoot, ExposureMode: "internal", RollbackSafe: true, Container: containers.ContainerPlan{Image: image, Name: containerName, Network: network, Labels: labels, Command: []string{"sleep", "300"}, RestartPolicy: "no", Storage: []containers.StorageMount{{HostPath: dataRoot, ContainerPath: "/kitpro-data"}}}}
+	plan := Plan{OperationID: installRequest.OperationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: 1, FencingToken: installDecision.FencingToken, Image: image, NetworkName: network, ContainerName: containerName, PlanHash: "single-state-contract", DataPath: dataRoot, RollbackSafe: true, Container: containers.ContainerPlan{Image: image, Name: containerName, Network: network, Labels: labels, Command: []string{"sleep", "300"}, RestartPolicy: "no", Storage: []containers.StorageMount{{HostPath: dataRoot, ContainerPath: "/kitpro-data"}}}}
 	installed, err := (Runner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Replace(ctx, plan)
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +442,7 @@ func TestDockerOrphanCandidateCleanupWithoutActiveGeneration(t *testing.T) {
 		containerName := fmt.Sprintf("kitpro-orphan-contract-%s-g%d", suffix, generation)
 		labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: installation, ownership.LabelResource: "application", "com.kitpro.runtime-generation": fmt.Sprint(generation), "com.kitpro.operation": request.OperationID}
 		container := containers.ContainerPlan{Image: image, Name: containerName, Network: networkName, Labels: labels, Command: command, RestartPolicy: "no", Storage: []containers.StorageMount{{HostPath: dataRoot, ContainerPath: "/kitpro-data"}}}
-		return Plan{OperationID: request.OperationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: generation, ExpectedGeneration: expected, FencingToken: token, Image: image, NetworkName: networkName, ContainerName: containerName, PlanHash: fmt.Sprintf("plan-%d-%s", generation, request.OperationID), DataPath: dataRoot, ExposureMode: "internal", Container: container}
+		return Plan{OperationID: request.OperationID, InstallationID: installation, ApplicationID: "docker-contract", ReleaseID: "fixture", Generation: generation, ExpectedGeneration: expected, FencingToken: token, Image: image, NetworkName: networkName, ContainerName: containerName, PlanHash: fmt.Sprintf("plan-%d-%s", generation, request.OperationID), DataPath: dataRoot, Container: container}
 	}
 	t.Cleanup(func() {
 		for generation := 1; generation <= 2; generation++ {

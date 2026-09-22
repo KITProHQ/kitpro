@@ -121,6 +121,45 @@ func TestRuntimeGenerationAllowsOnlyOneActivePerInstallation(t *testing.T) {
 	}
 }
 
+func TestV13BindingMigrationPreservesLegacyTCPAndAllowsTransportPairs(t *testing.T) {
+	ctx := context.Background()
+	helper, err := Open(filepath.Join(t.TempDir(), "helper-v13.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer helper.Close()
+	_, err = helper.Exec(`CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(13); CREATE TABLE runtime_generations(installation_id TEXT NOT NULL,runtime_generation INTEGER NOT NULL,service_id TEXT NOT NULL DEFAULT '',service_protocol TEXT NOT NULL DEFAULT '',container_port INTEGER NOT NULL DEFAULT 0,exposure_mode TEXT NOT NULL DEFAULT 'internal',host_address TEXT NOT NULL DEFAULT '',host_port INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(installation_id,runtime_generation)); INSERT INTO runtime_generations VALUES('inst-old',1,'web','http',80,'loopback','127.0.0.1',20000);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Migrate(ctx, helper, true); err != nil {
+		t.Fatal(err)
+	}
+	var transport string
+	if err = helper.QueryRow(`SELECT transport FROM runtime_generation_bindings WHERE installation_id='inst-old' AND service_id='web'`).Scan(&transport); err != nil || transport != "tcp" {
+		t.Fatalf("legacy transport=%q err=%v", transport, err)
+	}
+
+	control, err := Open(filepath.Join(t.TempDir(), "control-v13.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	_, err = control.Exec(`CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(13); CREATE TABLE installation_service_exposure(installation_id TEXT NOT NULL,service_id TEXT NOT NULL,mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')),host_address TEXT NOT NULL DEFAULT '',host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port=0 OR host_port BETWEEN 20000 AND 29999),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(installation_id,service_id)); CREATE UNIQUE INDEX installation_service_exposure_binding_unique ON installation_service_exposure(host_address,host_port) WHERE mode<>'internal'; INSERT INTO installation_service_exposure VALUES('inst-old','web','loopback','127.0.0.1',20000,'now','now');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Migrate(ctx, control, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = control.QueryRow(`SELECT transport FROM installation_service_exposure WHERE installation_id='inst-old'`).Scan(&transport); err != nil || transport != "tcp" {
+		t.Fatalf("control legacy transport=%q err=%v", transport, err)
+	}
+	if _, err = control.Exec(`INSERT INTO installation_service_exposure VALUES('inst-dns','dns-tcp','tcp','lan','10.0.0.2',53,'now','now'),('inst-dns','dns-udp','udp','lan','10.0.0.2',53,'now','now')`); err != nil {
+		t.Fatalf("TCP and UDP port pair rejected: %v", err)
+	}
+}
+
 func TestHelperV13AddsLifecycleReconciliationAndRestoreEvidence(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "helper.db"))
 	if err != nil {
@@ -131,7 +170,7 @@ func TestHelperV13AddsLifecycleReconciliationAndRestoreEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 13 {
+	if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	for _, column := range []string{"topology_hash", "dependencies_json", "start_ordinal"} {
@@ -193,7 +232,7 @@ func TestHelperV10UpgradesInPlaceToMultiComponentEvidence(t *testing.T) {
 	if err = db.QueryRow(`SELECT dependencies_json,start_ordinal FROM runtime_components WHERE installation_id='inst-old'`).Scan(&dependencies, &ordinal); err != nil {
 		t.Fatal(err)
 	}
-	if version != 13 || topology != "" || dependencies != "[]" || ordinal != 0 {
+	if version != 14 || topology != "" || dependencies != "[]" || ordinal != 0 {
 		t.Fatalf("version=%d topology=%q dependencies=%q ordinal=%d", version, topology, dependencies, ordinal)
 	}
 }
@@ -232,7 +271,7 @@ func TestExactPublicAlpha11Schema7FixturesUpgradeWithoutDataLoss(t *testing.T) {
 	}
 	var version, generation int
 	var desired, exposureMode, username, rootID string
-	if err := control.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 13 {
+	if err := control.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
 		t.Fatalf("control version=%d err=%v", version, err)
 	}
 	if err := control.QueryRow(`SELECT desired_state,runtime_generation FROM installations WHERE installation_id='inst-paperless1'`).Scan(&desired, &generation); err != nil || desired != "running" || generation != 1 {
@@ -253,7 +292,7 @@ func TestExactPublicAlpha11Schema7FixturesUpgradeWithoutDataLoss(t *testing.T) {
 	if err := Migrate(context.Background(), helper, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := helper.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 13 {
+	if err := helper.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
 		t.Fatalf("helper version=%d err=%v", version, err)
 	}
 	var receiptHash, secret, binding, status string

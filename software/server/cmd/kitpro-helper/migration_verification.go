@@ -137,12 +137,12 @@ func migratedSinglePlan(ctx context.Context, db *sql.DB, generation lifecycle.Ge
 	if err = externalRows.Close(); err != nil {
 		return containers.ContainerPlan{}, err
 	}
-	if generation.ExposureMode == "loopback" || generation.ExposureMode == "lan" {
-		protocolName, protocolErr := exposure.ContainerProtocol(generation.ServiceProtocol)
-		if protocolErr != nil {
-			return containers.ContainerPlan{}, protocolErr
+	for _, binding := range generation.Bindings {
+		if binding.Mode == exposure.Internal {
+			continue
 		}
-		plan.PortBindings[fmt.Sprintf("%d/%s", generation.ContainerPort, protocolName)] = []containers.PortBinding{{HostIP: generation.HostAddress, HostPort: strconv.Itoa(generation.HostPort)}}
+		key := fmt.Sprintf("%d/%s", binding.ContainerPort, binding.Transport)
+		plan.PortBindings[key] = append(plan.PortBindings[key], containers.PortBinding{HostIP: binding.HostAddress, HostPort: strconv.Itoa(binding.HostPort)})
 	}
 	hardwareRows, err := db.QueryContext(ctx, `SELECT device_class,mode,resolved_devices FROM hardware_assignments WHERE installation_id=? AND component_id='' ORDER BY device_class`, generation.InstallationID)
 	if err != nil {

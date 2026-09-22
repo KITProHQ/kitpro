@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 )
 
 type Phase string
@@ -42,8 +43,7 @@ type Plan struct {
 	FencingToken                                          int64
 	Image, NetworkName, ContainerName, PlanHash           string
 	DataPath                                              string
-	ExposureMode, ServiceID, HostAddress, ServiceProtocol string
-	HostPort, ContainerPort                               int
+	Bindings                                              []exposure.ServiceBinding
 	Container                                             containers.ContainerPlan
 	RollbackSafe                                          bool
 	AllowMissingActive                                    bool
@@ -53,8 +53,7 @@ type Generation struct {
 	InstallationID, CreatingOperationID, ApplicationID, ReleaseID string
 	Generation                                                    int
 	Status, NetworkName, NetworkID, PlanHash, DataPath            string
-	ExposureMode, ServiceID, HostAddress, ServiceProtocol         string
-	HostPort, ContainerPort                                       int
+	Bindings                                                      []exposure.ServiceBinding
 	CleanupState                                                  string
 	Component                                                     Component
 }
@@ -73,8 +72,7 @@ type MultiPlan struct {
 	Generation, ExpectedGeneration                        int
 	FencingToken                                          int64
 	NetworkName, PlanHash, TopologyHash, DataPath         string
-	ExposureMode, ServiceID, HostAddress, ServiceProtocol string
-	HostPort, ContainerPort                               int
+	Bindings                                              []exposure.ServiceBinding
 	Components                                            []MultiComponentPlan
 	RollbackSafe                                          bool
 	AllowMissingActive                                    bool
@@ -91,8 +89,7 @@ type MultiGeneration struct {
 	InstallationID, CreatingOperationID, ApplicationID, ReleaseID    string
 	Generation                                                       int
 	Status, NetworkName, NetworkID, PlanHash, TopologyHash, DataPath string
-	ExposureMode, ServiceID, HostAddress, ServiceProtocol            string
-	HostPort, ContainerPort                                          int
+	Bindings                                                         []exposure.ServiceBinding
 	CleanupState                                                     string
 	Components                                                       []Component
 }
@@ -106,18 +103,15 @@ type ComponentStep struct {
 }
 
 type Result struct {
-	Generation      int               `json:"runtime_generation"`
-	ReleaseID       string            `json:"release_id"`
-	RuntimeState    string            `json:"runtime_state"`
-	ContainerName   string            `json:"container"`
-	ContainerID     string            `json:"container_id"`
-	NetworkName     string            `json:"network"`
-	ExposureMode    string            `json:"exposure_mode"`
-	ServiceID       string            `json:"service_id,omitempty"`
-	HostAddress     string            `json:"host_address,omitempty"`
-	HostPort        int               `json:"host_port,omitempty"`
-	CleanupDeferred bool              `json:"cleanup_deferred,omitempty"`
-	Components      map[string]string `json:"components,omitempty"`
+	Generation      int                       `json:"runtime_generation"`
+	ReleaseID       string                    `json:"release_id"`
+	RuntimeState    string                    `json:"runtime_state"`
+	ContainerName   string                    `json:"container"`
+	ContainerID     string                    `json:"container_id"`
+	NetworkName     string                    `json:"network"`
+	Bindings        []exposure.ServiceBinding `json:"bindings,omitempty"`
+	CleanupDeferred bool                      `json:"cleanup_deferred,omitempty"`
+	Components      map[string]string         `json:"components,omitempty"`
 }
 
 type UnknownOutcomeError struct {

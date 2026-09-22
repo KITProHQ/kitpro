@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/ownership"
 )
 
@@ -189,7 +190,7 @@ func (r Runner) Replace(ctx context.Context, plan Plan) (Result, error) {
 	if err = r.Store.Commit(ctx, plan); err != nil {
 		return Result{}, UnknownOutcomeError{Phase: PhaseBeforeCommit, Cause: err}
 	}
-	result := Result{Generation: plan.Generation, ReleaseID: plan.ReleaseID, RuntimeState: "running", ContainerName: plan.ContainerName, ContainerID: observed.ID, NetworkName: plan.NetworkName, ExposureMode: plan.ExposureMode, ServiceID: plan.ServiceID, HostAddress: plan.HostAddress, HostPort: plan.HostPort}
+	result := Result{Generation: plan.Generation, ReleaseID: plan.ReleaseID, RuntimeState: "running", ContainerName: plan.ContainerName, ContainerID: observed.ID, NetworkName: plan.NetworkName, Bindings: exposure.Normalize(plan.Bindings)}
 	if err = r.checkpoint(ctx, plan, PhaseAfterCommit, "confirmed", nil); err != nil {
 		return result, UnknownOutcomeError{Phase: PhaseAfterCommit, Cause: err}
 	}
@@ -225,6 +226,10 @@ func (r Runner) loadAndVerifyActive(ctx context.Context, plan Plan) (Generation,
 		active, err = scanGeneration(r.Store.DB.QueryRowContext(ctx, generationSelect+` WHERE g.installation_id=? AND g.runtime_generation=? AND g.status='removed' AND g.cleanup_state='clean'`, plan.InstallationID, plan.ExpectedGeneration))
 		if err != nil {
 			return Generation{}, errors.New("previous removed generation is unavailable for target retry")
+		}
+		active.Bindings, err = r.Store.loadBindings(ctx, active.InstallationID, active.Generation)
+		if err != nil {
+			return Generation{}, err
 		}
 	}
 	if active.Status == "removed" {

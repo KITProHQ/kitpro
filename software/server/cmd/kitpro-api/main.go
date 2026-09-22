@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -67,11 +68,13 @@ type serviceStatus struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Protocol      string `json:"protocol"`
+	Transport     string `json:"transport"`
 	ContainerPort int    `json:"container_port"`
 	Mode          string `json:"mode"`
 	HostAddress   string `json:"host_address,omitempty"`
 	HostPort      int    `json:"host_port,omitempty"`
 	Endpoint      string `json:"endpoint,omitempty"`
+	OpenEndpoint  string `json:"open_endpoint,omitempty"`
 	ModeLabel     string `json:"-"`
 }
 type trustedRootView struct {
@@ -91,13 +94,10 @@ type installedStorageView struct {
 // authoritative application-generation commit. The API must not project
 // request intent as active state.
 type committedLifecycleResult struct {
-	Generation   int    `json:"runtime_generation"`
-	ReleaseID    string `json:"release_id"`
-	RuntimeState string `json:"runtime_state"`
-	ExposureMode string `json:"exposure_mode"`
-	ServiceID    string `json:"service_id"`
-	HostAddress  string `json:"host_address"`
-	HostPort     int    `json:"host_port"`
+	Generation   int                       `json:"runtime_generation"`
+	ReleaseID    string                    `json:"release_id"`
+	RuntimeState string                    `json:"runtime_state"`
+	Bindings     []exposure.ServiceBinding `json:"bindings"`
 }
 
 type reconciliationResult struct {
@@ -130,8 +130,13 @@ func decodeCommittedLifecycleResult(value any) (committedLifecycleResult, error)
 		err = json.Unmarshal(encoded, &result)
 	}
 	validState := result.RuntimeState == "running" || result.RuntimeState == "stopped" || result.RuntimeState == "runtime_removed"
-	if err != nil || result.Generation < 1 || result.ReleaseID == "" || !validState || result.ExposureMode == "" {
+	if err != nil || result.Generation < 1 || result.ReleaseID == "" || !validState || len(result.Bindings) > exposure.MaxBindings {
 		return committedLifecycleResult{}, errors.New("helper returned no committed lifecycle result")
+	}
+	for _, binding := range result.Bindings {
+		if binding.ServiceID == "" || binding.ContainerPort < 1 || (binding.Transport != exposure.TCP && binding.Transport != exposure.UDP) {
+			return committedLifecycleResult{}, errors.New("helper returned invalid committed bindings")
+		}
 	}
 	return result, nil
 }
@@ -667,8 +672,8 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				if services[i].Mode == string(exposure.Internal) {
 					privateCount++
 				}
-				if services[i].Endpoint != "" && view.OpenEndpoint == "" {
-					view.OpenEndpoint = services[i].Endpoint
+				if services[i].OpenEndpoint != "" && view.OpenEndpoint == "" {
+					view.OpenEndpoint = services[i].OpenEndpoint
 				}
 				if services[i].Mode != "" {
 					view.AccessLabel = services[i].ModeLabel
@@ -1123,16 +1128,6 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		for _, item := range plan.Hardware {
 			q.Hardware = append(q.Hardware, protocol.HardwareRequirement{Class: item.Class, Optional: item.Optional, CPUFallback: item.CPUFallback})
 		}
-		q.ExposureMode, q.HostAddress, q.HostPort, q.ServiceID, q.ContainerPort, q.ServiceProtocol = r.URL.Query().Get("exposure_mode"), r.URL.Query().Get("host_address"), 0, r.URL.Query().Get("service_id"), 0, r.URL.Query().Get("service_protocol")
-		if q.ExposureMode == "" {
-			q.ExposureMode = string(exposure.Internal)
-		}
-		if p, _ := strconv.Atoi(r.URL.Query().Get("host_port")); p > 0 {
-			q.HostPort = p
-		}
-		if p, _ := strconv.Atoi(r.URL.Query().Get("container_port")); p > 0 {
-			q.ContainerPort = p
-		}
 		for _, x := range plan.Command {
 			q.Command = append(q.Command, x)
 		}
@@ -1155,6 +1150,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		for _, s := range plan.Services {
 			q.Services = append(q.Services, protocol.Service{ID: s.ID, Protocol: s.Protocol, ContainerPort: s.ContainerPort})
 		}
+		q.Bindings, e = a.buildServiceBindings(r.Context(), inst, plan.Services, opType, r.URL.Query())
 		for _, component := range plan.ResolvedComponents {
 			pc := protocol.Component{ID: component.ID, Image: component.ImageDigest, Restart: component.Restart, DependsOn: append([]string(nil), component.DependsOn...)}
 			if component.RunAs != nil {
@@ -1184,7 +1180,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			}
 			q.Components = append(q.Components, pc)
 		}
-		{
+		if e == nil {
 			helperRequest = q
 			var resp protocol.Response
 			resp, e = a.callHelperOperation(q)
@@ -1224,7 +1220,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if e == nil && !helperPending {
-		committed := committedLifecycleResult{Generation: gen, ReleaseID: plan.ReleaseID, RuntimeState: "running", ExposureMode: helperRequest.ExposureMode, ServiceID: helperRequest.ServiceID, HostAddress: helperRequest.HostAddress, HostPort: helperRequest.HostPort}
+		committed := committedLifecycleResult{Generation: gen, ReleaseID: plan.ReleaseID, RuntimeState: "running", Bindings: exposureBindings(helperRequest.Bindings)}
 		if helperResponse.State != "" {
 			committed, e = decodeCommittedLifecycleResult(helperResponse.Result)
 			if e != nil {
@@ -1259,23 +1255,12 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			if _, updateErr := projectionTx.ExecContext(r.Context(), updateSQL, args...); updateErr != nil {
 				e = updateErr
 			}
-			if e == nil && existing == "" {
-				for _, service := range plan.Services {
-					assignment := exposure.Assignment{Mode: exposure.Internal}
-					if service.ID == committed.ServiceID && committed.ExposureMode != "" {
-						assignment.Mode = exposure.Mode(committed.ExposureMode)
-						assignment.Address = committed.HostAddress
-						assignment.Port = committed.HostPort
-					}
-					if updateErr := upsertExposureProjection(r.Context(), projectionTx, inst, service.ID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), now); updateErr != nil {
+			if e == nil {
+				for _, binding := range committed.Bindings {
+					if updateErr := upsertExposureProjection(r.Context(), projectionTx, inst, binding, env("KITPRO_LAN_BIND_ADDRESS", ""), now); updateErr != nil {
 						e = updateErr
 						break
 					}
-				}
-			} else if e == nil && opType == "ConfigureServiceExposure" {
-				assignment := exposure.Assignment{Mode: exposure.Mode(committed.ExposureMode), Address: committed.HostAddress, Port: committed.HostPort}
-				if updateErr := upsertExposureProjection(r.Context(), projectionTx, inst, committed.ServiceID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), now); updateErr != nil {
-					e = updateErr
 				}
 			}
 			if e == nil {
@@ -1316,12 +1301,132 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": status})
 }
 
-func upsertExposureProjection(ctx context.Context, tx *sql.Tx, installationID, serviceID string, assignment exposure.Assignment, configuredLAN, now string) error {
-	if err := exposure.Validate(assignment, configuredLAN); err != nil {
+func upsertExposureProjection(ctx context.Context, tx *sql.Tx, installationID string, binding exposure.ServiceBinding, configuredLAN, now string) error {
+	if err := exposure.ValidateBinding(binding, configuredLAN, binding.HostPort); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO installation_service_exposure(installation_id,service_id,mode,host_address,host_port,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(installation_id,service_id) DO UPDATE SET mode=excluded.mode,host_address=excluded.host_address,host_port=excluded.host_port,updated_at=excluded.updated_at`, installationID, serviceID, assignment.Mode, assignment.Address, assignment.Port, now, now)
+	_, err := tx.ExecContext(ctx, `INSERT INTO installation_service_exposure(installation_id,service_id,transport,mode,host_address,host_port,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(installation_id,service_id) DO UPDATE SET transport=excluded.transport,mode=excluded.mode,host_address=excluded.host_address,host_port=excluded.host_port,updated_at=excluded.updated_at`, installationID, binding.ServiceID, binding.Transport, binding.Mode, binding.HostAddress, binding.HostPort, now, now)
 	return err
+}
+
+func exposureBindings(in []protocol.ServiceBinding) []exposure.ServiceBinding {
+	out := make([]exposure.ServiceBinding, 0, len(in))
+	for _, b := range in {
+		out = append(out, exposure.ServiceBinding{ServiceID: b.ServiceID, Transport: exposure.Transport(b.Transport), ContainerPort: b.ContainerPort, Mode: exposure.Mode(b.Mode), HostAddress: b.HostAddress, HostPort: b.HostPort})
+	}
+	return exposure.Normalize(out)
+}
+
+func (a *app) buildServiceBindings(ctx context.Context, installation string, services []manifest.Service, operation string, query url.Values) ([]protocol.ServiceBinding, error) {
+	target := query.Get("service_id")
+	configuredLAN := env("KITPRO_LAN_BIND_ADDRESS", "")
+	bindings := make([]exposure.ServiceBinding, 0, len(services))
+	for _, service := range services {
+		transport, err := exposure.TransportFor(service.Protocol)
+		if err != nil {
+			return nil, err
+		}
+		binding := exposure.ServiceBinding{ServiceID: service.ID, Transport: transport, ContainerPort: service.ContainerPort, Mode: exposure.Internal, HostPort: service.FixedHostPort}
+		if record, getErr := exposure.Get(ctx, a.db, installation, service.ID); getErr == nil {
+			if record.Transport != transport {
+				return nil, errors.New("stored service transport does not match trusted manifest")
+			}
+			binding.Mode, binding.HostAddress, binding.HostPort = record.Mode, record.HostAddress, record.HostPort
+		}
+		if operation == "ConfigureServiceExposure" && target == service.ID {
+			binding.Mode = exposure.Mode(query.Get("exposure_mode"))
+			binding.HostAddress = query.Get("host_address")
+			binding.HostPort, _ = strconv.Atoi(query.Get("host_port"))
+			if service.FixedHostPort != 0 {
+				binding.HostPort = service.FixedHostPort
+			}
+			if binding.Mode == exposure.Internal {
+				binding.HostAddress = ""
+			}
+		}
+		if err = exposure.ValidateBinding(binding, configuredLAN, service.FixedHostPort); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	if operation == "ConfigureServiceExposure" && target == "" {
+		return nil, errors.New("service binding target is required")
+	}
+	if err := a.preflightBindings(ctx, installation, bindings); err != nil {
+		return nil, err
+	}
+	bindings = exposure.Normalize(bindings)
+	out := make([]protocol.ServiceBinding, 0, len(bindings))
+	for _, b := range bindings {
+		out = append(out, protocol.ServiceBinding{ServiceID: b.ServiceID, Transport: string(b.Transport), ContainerPort: b.ContainerPort, Mode: string(b.Mode), HostAddress: b.HostAddress, HostPort: b.HostPort})
+	}
+	return out, nil
+}
+
+func (a *app) preflightBindings(ctx context.Context, installation string, requested []exposure.ServiceBinding) error {
+	if err := exposure.ValidateConflicts(requested); err != nil {
+		return err
+	}
+	hasExposed := false
+	for _, binding := range requested {
+		if binding.Mode != exposure.Internal {
+			hasExposed = true
+			break
+		}
+	}
+	if !hasExposed {
+		return nil
+	}
+	rows, err := a.db.QueryContext(ctx, `SELECT installation_id,service_id,transport,mode,host_address,host_port FROM installation_service_exposure WHERE mode<>'internal' ORDER BY installation_id,service_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var reserved, own []exposure.ServiceBinding
+	for rows.Next() {
+		var owner string
+		var b exposure.ServiceBinding
+		if err = rows.Scan(&owner, &b.ServiceID, &b.Transport, &b.Mode, &b.HostAddress, &b.HostPort); err != nil {
+			return err
+		}
+		if owner == installation {
+			own = append(own, b)
+		} else {
+			reserved = append(reserved, b)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, want := range requested {
+		for _, used := range reserved {
+			if exposure.BindingsConflict(want, used) {
+				return fmt.Errorf("binding is reserved by another KITPro installation: %s:%d/%s", want.HostAddress, want.HostPort, want.Transport)
+			}
+		}
+	}
+	listeners, err := exposure.HostListeners()
+	if err != nil {
+		return fmt.Errorf("host listener preflight unavailable: %w", err)
+	}
+	for _, want := range requested {
+		for _, listener := range listeners {
+			if !exposure.BindingsConflict(want, listener) {
+				continue
+			}
+			owned := false
+			for _, current := range own {
+				if current.Transport == want.Transport && current.HostAddress == want.HostAddress && current.HostPort == want.HostPort {
+					owned = true
+					break
+				}
+			}
+			if !owned {
+				return fmt.Errorf("host listener already uses %s:%d/%s", want.HostAddress, want.HostPort, want.Transport)
+			}
+		}
+	}
+	return nil
 }
 
 func (a *app) repairCommittedProjection(ctx context.Context, installationID, sourceOperation string, value any, updateDesired bool) error {
@@ -1357,9 +1462,8 @@ func (a *app) repairCommittedProjection(ctx context.Context, installationID, sou
 	if changed, _ := updated.RowsAffected(); changed != 1 {
 		return errors.New("control projection repair lost")
 	}
-	if committed.ServiceID != "" && committed.ExposureMode != "" {
-		assignment := exposure.Assignment{Mode: exposure.Mode(committed.ExposureMode), Address: committed.HostAddress, Port: committed.HostPort}
-		if err = upsertExposureProjection(ctx, tx, installationID, committed.ServiceID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), now); err != nil {
+	for _, binding := range committed.Bindings {
+		if err = upsertExposureProjection(ctx, tx, installationID, binding, env("KITPRO_LAN_BIND_ADDRESS", ""), now); err != nil {
 			return err
 		}
 	}
@@ -1398,9 +1502,8 @@ func (a *app) projectReconciliation(ctx context.Context, sourceOperation string,
 		if _, err = tx.ExecContext(ctx, `UPDATE installations SET runtime_generation=?,release_id=?,projection_repaired_at=?,projection_source_operation_id=? WHERE installation_id=?`, result.Projection.Generation, result.Projection.ReleaseID, result.ObservedAt, sourceOperation, result.InstallationID); err != nil {
 			return result, err
 		}
-		if result.Projection.ServiceID != "" && result.Projection.ExposureMode != "" {
-			assignment := exposure.Assignment{Mode: exposure.Mode(result.Projection.ExposureMode), Address: result.Projection.HostAddress, Port: result.Projection.HostPort}
-			if err = upsertExposureProjection(ctx, tx, result.InstallationID, result.Projection.ServiceID, assignment, env("KITPRO_LAN_BIND_ADDRESS", ""), result.ObservedAt); err != nil {
+		for _, binding := range result.Projection.Bindings {
+			if err = upsertExposureProjection(ctx, tx, result.InstallationID, binding, env("KITPRO_LAN_BIND_ADDRESS", ""), result.ObservedAt); err != nil {
 				return result, err
 			}
 		}
@@ -1646,17 +1749,6 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		q.Set("app_id", appID)
 		q.Set("target_release", in.Release)
 		q.Set("operation_type", "UpdateApplication")
-		for _, service := range entry.Manifest.Services {
-			if record, err := exposure.Get(r.Context(), a.db, parts[0], service.ID); err == nil {
-				q.Set("service_id", service.ID)
-				q.Set("exposure_mode", string(record.Mode))
-				q.Set("host_address", record.HostAddress)
-				q.Set("host_port", strconv.Itoa(record.HostPort))
-				q.Set("container_port", strconv.Itoa(service.ContainerPort))
-				q.Set("service_protocol", service.Protocol)
-				break
-			}
-		}
 		r.URL.Path = "/api/v1/operations"
 		r.URL.RawQuery = q.Encode()
 		r = r.WithContext(context.WithValue(r.Context(), internalDispatchKey{}, true))
@@ -1740,6 +1832,11 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 		}
 		addr := ""
 		port := 0
+		transport, transportErr := exposure.TransportFor(svc.Protocol)
+		if transportErr != nil {
+			http.Error(w, "service transport is unsupported", 500)
+			return
+		}
 		old, oldErr := exposure.Get(r.Context(), a.db, inst, service)
 		if oldErr == nil {
 			port = old.HostPort
@@ -1760,23 +1857,30 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if in.Mode != string(exposure.Internal) {
-			if port > 0 {
+			if svc.FixedHostPort != 0 {
+				port = svc.FixedHostPort
+			} else if port > 0 {
 				slog.Default().Info("service exposure port reused", "event", "exposure_reused", "installation_id", inst, "service_id", service, "mode", in.Mode, "host_address", addr, "host_port", port)
 			} else {
 				used := map[int]bool{}
-				rows, queryErr := a.db.Query("SELECT host_port FROM installation_service_exposure WHERE host_port IS NOT NULL")
+				rows, queryErr := a.db.Query("SELECT transport,mode,host_address,host_port FROM installation_service_exposure WHERE host_port>0")
 				if queryErr != nil {
 					http.Error(w, "exposure state unavailable", 500)
 					return
 				}
 				for rows.Next() {
+					var storedTransport exposure.Transport
+					var storedMode exposure.Mode
+					var storedAddress string
 					var p int
-					if scanErr := rows.Scan(&p); scanErr != nil {
+					if scanErr := rows.Scan(&storedTransport, &storedMode, &storedAddress, &p); scanErr != nil {
 						_ = rows.Close()
 						http.Error(w, "exposure state unavailable", 500)
 						return
 					}
-					used[p] = true
+					if storedTransport == transport && (storedMode == exposure.Internal || exposure.BindingsConflict(exposure.ServiceBinding{Transport: transport, Mode: exposure.Mode(in.Mode), HostAddress: addr, HostPort: p}, exposure.ServiceBinding{Transport: storedTransport, Mode: storedMode, HostAddress: storedAddress, HostPort: p})) {
+						used[p] = true
+					}
 				}
 				if rowsErr := rows.Err(); rowsErr != nil {
 					_ = rows.Close()
@@ -1786,10 +1890,11 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 				_ = rows.Close()
 				var ae error
 				allocator := a.allocatePort
-				if allocator == nil {
-					allocator = exposure.AllocateAvailable
+				if allocator != nil && transport == exposure.TCP {
+					port, ae = allocator(used, addr)
+				} else {
+					port, ae = exposure.AllocateAvailableTransport(used, addr, transport)
 				}
-				port, ae = allocator(used, addr)
 				if ae != nil {
 					slog.Default().Warn("service exposure collision", "event", "exposure_collision", "installation_id", inst, "service_id", service, "mode", in.Mode, "host_address", addr, "result", "failed", "error_category", "port_unavailable")
 					http.Error(w, ae.Error(), 409)
@@ -1825,21 +1930,6 @@ func (a *app) installations(w http.ResponseWriter, r *http.Request) {
 	if err := a.db.QueryRowContext(r.Context(), "SELECT application_id FROM installations WHERE installation_id=?", installationID).Scan(&appID); err != nil {
 		http.NotFound(w, r)
 		return
-	}
-	if entry, ok := a.catalog[appID]; ok {
-		for _, service := range entry.Manifest.Services {
-			record, err := exposure.Get(r.Context(), a.db, installationID, service.ID)
-			if err != nil {
-				continue
-			}
-			q.Set("service_id", service.ID)
-			q.Set("exposure_mode", string(record.Mode))
-			q.Set("host_address", record.HostAddress)
-			q.Set("host_port", strconv.Itoa(record.HostPort))
-			q.Set("container_port", strconv.Itoa(service.ContainerPort))
-			q.Set("service_protocol", service.Protocol)
-			break
-		}
 	}
 	r.URL.Path = "/api/v1/operations"
 	r.URL.RawQuery = q.Encode()
@@ -2030,11 +2120,17 @@ func (a *app) serviceStatuses(ctx context.Context, installationID string) ([]ser
 	}
 	out := make([]serviceStatus, 0, len(entry.Manifest.Services))
 	for _, declared := range entry.Manifest.Services {
-		status := serviceStatus{ID: declared.ID, Name: declared.Name, Protocol: declared.Protocol, ContainerPort: declared.ContainerPort, Mode: string(exposure.Internal), ModeLabel: "Private"}
+		transport, _ := exposure.ContainerProtocol(declared.Protocol)
+		status := serviceStatus{ID: declared.ID, Name: declared.Name, Protocol: declared.Protocol, Transport: transport, ContainerPort: declared.ContainerPort, Mode: string(exposure.Internal), ModeLabel: "Private"}
 		if record, err := exposure.Get(ctx, a.db, installationID, declared.ID); err == nil {
 			status.Mode, status.HostAddress, status.HostPort = string(record.Mode), record.HostAddress, record.HostPort
 			if record.Mode != exposure.Internal {
-				status.Endpoint = declared.Protocol + "://" + net.JoinHostPort(record.HostAddress, strconv.Itoa(record.HostPort))
+				if declared.Protocol == "http" || declared.Protocol == "https" {
+					status.Endpoint = declared.Protocol + "://" + net.JoinHostPort(record.HostAddress, strconv.Itoa(record.HostPort))
+					status.OpenEndpoint = status.Endpoint
+				} else {
+					status.Endpoint = net.JoinHostPort(record.HostAddress, strconv.Itoa(record.HostPort)) + "/" + transport
+				}
 			}
 			status.ModeLabel = exposureLabel(status.Mode)
 		}

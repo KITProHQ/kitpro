@@ -30,7 +30,7 @@ func RecoverInterrupted(ctx context.Context, store Store, runtime containers.Lif
 	recovered := 0
 	runner := Runner{Runtime: runtime, Store: store}
 	for _, g := range generations {
-		result := Result{Generation: g.Generation, ReleaseID: g.ReleaseID, RuntimeState: "running", ContainerName: g.Component.ContainerName, ContainerID: g.Component.ContainerID, NetworkName: g.NetworkName, ExposureMode: g.ExposureMode, ServiceID: g.ServiceID, HostAddress: g.HostAddress, HostPort: g.HostPort}
+		result := Result{Generation: g.Generation, ReleaseID: g.ReleaseID, RuntimeState: "running", ContainerName: g.Component.ContainerName, ContainerID: g.Component.ContainerID, NetworkName: g.NetworkName, Bindings: g.Bindings}
 		if g.Status == "active" {
 			observed, observeErr := runner.verifyStoredGeneration(ctx, g, containers.RuntimeRunning)
 			if observeErr != nil {
@@ -103,7 +103,7 @@ func recoverInterruptedMulti(ctx context.Context, store Store, runtime container
 		if loadErr != nil || runner.verifyGeneration(ctx, generation, containers.RuntimeRunning) != nil {
 			continue
 		}
-		result := Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: "running", NetworkName: generation.NetworkName, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort, Components: map[string]string{}}
+		result := Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: "running", NetworkName: generation.NetworkName, Bindings: generation.Bindings, Components: map[string]string{}}
 		for _, component := range generation.Components {
 			result.Components[component.ID] = component.ContainerID
 		}

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 )
 
 type Store struct {
@@ -22,7 +24,11 @@ func (s Store) now() string {
 }
 
 func (s Store) Current(ctx context.Context, installation string) (Generation, error) {
-	return scanGeneration(s.DB.QueryRowContext(ctx, generationSelect+` WHERE g.installation_id=? AND g.status IN ('active','verification_required','removed') ORDER BY CASE g.status WHEN 'active' THEN 0 WHEN 'verification_required' THEN 1 ELSE 2 END, g.runtime_generation DESC LIMIT 1`, installation))
+	g, err := scanGeneration(s.DB.QueryRowContext(ctx, generationSelect+` WHERE g.installation_id=? AND g.status IN ('active','verification_required','removed') ORDER BY CASE g.status WHEN 'active' THEN 0 WHEN 'verification_required' THEN 1 ELSE 2 END, g.runtime_generation DESC LIMIT 1`, installation))
+	if err == nil {
+		g.Bindings, err = s.loadBindings(ctx, g.InstallationID, g.Generation)
+	}
+	return g, err
 }
 
 func (s Store) BackfillInstallation(ctx context.Context, installation string) error {
@@ -47,11 +53,19 @@ func (s Store) BackfillInstallation(ctx context.Context, installation string) er
 	if err != nil {
 		return err
 	}
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO runtime_generation_bindings(installation_id,runtime_generation,service_id,transport,container_port,mode,host_address,host_port) SELECT instance_id,runtime_generation,service_id,CASE WHEN service_protocol='udp' THEN 'udp' ELSE 'tcp' END,container_port,exposure_mode,host_address,host_port FROM ownership WHERE instance_id=? AND service_id<>'' AND container_port BETWEEN 1 AND 65535`, installation)
+	if err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 func (s Store) ByOperation(ctx context.Context, operationID string) (Generation, error) {
-	return scanGeneration(s.DB.QueryRowContext(ctx, generationSelect+` WHERE g.creating_operation_id=? ORDER BY g.runtime_generation DESC LIMIT 1`, operationID))
+	g, err := scanGeneration(s.DB.QueryRowContext(ctx, generationSelect+` WHERE g.creating_operation_id=? ORDER BY g.runtime_generation DESC LIMIT 1`, operationID))
+	if err == nil {
+		g.Bindings, err = s.loadBindings(ctx, g.InstallationID, g.Generation)
+	}
+	return g, err
 }
 
 func (s Store) PromoteMigrated(ctx context.Context, generation Generation, networkID, imageID, configurationHash string) error {
@@ -141,7 +155,7 @@ func (s Store) Prepare(ctx context.Context, plan Plan) error {
 		if componentID != "app" {
 			return errors.New("removed target generation topology cannot be safely reused")
 		}
-		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET creating_operation_id=?,application_id=?,release_id=?,status='prepared',network_name=?,observed_network_id='',plan_hash=?,topology_hash='',data_path=?,exposure_mode=?,service_id=?,host_address=?,host_port=?,container_port=?,service_protocol=?,created_at=?,verified_at=NULL,committed_at=NULL,retired_at=NULL,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status='removed' AND cleanup_state='clean'`, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.DataPath, plan.ExposureMode, plan.ServiceID, plan.HostAddress, plan.HostPort, plan.ContainerPort, plan.ServiceProtocol, now, plan.InstallationID, plan.Generation)
+		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET creating_operation_id=?,application_id=?,release_id=?,status='prepared',network_name=?,observed_network_id='',plan_hash=?,topology_hash='',data_path=?,exposure_mode='internal',service_id='',host_address='',host_port=0,container_port=0,service_protocol='',created_at=?,verified_at=NULL,committed_at=NULL,retired_at=NULL,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status='removed' AND cleanup_state='clean'`, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.DataPath, now, plan.InstallationID, plan.Generation)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -158,7 +172,7 @@ func (s Store) Prepare(ctx context.Context, plan Plan) error {
 	} else if !errors.Is(existingErr, sql.ErrNoRows) {
 		return existingErr
 	} else {
-		_, err = tx.ExecContext(ctx, `INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,cleanup_state) VALUES(?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,'not_required')`, plan.InstallationID, plan.Generation, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.DataPath, plan.ExposureMode, plan.ServiceID, plan.HostAddress, plan.HostPort, plan.ContainerPort, plan.ServiceProtocol, now)
+		_, err = tx.ExecContext(ctx, `INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,data_path,created_at,cleanup_state) VALUES(?,?,?,?,?,'prepared',?,?,?,?,'not_required')`, plan.InstallationID, plan.Generation, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.DataPath, now)
 		if err != nil {
 			return err
 		}
@@ -166,6 +180,9 @@ func (s Store) Prepare(ctx context.Context, plan Plan) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err = replaceBindings(ctx, tx, plan.InstallationID, plan.Generation, plan.Bindings); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -296,7 +313,19 @@ func (s Store) OlderRetained(ctx context.Context, installation string, keepGener
 		}
 		out = append(out, generation)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Bindings, err = s.loadBindings(ctx, out[i].InstallationID, out[i].Generation)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func (s Store) MarkRemoved(ctx context.Context, generation Generation) error {
@@ -403,12 +432,48 @@ func (s Store) FinalizeCommittedRecovery(ctx context.Context, generation Generat
 	return tx.Commit()
 }
 
-const generationSelect = `SELECT g.installation_id,g.runtime_generation,g.creating_operation_id,g.application_id,g.release_id,g.status,g.network_name,g.observed_network_id,g.plan_hash,g.data_path,g.exposure_mode,g.service_id,g.host_address,g.host_port,g.container_port,g.service_protocol,g.cleanup_state,c.component_id,c.container_name,c.observed_container_id,c.image_digest,c.observed_image_id,c.configuration_hash,c.state FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation)`
+const generationSelect = `SELECT g.installation_id,g.runtime_generation,g.creating_operation_id,g.application_id,g.release_id,g.status,g.network_name,g.observed_network_id,g.plan_hash,g.data_path,g.cleanup_state,c.component_id,c.container_name,c.observed_container_id,c.image_digest,c.observed_image_id,c.configuration_hash,c.state FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation)`
 
 type scanner interface{ Scan(...any) error }
 
 func scanGeneration(row scanner) (Generation, error) {
 	var g Generation
-	err := row.Scan(&g.InstallationID, &g.Generation, &g.CreatingOperationID, &g.ApplicationID, &g.ReleaseID, &g.Status, &g.NetworkName, &g.NetworkID, &g.PlanHash, &g.DataPath, &g.ExposureMode, &g.ServiceID, &g.HostAddress, &g.HostPort, &g.ContainerPort, &g.ServiceProtocol, &g.CleanupState, &g.Component.ID, &g.Component.ContainerName, &g.Component.ContainerID, &g.Component.Image, &g.Component.ImageID, &g.Component.ConfigurationHash, &g.Component.State)
+	err := row.Scan(&g.InstallationID, &g.Generation, &g.CreatingOperationID, &g.ApplicationID, &g.ReleaseID, &g.Status, &g.NetworkName, &g.NetworkID, &g.PlanHash, &g.DataPath, &g.CleanupState, &g.Component.ID, &g.Component.ContainerName, &g.Component.ContainerID, &g.Component.Image, &g.Component.ImageID, &g.Component.ConfigurationHash, &g.Component.State)
 	return g, err
+}
+
+type bindingExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func replaceBindings(ctx context.Context, db bindingExecer, installation string, generation int, bindings []exposure.ServiceBinding) error {
+	if len(bindings) > exposure.MaxBindings {
+		return errors.New("too many service bindings")
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM runtime_generation_bindings WHERE installation_id=? AND runtime_generation=?`, installation, generation); err != nil {
+		return err
+	}
+	for _, b := range exposure.Normalize(bindings) {
+		if _, err := db.ExecContext(ctx, `INSERT INTO runtime_generation_bindings(installation_id,runtime_generation,service_id,transport,container_port,mode,host_address,host_port) VALUES(?,?,?,?,?,?,?,?)`, installation, generation, b.ServiceID, b.Transport, b.ContainerPort, b.Mode, b.HostAddress, b.HostPort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Store) loadBindings(ctx context.Context, installation string, generation int) ([]exposure.ServiceBinding, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT service_id,transport,container_port,mode,host_address,host_port FROM runtime_generation_bindings WHERE installation_id=? AND runtime_generation=? ORDER BY service_id`, installation, generation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []exposure.ServiceBinding
+	for rows.Next() {
+		var b exposure.ServiceBinding
+		if err = rows.Scan(&b.ServiceID, &b.Transport, &b.ContainerPort, &b.Mode, &b.HostAddress, &b.HostPort); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }

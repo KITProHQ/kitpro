@@ -13,6 +13,7 @@ import (
 
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"github.com/kitpro/kitpro/software/server/internal/lifecycle"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
@@ -145,6 +146,43 @@ func TestApplicationPlanValidationAcceptsEveryRealCatalogApp(t *testing.T) {
 				t.Fatalf("trusted catalog plan rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestTrustedBindingSetValidation(t *testing.T) {
+	m := manifest.Manifest{SchemaVersion: manifest.NetworkBindingSchemaVersion, ID: "network-fixture", Name: "Network fixture", Services: []manifest.Service{{ID: "admin", Name: "Admin", Protocol: "http", ContainerPort: 80}, {ID: "dns-tcp", Name: "DNS TCP", Protocol: "tcp", ContainerPort: 53, FixedHostPort: 53}, {ID: "dns-udp", Name: "DNS UDP", Protocol: "udp", ContainerPort: 53, FixedHostPort: 53}}}
+	request := protocol.Request{Version: 2, Bindings: []protocol.ServiceBinding{{ServiceID: "dns-udp", Transport: "udp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "admin", Transport: "tcp", ContainerPort: 80, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000}, {ServiceID: "dns-tcp", Transport: "tcp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53}}}
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", "10.0.0.2")
+	if err := validateTrustedBindings(request, m); err != nil {
+		t.Fatalf("exact trusted set rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing":          func(r *protocol.Request) { r.Bindings = r.Bindings[:2] },
+		"extra":            func(r *protocol.Request) { r.Bindings = append(r.Bindings, r.Bindings[0]) },
+		"transport":        func(r *protocol.Request) { r.Bindings[0].Transport = "tcp" },
+		"container-port":   func(r *protocol.Request) { r.Bindings[1].ContainerPort = 81 },
+		"fixed-port":       func(r *protocol.Request) { r.Bindings[0].HostPort = 54 },
+		"injected-service": func(r *protocol.Request) { r.Bindings[0].ServiceID = "shell" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := request
+			q.Bindings = append([]protocol.ServiceBinding(nil), request.Bindings...)
+			mutate(&q)
+			if validateTrustedBindings(q, m) == nil {
+				t.Fatal("tampered binding set accepted")
+			}
+		})
+	}
+	request.ExposureMode = "internal"
+	if err := validateTrustedBindings(request, m); err == nil {
+		t.Fatal("protocol v2 scalar authority accepted")
+	}
+}
+
+func TestRuntimePortBindingsCarriesMultipleTransports(t *testing.T) {
+	bindings := runtimePortBindings([]exposure.ServiceBinding{{ServiceID: "dns-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "dns-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "admin", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000}})
+	if len(bindings) != 3 || bindings["53/tcp"][0].HostPort != "53" || bindings["53/udp"][0].HostPort != "53" || bindings["80/tcp"][0].HostPort != "20000" {
+		t.Fatalf("runtime bindings=%#v", bindings)
 	}
 }
 

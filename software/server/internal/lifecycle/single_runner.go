@@ -59,7 +59,7 @@ func (r SingleRunner) Operate(ctx context.Context, installation, operationID str
 	if generation.Status != "active" {
 		return Result{}, errors.New("active single-component generation unavailable")
 	}
-	plan := MultiPlan{OperationID: operationID, InstallationID: installation, ApplicationID: generation.ApplicationID, ReleaseID: generation.ReleaseID, Generation: generation.Generation, ExpectedGeneration: generation.Generation, FencingToken: fencingToken, NetworkName: generation.NetworkName, PlanHash: generation.PlanHash, DataPath: generation.DataPath, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort, ContainerPort: generation.ContainerPort, ServiceProtocol: generation.ServiceProtocol}
+	plan := MultiPlan{OperationID: operationID, InstallationID: installation, ApplicationID: generation.ApplicationID, ReleaseID: generation.ReleaseID, Generation: generation.Generation, ExpectedGeneration: generation.Generation, FencingToken: fencingToken, NetworkName: generation.NetworkName, PlanHash: generation.PlanHash, DataPath: generation.DataPath, Bindings: generation.Bindings}
 	component := generation.Component
 	mutator := MultiRunner{Runtime: r.Runtime, Store: r.Store, Evidence: r.Evidence}
 
@@ -135,7 +135,7 @@ func (r SingleRunner) Operate(ctx context.Context, installation, operationID str
 		return Result{}, err
 	}
 	state := map[string]string{"start": "running", "stop": "stopped", "restart": "running", "remove": "runtime_removed"}[action]
-	return Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: state, ContainerName: component.ContainerName, ContainerID: component.ContainerID, NetworkName: generation.NetworkName, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort}, nil
+	return Result{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: state, ContainerName: component.ContainerName, ContainerID: component.ContainerID, NetworkName: generation.NetworkName, Bindings: generation.Bindings}, nil
 }
 
 func singleRuntimeStateClassifiable(state containers.RuntimeState) bool {

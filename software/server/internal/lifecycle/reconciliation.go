@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/ownership"
 )
 
@@ -68,13 +69,10 @@ type ComponentFinding struct {
 }
 
 type CommittedProjection struct {
-	Generation   int    `json:"runtime_generation"`
-	ReleaseID    string `json:"release_id"`
-	RuntimeState string `json:"runtime_state"`
-	ExposureMode string `json:"exposure_mode"`
-	ServiceID    string `json:"service_id,omitempty"`
-	HostAddress  string `json:"host_address,omitempty"`
-	HostPort     int    `json:"host_port,omitempty"`
+	Generation   int                       `json:"runtime_generation"`
+	ReleaseID    string                    `json:"release_id"`
+	RuntimeState string                    `json:"runtime_state"`
+	Bindings     []exposure.ServiceBinding `json:"bindings,omitempty"`
 }
 
 type ReconciliationResult struct {
@@ -160,7 +158,7 @@ func (r Reconciler) Reconcile(ctx context.Context, installation string) (Reconci
 
 	result.CheckedGeneration = active.Generation
 	result.OriginatingOperation = active.CreatingOperationID
-	result.Projection = &CommittedProjection{Generation: active.Generation, ReleaseID: active.ReleaseID, ExposureMode: active.ExposureMode, ServiceID: active.ServiceID, HostAddress: active.HostAddress, HostPort: active.HostPort}
+	result.Projection = &CommittedProjection{Generation: active.Generation, ReleaseID: active.ReleaseID, Bindings: active.Bindings}
 	findings, runtimeState, observeErr := r.observeGeneration(ctx, *active, "active")
 	if observeErr != nil {
 		return r.runtimeUnknown(ctx, result, observeErr)
@@ -485,7 +483,7 @@ func (s Store) LoadReconciliation(ctx context.Context, installation string) (Rec
 	if result.CheckedGeneration > 0 {
 		generation, loadErr := s.LoadMultiGeneration(ctx, installation, result.CheckedGeneration)
 		if loadErr == nil && generation.Status == "active" {
-			result.Projection = &CommittedProjection{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: result.RuntimeState, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort}
+			result.Projection = &CommittedProjection{Generation: generation.Generation, ReleaseID: generation.ReleaseID, RuntimeState: result.RuntimeState, Bindings: generation.Bindings}
 		}
 	}
 	return result, nil

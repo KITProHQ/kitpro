@@ -62,7 +62,7 @@ func newMultiHarness(t *testing.T, existing bool) (*Store, *fakeRuntime, helpero
 	if err = coordinator.AuthorizeMutation(context.Background(), operationID, decision.FencingToken); err != nil {
 		t.Fatal(err)
 	}
-	plan := MultiPlan{OperationID: operationID, InstallationID: "inst-multi", ApplicationID: "multi", ReleaseID: "new", Generation: expected + 1, ExpectedGeneration: expected, FencingToken: decision.FencingToken, NetworkName: fmt.Sprintf("kitpro-net-inst-multi-g%d", expected+1), PlanHash: "plan", TopologyHash: "topology", DataPath: "/data", ExposureMode: "internal"}
+	plan := MultiPlan{OperationID: operationID, InstallationID: "inst-multi", ApplicationID: "multi", ReleaseID: "new", Generation: expected + 1, ExpectedGeneration: expected, FencingToken: decision.FencingToken, NetworkName: fmt.Sprintf("kitpro-net-inst-multi-g%d", expected+1), PlanHash: "plan", TopologyHash: "topology", DataPath: "/data"}
 	for ordinal, id := range ids {
 		name := fmt.Sprintf("kitpro-multi-inst-multi-%s-g%d", id, expected+1)
 		labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: "inst-multi", ownership.LabelResource: "application", "com.kitpro.runtime-generation": fmt.Sprint(expected + 1), "com.kitpro.component": id}

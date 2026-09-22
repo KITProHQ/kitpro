@@ -19,6 +19,7 @@ const ExternalStorageSchemaVersion = 4
 const RuntimeIdentitySchemaVersion = 5
 const BackupSchemaVersion = 6
 const CatalogMetadataSchemaVersion = 7
+const NetworkBindingSchemaVersion = 8
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -125,6 +126,9 @@ type Service struct {
 	Name          string `json:"name"`
 	Protocol      string `json:"protocol"`
 	ContainerPort int    `json:"container_port"`
+	// FixedHostPort authorizes KITPro to bind this exact host port. It is a
+	// trusted catalog policy, never a user-selected value.
+	FixedHostPort int `json:"fixed_host_port,omitempty"`
 }
 type Component struct {
 	ID              string            `json:"id"`
@@ -196,7 +200,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion && m.SchemaVersion != RuntimeIdentitySchemaVersion && m.SchemaVersion != BackupSchemaVersion && m.SchemaVersion != CatalogMetadataSchemaVersion {
+	if m.SchemaVersion < SchemaVersion || m.SchemaVersion > NetworkBindingSchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -226,7 +230,7 @@ func Validate(m Manifest) error {
 	if m.SchemaVersion < CatalogMetadataSchemaVersion && hasCatalogMetadata(m) {
 		return fmt.Errorf("catalog metadata requires schema version 7")
 	}
-	if m.SchemaVersion == CatalogMetadataSchemaVersion {
+	if m.SchemaVersion >= CatalogMetadataSchemaVersion {
 		if err := validateCatalogMetadata(m); err != nil {
 			return err
 		}
@@ -300,8 +304,11 @@ func Validate(m Manifest) error {
 	seenPort := map[string]bool{}
 	for _, s := range m.Services {
 		portProtocol := fmt.Sprintf("%d/%s", s.ContainerPort, s.Protocol)
-		if !idPattern.MatchString(s.ID) || s.Name == "" || len(s.Name) > 128 || seen[s.ID] || seenPort[portProtocol] || s.ContainerPort < 1 || s.ContainerPort > 65535 || (s.Protocol != "http" && s.Protocol != "https" && s.Protocol != "tcp") {
+		if !idPattern.MatchString(s.ID) || s.Name == "" || len(s.Name) > 128 || seen[s.ID] || seenPort[portProtocol] || s.ContainerPort < 1 || s.ContainerPort > 65535 || (s.Protocol != "http" && s.Protocol != "https" && s.Protocol != "tcp" && s.Protocol != "udp") {
 			return fmt.Errorf("invalid port")
+		}
+		if s.FixedHostPort != 0 && (m.SchemaVersion < NetworkBindingSchemaVersion || s.FixedHostPort < 1 || s.FixedHostPort > 65535) {
+			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
 		}
 		seen[s.ID] = true
 		seenPort[portProtocol] = true
@@ -322,7 +329,7 @@ func Validate(m Manifest) error {
 		if c.Restart != "" && c.Restart != "no" && c.Restart != "unless-stopped" {
 			return fmt.Errorf("invalid component restart policy")
 		}
-		if err := validateComponentFields(c); err != nil {
+		if err := validateComponentFields(c, m.SchemaVersion); err != nil {
 			return fmt.Errorf("component %s: %w", c.ID, err)
 		}
 		if err := validateHardware(c.Hardware); err != nil {
@@ -529,7 +536,7 @@ func componentsHaveHardware(components []Component) bool {
 	return false
 }
 
-func validateComponentFields(c Component) error {
+func validateComponentFields(c Component, schemaVersion int) error {
 	seen := map[string]bool{}
 	for _, s := range c.Storage {
 		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath) {
@@ -562,8 +569,11 @@ func validateComponentFields(c Component) error {
 	ports := map[string]bool{}
 	for _, s := range c.Services {
 		key := fmt.Sprintf("%d/%s", s.ContainerPort, s.Protocol)
-		if !idPattern.MatchString(s.ID) || s.Name == "" || len(s.Name) > 128 || seen[s.ID] || ports[key] || s.ContainerPort < 1 || s.ContainerPort > 65535 || (s.Protocol != "http" && s.Protocol != "https" && s.Protocol != "tcp") {
+		if !idPattern.MatchString(s.ID) || s.Name == "" || len(s.Name) > 128 || seen[s.ID] || ports[key] || s.ContainerPort < 1 || s.ContainerPort > 65535 || (s.Protocol != "http" && s.Protocol != "https" && s.Protocol != "tcp" && s.Protocol != "udp") {
 			return fmt.Errorf("invalid service")
+		}
+		if s.FixedHostPort != 0 && (schemaVersion < NetworkBindingSchemaVersion || s.FixedHostPort < 1 || s.FixedHostPort > 65535) {
+			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
 		}
 		seen[s.ID], ports[key] = true, true
 	}

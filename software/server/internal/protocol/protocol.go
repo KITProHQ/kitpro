@@ -23,34 +23,38 @@ type Request struct {
 	Deadline          string `json:"deadline,omitempty"`
 	// InstanceID is the stable installed-application identity; runtime
 	// incarnations are distinguished by RuntimeGeneration.
-	InstanceID        string                   `json:"instance_id"`
-	RuntimeGeneration int                      `json:"runtime_generation,omitempty"`
-	Image             string                   `json:"image,omitempty"`
-	ApplicationID     string                   `json:"application_id,omitempty"`
-	ReleaseID         string                   `json:"release_id,omitempty"`
-	NetworkName       string                   `json:"network_name,omitempty"`
-	DataPath          string                   `json:"data_path,omitempty"`
-	RestartPolicy     string                   `json:"restart_policy,omitempty"`
-	Command           []string                 `json:"command,omitempty"`
-	Environment       []EnvVar                 `json:"environment,omitempty"`
-	Storage           []StorageMount           `json:"storage,omitempty"`
-	ExposureMode      string                   `json:"exposure_mode,omitempty"`
-	HostAddress       string                   `json:"host_address,omitempty"`
-	HostPort          int                      `json:"host_port,omitempty"`
-	ServiceID         string                   `json:"service_id,omitempty"`
-	ContainerPort     int                      `json:"container_port,omitempty"`
-	ServiceProtocol   string                   `json:"service_protocol,omitempty"`
-	Services          []Service                `json:"services,omitempty"`
-	Components        []Component              `json:"components,omitempty"`
-	Hardware          []HardwareRequirement    `json:"hardware,omitempty"`
-	ExternalStorage   []ExternalStorageBinding `json:"external_storage,omitempty"`
-	RootID            string                   `json:"root_id,omitempty"`
-	RootName          string                   `json:"root_name,omitempty"`
-	RootPath          string                   `json:"root_path,omitempty"`
-	RootMode          string                   `json:"root_mode,omitempty"`
-	RunAs             *RuntimeIdentity         `json:"run_as,omitempty"`
-	BackupID          string                   `json:"backup_id,omitempty"`
-	RepairAction      string                   `json:"repair_action,omitempty"`
+	InstanceID        string           `json:"instance_id"`
+	RuntimeGeneration int              `json:"runtime_generation,omitempty"`
+	Image             string           `json:"image,omitempty"`
+	ApplicationID     string           `json:"application_id,omitempty"`
+	ReleaseID         string           `json:"release_id,omitempty"`
+	NetworkName       string           `json:"network_name,omitempty"`
+	DataPath          string           `json:"data_path,omitempty"`
+	RestartPolicy     string           `json:"restart_policy,omitempty"`
+	Command           []string         `json:"command,omitempty"`
+	Environment       []EnvVar         `json:"environment,omitempty"`
+	Storage           []StorageMount   `json:"storage,omitempty"`
+	Bindings          []ServiceBinding `json:"bindings,omitempty"`
+	// Deprecated scalar exposure fields are accepted only so the helper can
+	// reject mixed/legacy mutation requests explicitly. Bindings is the sole
+	// authority for protocol-v2 application plans.
+	ExposureMode    string                   `json:"exposure_mode,omitempty"`
+	HostAddress     string                   `json:"host_address,omitempty"`
+	HostPort        int                      `json:"host_port,omitempty"`
+	ServiceID       string                   `json:"service_id,omitempty"`
+	ContainerPort   int                      `json:"container_port,omitempty"`
+	ServiceProtocol string                   `json:"service_protocol,omitempty"`
+	Services        []Service                `json:"services,omitempty"`
+	Components      []Component              `json:"components,omitempty"`
+	Hardware        []HardwareRequirement    `json:"hardware,omitempty"`
+	ExternalStorage []ExternalStorageBinding `json:"external_storage,omitempty"`
+	RootID          string                   `json:"root_id,omitempty"`
+	RootName        string                   `json:"root_name,omitempty"`
+	RootPath        string                   `json:"root_path,omitempty"`
+	RootMode        string                   `json:"root_mode,omitempty"`
+	RunAs           *RuntimeIdentity         `json:"run_as,omitempty"`
+	BackupID        string                   `json:"backup_id,omitempty"`
+	RepairAction    string                   `json:"repair_action,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -78,6 +82,14 @@ type Service struct {
 	ID            string `json:"id"`
 	Protocol      string `json:"protocol"`
 	ContainerPort int    `json:"container_port"`
+}
+type ServiceBinding struct {
+	ServiceID     string `json:"service_id"`
+	Transport     string `json:"transport"`
+	ContainerPort int    `json:"container_port"`
+	Mode          string `json:"mode"`
+	HostAddress   string `json:"host_address,omitempty"`
+	HostPort      int    `json:"host_port,omitempty"`
 }
 type Component struct {
 	ID              string                   `json:"id"`

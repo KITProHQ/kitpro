@@ -257,3 +257,21 @@ func TestCreateContainerPlanBracketsIPv6PublishAddress(t *testing.T) {
 		t.Fatalf("IPv6 address was not bracketed:\n%s", unit)
 	}
 }
+
+func TestCreateContainerPlanRendersMultipleTCPAndUDPBindings(t *testing.T) {
+	runtime, _, units, _ := testRuntime(t)
+	plan := containers.ContainerPlan{Image: testImage, Name: "kitpro-app-inst-network01-g1", Network: "kitpro-net-inst-network01-g1", PortBindings: map[string][]containers.PortBinding{"53/tcp": {{HostIP: "10.0.0.2", HostPort: "53"}}, "53/udp": {{HostIP: "10.0.0.2", HostPort: "53"}}, "80/tcp": {{HostIP: "127.0.0.1", HostPort: "20000"}}}}
+	if _, err := runtime.CreateContainerPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	unit, err := os.ReadFile(filepath.Join(units, plan.Name+".container"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(unit)
+	for _, want := range []string{"PublishPort=10.0.0.2:53:53\n", "PublishPort=10.0.0.2:53:53/udp\n", "PublishPort=127.0.0.1:20000:80\n"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+}

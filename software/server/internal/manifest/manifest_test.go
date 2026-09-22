@@ -67,6 +67,27 @@ func TestSchemaVersionsOneThroughSevenRemainParseable(t *testing.T) {
 	}
 }
 
+func TestNetworkBindingSchemaValidation(t *testing.T) {
+	base := strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":8`, 1)
+	base = strings.Replace(base, `"restart":"unless-stopped"`, `"services":[{"id":"dns-tcp","name":"DNS TCP","protocol":"tcp","container_port":53,"fixed_host_port":53},{"id":"dns-udp","name":"DNS UDP","protocol":"udp","container_port":53,"fixed_host_port":53}],"restart":"unless-stopped"`, 1)
+	manifest, err := Parse([]byte(base))
+	if err != nil {
+		t.Fatalf("valid TCP and UDP fixed bindings rejected: %v", err)
+	}
+	if len(manifest.Services) != 2 || manifest.Services[1].Protocol != "udp" {
+		t.Fatalf("network services not parsed: %#v", manifest.Services)
+	}
+	if _, err = Parse([]byte(strings.Replace(base, `"schema_version":8`, `"schema_version":7`, 1))); err == nil {
+		t.Fatal("schema v7 accepted fixed host port")
+	}
+	if _, err = Parse([]byte(strings.Replace(base, `"protocol":"udp"`, `"protocol":"quic"`, 1))); err == nil {
+		t.Fatal("unsupported protocol accepted")
+	}
+	if _, err = Parse([]byte(strings.Replace(base, `"fixed_host_port":53`, `"fixed_host_port":0`, 1))); err != nil {
+		t.Fatalf("zero fixed-port default rejected: %v", err)
+	}
+}
+
 func TestCatalogMetadataSchemaValidation(t *testing.T) {
 	m, err := Parse([]byte(validV7Manifest()))
 	if err != nil {

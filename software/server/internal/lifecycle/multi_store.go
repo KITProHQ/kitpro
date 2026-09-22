@@ -38,7 +38,7 @@ func (s Store) PrepareMulti(ctx context.Context, plan MultiPlan) error {
 		if _, err = tx.ExecContext(ctx, `UPDATE runtime_components SET start_ordinal=start_ordinal+100 WHERE installation_id=? AND runtime_generation=?`, plan.InstallationID, plan.Generation); err != nil {
 			return err
 		}
-		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET creating_operation_id=?,application_id=?,release_id=?,status='prepared',network_name=?,observed_network_id='',plan_hash=?,topology_hash=?,data_path=?,exposure_mode=?,service_id=?,host_address=?,host_port=?,container_port=?,service_protocol=?,created_at=?,verified_at=NULL,committed_at=NULL,retired_at=NULL,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status IN ('failed','removed') AND cleanup_state='clean'`, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.TopologyHash, plan.DataPath, plan.ExposureMode, plan.ServiceID, plan.HostAddress, plan.HostPort, plan.ContainerPort, plan.ServiceProtocol, now, plan.InstallationID, plan.Generation)
+		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET creating_operation_id=?,application_id=?,release_id=?,status='prepared',network_name=?,observed_network_id='',plan_hash=?,topology_hash=?,data_path=?,exposure_mode='internal',service_id='',host_address='',host_port=0,container_port=0,service_protocol='',created_at=?,verified_at=NULL,committed_at=NULL,retired_at=NULL,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status IN ('failed','removed') AND cleanup_state='clean'`, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.TopologyHash, plan.DataPath, now, plan.InstallationID, plan.Generation)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -48,7 +48,7 @@ func (s Store) PrepareMulti(ctx context.Context, plan MultiPlan) error {
 	} else if !errors.Is(existingErr, sql.ErrNoRows) {
 		return existingErr
 	} else {
-		_, err = tx.ExecContext(ctx, `INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,topology_hash,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,cleanup_state) VALUES(?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,'not_required')`, plan.InstallationID, plan.Generation, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.TopologyHash, plan.DataPath, plan.ExposureMode, plan.ServiceID, plan.HostAddress, plan.HostPort, plan.ContainerPort, plan.ServiceProtocol, now)
+		_, err = tx.ExecContext(ctx, `INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,topology_hash,data_path,created_at,cleanup_state) VALUES(?,?,?,?,?,'prepared',?,?,?,?,?,'not_required')`, plan.InstallationID, plan.Generation, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.TopologyHash, plan.DataPath, now)
 		if err != nil {
 			return err
 		}
@@ -73,6 +73,9 @@ func (s Store) PrepareMulti(ctx context.Context, plan MultiPlan) error {
 			}
 		}
 	}
+	if err = replaceBindings(ctx, tx, plan.InstallationID, plan.Generation, plan.Bindings); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -95,7 +98,7 @@ func (s Store) BackfillLegacyMulti(ctx context.Context, generation MultiGenerati
 	if existing != 0 {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,topology_hash,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,cleanup_state) VALUES(?,?,?,?,?,'verification_required',?,?,?,?,?,?,?,?,?,?,?,'not_required')`, generation.InstallationID, generation.Generation, "legacy-multi-migration", generation.ApplicationID, generation.ReleaseID, generation.NetworkName, generation.PlanHash, generation.TopologyHash, generation.DataPath, generation.ExposureMode, generation.ServiceID, generation.HostAddress, generation.HostPort, generation.ContainerPort, generation.ServiceProtocol, s.now())
+	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,topology_hash,data_path,created_at,cleanup_state) VALUES(?,?,?,?,?,'verification_required',?,?,?,?,?,'not_required')`, generation.InstallationID, generation.Generation, "legacy-multi-migration", generation.ApplicationID, generation.ReleaseID, generation.NetworkName, generation.PlanHash, generation.TopologyHash, generation.DataPath, s.now())
 	if err != nil {
 		return err
 	}
@@ -105,6 +108,9 @@ func (s Store) BackfillLegacyMulti(ctx context.Context, generation MultiGenerati
 		if err != nil {
 			return err
 		}
+	}
+	if err = replaceBindings(ctx, tx, generation.InstallationID, generation.Generation, generation.Bindings); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -201,7 +207,11 @@ func (s Store) MultiByOperation(ctx context.Context, operationID string) (MultiG
 
 func (s Store) LoadMultiGeneration(ctx context.Context, installation string, generation int) (MultiGeneration, error) {
 	var g MultiGeneration
-	err := s.DB.QueryRowContext(ctx, `SELECT installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,topology_hash,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,cleanup_state FROM runtime_generations WHERE installation_id=? AND runtime_generation=?`, installation, generation).Scan(&g.InstallationID, &g.Generation, &g.CreatingOperationID, &g.ApplicationID, &g.ReleaseID, &g.Status, &g.NetworkName, &g.NetworkID, &g.PlanHash, &g.TopologyHash, &g.DataPath, &g.ExposureMode, &g.ServiceID, &g.HostAddress, &g.HostPort, &g.ContainerPort, &g.ServiceProtocol, &g.CleanupState)
+	err := s.DB.QueryRowContext(ctx, `SELECT installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,topology_hash,data_path,cleanup_state FROM runtime_generations WHERE installation_id=? AND runtime_generation=?`, installation, generation).Scan(&g.InstallationID, &g.Generation, &g.CreatingOperationID, &g.ApplicationID, &g.ReleaseID, &g.Status, &g.NetworkName, &g.NetworkID, &g.PlanHash, &g.TopologyHash, &g.DataPath, &g.CleanupState)
+	if err != nil {
+		return g, err
+	}
+	g.Bindings, err = s.loadBindings(ctx, installation, generation)
 	if err != nil {
 		return g, err
 	}

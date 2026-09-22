@@ -312,7 +312,7 @@ func (r Repairer) verifyExactComponent(ctx context.Context, generation MultiGene
 }
 
 func repairPlan(generation MultiGeneration, operationID string, token int64) MultiPlan {
-	plan := MultiPlan{OperationID: operationID, InstallationID: generation.InstallationID, ApplicationID: generation.ApplicationID, ReleaseID: generation.ReleaseID, Generation: generation.Generation, ExpectedGeneration: generation.Generation, FencingToken: token, NetworkName: generation.NetworkName, PlanHash: generation.PlanHash, TopologyHash: generation.TopologyHash, DataPath: generation.DataPath, ExposureMode: generation.ExposureMode, ServiceID: generation.ServiceID, HostAddress: generation.HostAddress, HostPort: generation.HostPort, ContainerPort: generation.ContainerPort, ServiceProtocol: generation.ServiceProtocol}
+	plan := MultiPlan{OperationID: operationID, InstallationID: generation.InstallationID, ApplicationID: generation.ApplicationID, ReleaseID: generation.ReleaseID, Generation: generation.Generation, ExpectedGeneration: generation.Generation, FencingToken: token, NetworkName: generation.NetworkName, PlanHash: generation.PlanHash, TopologyHash: generation.TopologyHash, DataPath: generation.DataPath, Bindings: generation.Bindings}
 	for _, component := range generation.Components {
 		plan.Components = append(plan.Components, MultiComponentPlan{ID: component.ID, Image: component.Image, ContainerName: component.ContainerName, DependsOn: append([]string(nil), component.DependsOn...), StartOrdinal: component.StartOrdinal})
 	}

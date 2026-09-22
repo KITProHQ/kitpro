@@ -100,9 +100,10 @@ func TestPullDrainsLargeProgressStream(t *testing.T) {
 
 func TestCreateContainerPlanPortBindings(t *testing.T) {
 	for name, bindings := range map[string]map[string][]PortBinding{
-		"internal": nil,
-		"loopback": {"80/tcp": {{HostIP: "127.0.0.1", HostPort: "20000"}}},
-		"lan":      {"80/tcp": {{HostIP: "10.10.0.115", HostPort: "20000"}}},
+		"internal":        nil,
+		"loopback":        {"80/tcp": {{HostIP: "127.0.0.1", HostPort: "20000"}}},
+		"lan":             {"80/tcp": {{HostIP: "10.10.0.115", HostPort: "20000"}}},
+		"multi-transport": {"53/tcp": {{HostIP: "10.10.0.115", HostPort: "53"}}, "53/udp": {{HostIP: "10.10.0.115", HostPort: "53"}}, "80/tcp": {{HostIP: "127.0.0.1", HostPort: "20000"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var body map[string]any
@@ -124,6 +125,12 @@ func TestCreateContainerPlanPortBindings(t *testing.T) {
 				encoded, _ := json.Marshal(observed)
 				if strings.Contains(string(encoded), "0.0.0.0") || strings.Contains(string(encoded), `"HostIp":""`) {
 					t.Fatalf("wildcard binding generated: %s", encoded)
+				}
+				if name == "multi-transport" {
+					got := observed.(map[string]any)
+					if len(got) != 3 || got["53/tcp"] == nil || got["53/udp"] == nil {
+						t.Fatalf("multi-transport bindings missing: %#v", got)
+					}
 				}
 			}
 		})

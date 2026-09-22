@@ -592,40 +592,8 @@ func validateApplicationPlan(r protocol.Request) error {
 			return fmt.Errorf("trusted service plan mismatch")
 		}
 	}
-	if r.ExposureMode != "internal" && r.ExposureMode != "loopback" && r.ExposureMode != "lan" {
-		return fmt.Errorf("invalid exposure mode")
-	}
-	if r.ExposureMode == "internal" && (r.HostAddress != "" || (r.HostPort != 0 && (r.HostPort < exposure.FirstPort || r.HostPort > exposure.LastPort))) {
-		return fmt.Errorf("internal exposure cannot bind")
-	}
-	if r.ExposureMode == "loopback" && r.HostAddress != "127.0.0.1" {
-		return fmt.Errorf("invalid loopback address")
-	}
-	if r.ExposureMode == "lan" && (net.ParseIP(r.HostAddress) == nil || net.ParseIP(r.HostAddress).IsUnspecified() || net.ParseIP(r.HostAddress).IsMulticast() || net.ParseIP(r.HostAddress).IsLinkLocalUnicast()) {
-		return fmt.Errorf("invalid LAN address")
-	}
-	if r.ExposureMode == "lan" && (env("KITPRO_LAN_BIND_ADDRESS", "") == "" || r.HostAddress != env("KITPRO_LAN_BIND_ADDRESS", "")) {
-		return fmt.Errorf("LAN address is not configured host address")
-	}
-	if r.ExposureMode == "loopback" || r.ExposureMode == "lan" {
-		if r.ServiceID == "" || r.ContainerPort == 0 || r.ServiceProtocol == "" {
-			return fmt.Errorf("service declaration required")
-		}
-		found := false
-		for _, s := range r.Services {
-			if s.ID == r.ServiceID {
-				if s.ContainerPort != r.ContainerPort || s.Protocol != r.ServiceProtocol {
-					return fmt.Errorf("service declaration mismatch")
-				}
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("service not declared")
-		}
-		if r.HostPort < 20000 || r.HostPort > 29999 || r.ContainerPort < 1 || r.ContainerPort > 65535 {
-			return fmt.Errorf("invalid exposure binding")
-		}
+	if err := validateTrustedBindings(r, entry.Manifest); err != nil {
+		return err
 	}
 	for _, c := range r.Command {
 		if c == "" || strings.ContainsAny(c, "\r\n") || c == "/bin/sh" || c == "/bin/bash" || c == "-c" {
@@ -914,34 +882,105 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 	if _, err := multicontainer.StartOrder(components); err != nil {
 		return err
 	}
-	if r.ExposureMode != "internal" && r.ExposureMode != "loopback" && r.ExposureMode != "lan" {
-		return fmt.Errorf("invalid exposure mode")
+	return validateTrustedBindings(r, m)
+}
+
+func validateTrustedBindings(r protocol.Request, m manifest.Manifest) error {
+	legacyScalar := r.ExposureMode != "" || r.ServiceID != "" || r.HostAddress != "" || r.HostPort != 0 || r.ContainerPort != 0 || r.ServiceProtocol != ""
+	if legacyScalar && (r.Version >= 2 || len(r.Bindings) != 0) {
+		return fmt.Errorf("scalar exposure fields are not accepted")
 	}
-	if r.ExposureMode != "internal" {
-		if r.ServiceID == "" || r.ContainerPort < 1 || r.HostPort < exposure.FirstPort || r.HostPort > exposure.LastPort {
-			return fmt.Errorf("invalid component exposure")
+	bindingsInput := r.Bindings
+	if r.Version < 2 && len(bindingsInput) == 0 {
+		bindingsInput = legacyBindings(r, m)
+	}
+	if len(bindingsInput) != len(m.Services) || len(bindingsInput) > exposure.MaxBindings {
+		return fmt.Errorf("trusted binding set shape mismatch")
+	}
+	declared := map[string]manifest.Service{}
+	for _, service := range m.Services {
+		declared[service.ID] = service
+	}
+	seen := map[string]bool{}
+	bindings := make([]exposure.ServiceBinding, 0, len(bindingsInput))
+	for _, got := range bindingsInput {
+		service, ok := declared[got.ServiceID]
+		if !ok || seen[got.ServiceID] {
+			return fmt.Errorf("binding service is not uniquely declared")
 		}
-		declared := false
-		for _, c := range m.Components {
-			for _, s := range c.Services {
-				if s.ID == r.ServiceID && s.ContainerPort == r.ContainerPort && s.Protocol == r.ServiceProtocol {
-					declared = true
-				}
+		seen[got.ServiceID] = true
+		transport, err := exposure.TransportFor(service.Protocol)
+		if err != nil || string(transport) != got.Transport || service.ContainerPort != got.ContainerPort {
+			return fmt.Errorf("trusted service binding mismatch")
+		}
+		binding := exposure.ServiceBinding{ServiceID: got.ServiceID, Transport: transport, ContainerPort: got.ContainerPort, Mode: exposure.Mode(got.Mode), HostAddress: got.HostAddress, HostPort: got.HostPort}
+		if err = exposure.ValidateBinding(binding, env("KITPRO_LAN_BIND_ADDRESS", ""), service.FixedHostPort); err != nil {
+			return err
+		}
+		bindings = append(bindings, binding)
+	}
+	return exposure.ValidateConflicts(bindings)
+}
+
+func legacyBindings(r protocol.Request, m manifest.Manifest) []protocol.ServiceBinding {
+	mode := r.ExposureMode
+	if mode == "" {
+		mode = string(exposure.Internal)
+	}
+	out := make([]protocol.ServiceBinding, 0, len(m.Services))
+	for _, service := range m.Services {
+		transport, _ := exposure.TransportFor(service.Protocol)
+		binding := protocol.ServiceBinding{ServiceID: service.ID, Transport: string(transport), ContainerPort: service.ContainerPort, Mode: string(exposure.Internal), HostPort: service.FixedHostPort}
+		if service.ID == r.ServiceID && mode != string(exposure.Internal) {
+			binding.Mode, binding.HostAddress, binding.HostPort = mode, r.HostAddress, r.HostPort
+			if r.ContainerPort != 0 {
+				binding.ContainerPort = r.ContainerPort
+			}
+			if r.ServiceProtocol != "" {
+				binding.Transport, _ = exposure.ContainerProtocol(r.ServiceProtocol)
 			}
 		}
-		if !declared {
-			return fmt.Errorf("component service not declared")
-		}
+		out = append(out, binding)
 	}
-	return nil
+	return out
+}
+
+func requestBindings(r protocol.Request) []exposure.ServiceBinding {
+	out := make([]exposure.ServiceBinding, 0, len(r.Bindings))
+	for _, b := range r.Bindings {
+		out = append(out, exposure.ServiceBinding{ServiceID: b.ServiceID, Transport: exposure.Transport(b.Transport), ContainerPort: b.ContainerPort, Mode: exposure.Mode(b.Mode), HostAddress: b.HostAddress, HostPort: b.HostPort})
+	}
+	return exposure.Normalize(out)
+}
+
+func trustedRequestBindings(r protocol.Request, m manifest.Manifest) []exposure.ServiceBinding {
+	if len(r.Bindings) == 0 {
+		r.Bindings = legacyBindings(r, m)
+	}
+	return requestBindings(r)
+}
+
+func runtimePortBindings(bindings []exposure.ServiceBinding) map[string][]containers.PortBinding {
+	out := map[string][]containers.PortBinding{}
+	for _, binding := range bindings {
+		if binding.Mode == exposure.Internal {
+			continue
+		}
+		key := fmt.Sprintf("%d/%s", binding.ContainerPort, binding.Transport)
+		out[key] = append(out[key], containers.PortBinding{HostIP: binding.HostAddress, HostPort: strconv.Itoa(binding.HostPort)})
+	}
+	return out
 }
 
 func validateTrustedRecreation(db *sql.DB, r protocol.Request) error {
-	var generation, trustedPort int
+	var generation int
+	var legacyPort int
+	legacyOwnership := false
 	var applicationID, releaseID, image, dataPath string
-	err := db.QueryRow(`SELECT g.runtime_generation,g.application_id,g.release_id,c.image_digest,g.data_path,g.host_port FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.status IN ('active','verification_required') AND c.component_id='app' ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath, &trustedPort)
+	err := db.QueryRow(`SELECT g.runtime_generation,g.application_id,g.release_id,c.image_digest,g.data_path FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.status IN ('active','verification_required') AND c.component_id='app' ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath)
 	if err == sql.ErrNoRows {
-		err = db.QueryRow(`SELECT runtime_generation,application_id,release_id,image_digest,data_path,host_port FROM ownership WHERE instance_id=?`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath, &trustedPort)
+		err = db.QueryRow(`SELECT runtime_generation,application_id,release_id,image_digest,data_path,host_port FROM ownership WHERE instance_id=?`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath, &legacyPort)
+		legacyOwnership = err == nil
 	}
 	if err == sql.ErrNoRows {
 		if r.RuntimeGeneration != 1 {
@@ -958,8 +997,35 @@ func validateTrustedRecreation(db *sql.DB, r protocol.Request) error {
 	if r.Operation != "UpdateApplication" && ((releaseID != "" && releaseID != r.ReleaseID) || image != r.Image) {
 		return fmt.Errorf("trusted runtime identity mismatch")
 	}
-	if trustedPort != 0 && r.HostPort != trustedPort {
-		return fmt.Errorf("trusted exposure assignment mismatch")
+	if r.Operation != "ConfigureServiceExposure" {
+		if legacyOwnership && r.Version < 2 {
+			if legacyPort != 0 && r.HostPort != legacyPort {
+				return fmt.Errorf("trusted exposure assignment mismatch")
+			}
+			return nil
+		}
+		rows, queryErr := db.Query(`SELECT service_id,transport,container_port,mode,host_address,host_port FROM runtime_generation_bindings WHERE installation_id=? AND runtime_generation=? ORDER BY service_id`, r.InstanceID, generation)
+		if queryErr != nil {
+			return fmt.Errorf("trusted binding state unavailable")
+		}
+		var stored []exposure.ServiceBinding
+		for rows.Next() {
+			var b exposure.ServiceBinding
+			if queryErr = rows.Scan(&b.ServiceID, &b.Transport, &b.ContainerPort, &b.Mode, &b.HostAddress, &b.HostPort); queryErr != nil {
+				break
+			}
+			stored = append(stored, b)
+		}
+		_ = rows.Close()
+		requested := requestBindings(r)
+		if queryErr != nil || len(stored) != len(requested) {
+			return fmt.Errorf("trusted exposure assignment mismatch")
+		}
+		for i := range stored {
+			if stored[i] != requested[i] {
+				return fmt.Errorf("trusted exposure assignment mismatch")
+			}
+		}
 	}
 	return nil
 }
@@ -1040,11 +1106,8 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
 		return
 	}
-	bindings := map[string][]containers.PortBinding{}
-	if r.ExposureMode == "loopback" || r.ExposureMode == "lan" {
-		proto, _ := exposure.ContainerProtocol(r.ServiceProtocol)
-		bindings[fmt.Sprintf("%d/%s", r.ContainerPort, proto)] = []containers.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
-	}
+	trustedBindings := trustedRequestBindings(r, entries[r.ApplicationID].Manifest)
+	bindings := runtimePortBindings(trustedBindings)
 	user := ""
 	if r.RunAs != nil {
 		user = strconv.Itoa(r.RunAs.UID) + ":" + strconv.Itoa(r.RunAs.GID)
@@ -1056,7 +1119,7 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 		return
 	}
 	rollbackSafe := r.Operation != "UpdateApplication" && r.RepairAction == ""
-	plan := lifecycle.Plan{OperationID: r.OperationID, InstallationID: r.InstanceID, ApplicationID: r.ApplicationID, ReleaseID: r.ReleaseID, Generation: gen, ExpectedGeneration: gen - 1, FencingToken: fencingToken, Image: r.Image, NetworkName: r.NetworkName, ContainerName: name, PlanHash: planHash, DataPath: r.DataPath, ExposureMode: r.ExposureMode, ServiceID: r.ServiceID, HostAddress: r.HostAddress, HostPort: r.HostPort, ContainerPort: r.ContainerPort, ServiceProtocol: r.ServiceProtocol, Container: containerPlan, RollbackSafe: rollbackSafe, AllowMissingActive: r.RepairAction == lifecycle.RepairRecreateGeneration}
+	plan := lifecycle.Plan{OperationID: r.OperationID, InstallationID: r.InstanceID, ApplicationID: r.ApplicationID, ReleaseID: r.ReleaseID, Generation: gen, ExpectedGeneration: gen - 1, FencingToken: fencingToken, Image: r.Image, NetworkName: r.NetworkName, ContainerName: name, PlanHash: planHash, DataPath: r.DataPath, Bindings: trustedBindings, Container: containerPlan, RollbackSafe: rollbackSafe, AllowMissingActive: r.RepairAction == lifecycle.RepairRecreateGeneration}
 	// Generation-scoped helper metadata is prepared before runtime cutover. It
 	// is evidence for recovery, not the authoritative active-generation switch.
 	tx, persistErr := db.Begin()
@@ -1081,7 +1144,7 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 		if strings.Contains(e.Error(), "address already in use") || strings.Contains(e.Error(), "port is already allocated") {
 			event = "exposure_collision"
 		}
-		slog.Default().Warn("runtime creation failed", "event", event, "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "service_id", r.ServiceID, "mode", r.ExposureMode, "host_address", r.HostAddress, "host_port", r.HostPort, "result", "failed", "error_category", "runtime")
+		slog.Default().Warn("runtime creation failed", "event", event, "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "binding_count", len(r.Bindings), "result", "failed", "error_category", "runtime")
 		var unknown lifecycle.UnknownOutcomeError
 		if errors.As(e, &unknown) {
 			protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "RecoveryRequired", Error: e.Error()})
@@ -1090,7 +1153,7 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 		}
 		return
 	}
-	slog.Default().Info("runtime created", "event", "exposure_applied", "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "service_id", r.ServiceID, "mode", r.ExposureMode, "host_address", r.HostAddress, "host_port", r.HostPort, "result", "succeeded")
+	slog.Default().Info("runtime created", "event", "exposure_applied", "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "binding_count", len(r.Bindings), "result", "succeeded")
 	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 }
 
@@ -1155,7 +1218,8 @@ func createMultiApplication(c io.Writer, db *sql.DB, request protocol.Request, c
 		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: err.Error()})
 		return
 	}
-	plan := lifecycle.MultiPlan{OperationID: request.OperationID, InstallationID: request.InstanceID, ApplicationID: request.ApplicationID, ReleaseID: request.ReleaseID, Generation: request.RuntimeGeneration, ExpectedGeneration: request.RuntimeGeneration - 1, FencingToken: fencingToken, NetworkName: request.NetworkName, PlanHash: planHash, TopologyHash: topology.Hash, DataPath: request.DataPath, ExposureMode: request.ExposureMode, ServiceID: request.ServiceID, HostAddress: request.HostAddress, HostPort: request.HostPort, ContainerPort: request.ContainerPort, ServiceProtocol: request.ServiceProtocol, RollbackSafe: request.Operation != "UpdateApplication" && request.RepairAction == "", AllowMissingActive: request.RepairAction == lifecycle.RepairRecreateGeneration}
+	trustedBindings := trustedRequestBindings(request, entries[request.ApplicationID].Manifest)
+	plan := lifecycle.MultiPlan{OperationID: request.OperationID, InstallationID: request.InstanceID, ApplicationID: request.ApplicationID, ReleaseID: request.ReleaseID, Generation: request.RuntimeGeneration, ExpectedGeneration: request.RuntimeGeneration - 1, FencingToken: fencingToken, NetworkName: request.NetworkName, PlanHash: planHash, TopologyHash: topology.Hash, DataPath: request.DataPath, Bindings: trustedBindings, RollbackSafe: request.Operation != "UpdateApplication" && request.RepairAction == "", AllowMissingActive: request.RepairAction == lifecycle.RepairRecreateGeneration}
 	tx, err := db.Begin()
 	if err != nil {
 		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "candidate metadata preparation failed"})
@@ -1199,12 +1263,11 @@ func createMultiApplication(c io.Writer, db *sql.DB, request protocol.Request, c
 		mounts = append(mounts, externalMounts...)
 		bindings := map[string][]containers.PortBinding{}
 		for _, service := range component.Services {
-			if service.ID != request.ServiceID {
-				continue
-			}
-			protocolName, _ := exposure.ContainerProtocol(service.Protocol)
-			if request.ExposureMode != "internal" {
-				bindings[fmt.Sprintf("%d/%s", service.ContainerPort, protocolName)] = []containers.PortBinding{{HostIP: request.HostAddress, HostPort: strconv.Itoa(request.HostPort)}}
+			for _, binding := range trustedBindings {
+				if binding.ServiceID == service.ID && binding.ContainerPort == service.ContainerPort && binding.Mode != exposure.Internal {
+					key := fmt.Sprintf("%d/%s", binding.ContainerPort, binding.Transport)
+					bindings[key] = append(bindings[key], containers.PortBinding{HostIP: binding.HostAddress, HostPort: strconv.Itoa(binding.HostPort)})
+				}
 			}
 		}
 		name := "kitpro-" + request.ApplicationID + "-" + request.InstanceID + "-" + component.ID + "-g" + strconv.Itoa(request.RuntimeGeneration)
@@ -1298,7 +1361,7 @@ func backfillLegacyMulti(db *sql.DB, request protocol.Request, topology multicon
 		}
 		byID[row.componentID] = row
 	}
-	migrated := lifecycle.MultiGeneration{InstallationID: request.InstanceID, CreatingOperationID: "legacy-multi-migration", ApplicationID: request.ApplicationID, ReleaseID: trusted.Releases[0].Version, Generation: generation, Status: "verification_required", NetworkName: network, PlanHash: "legacy-component-ownership", TopologyHash: topology.Hash, DataPath: request.DataPath, ExposureMode: request.ExposureMode, ServiceID: request.ServiceID, HostAddress: request.HostAddress, HostPort: request.HostPort, ContainerPort: request.ContainerPort, ServiceProtocol: request.ServiceProtocol, CleanupState: "not_required"}
+	migrated := lifecycle.MultiGeneration{InstallationID: request.InstanceID, CreatingOperationID: "legacy-multi-migration", ApplicationID: request.ApplicationID, ReleaseID: trusted.Releases[0].Version, Generation: generation, Status: "verification_required", NetworkName: network, PlanHash: "legacy-component-ownership", TopologyHash: topology.Hash, DataPath: request.DataPath, Bindings: trustedRequestBindings(request, trusted), CleanupState: "not_required"}
 	for _, node := range topology.Components {
 		row, ok := byID[node.ID]
 		if !ok {
