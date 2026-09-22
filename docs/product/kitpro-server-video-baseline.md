@@ -6,6 +6,9 @@ Freeze date: 2026-09-15
 
 Factual claims in the KeepItTechie KITPro Server launch video must be checked against this baseline and the linked current-state brief. This file freezes the product state that existed before the documentation-only freeze commit; the commit containing this file is the authoritative documentation snapshot.
 
+> Historical alpha.11 production baseline. Do not use this frozen record as the
+> current product or platform boundary. See the [alpha.12 current state](kitpro-server-current-state.md).
+
 ## Identity
 
 | Item | Frozen value |

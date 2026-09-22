@@ -1,35 +1,120 @@
-# KITPro Server — Public Alpha
+# KITPro Server
 
-KITPro Server is a local-first control panel for installing and operating a trusted set of self-hosted applications on your own Linux server. It exists to make Docker, persistence, private networking, updates, GPU access, and media storage understandable without giving a web application unrestricted control of the host.
+KITPro Server is an open-source platform for operating self-hosted
+applications without manually coordinating all of the infrastructure behind
+them. It manages a trusted application lifecycle on your Linux server while
+the workloads, persistent data, and host remain under your control.
 
-The public alpha includes 15 reviewed applications: FreshRSS, Uptime Kuma, Mealie, Memos, Actual Budget, Vaultwarden, Home Assistant, Paperless-ngx, Open WebUI, IT-Tools, Ollama, Jellyfin, Navidrome, Audiobookshelf, and SFTPGo. Images are pinned by digest; applications start private; persistent data survives runtime recreation.
+## Why KITPro Server exists
 
-The public host baseline is Debian 13 amd64 and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor. Rocky Linux 10 and Podman remain Experimental. NVIDIA acceleration is live-certified with an RTX A2000 12GB for Ollama; CPU fallback is supported. Administrator-approved local or host-mounted NFS/CIFS storage can be attached through typed read-only or exclusive read-write slots. KITPro does not accept arbitrary Docker configuration, devices, or host bind mounts.
+Installing an application is often the easy part. Complexity accumulates when
+you update it, replace a runtime, preserve storage, diagnose a failure, recover
+from an interrupted operation, take a backup, or decide what is safe to
+delete. Each tool can work as designed while the owner still has to coordinate
+their combined state.
 
-> KITPro Server is alpha software. Read the [support matrix](docs/support-matrix.md) and [known limitations](docs/release/known-limitations.md) before relying on it for important data.
+KITPro coordinates that work through a local browser interface and a narrowly
+privileged helper. It verifies state before changing it, preserves durable
+installation identity and data when it replaces disposable runtime machinery,
+records uncertainty, and stops when it cannot prove a safe next step.
+
+Standard Linux, systemd, Docker, and application data remain inspectable. KITPro
+is not a generic Docker or Compose dashboard, and it does not hide the server
+from its owner.
+
+## What alpha.12 changes for the user
+
+KITPro Server `v0.1.0-alpha.12` provides one consistent path to:
+
+- install applications from a trusted, digest-pinned catalog;
+- preserve installation identity and managed storage across runtime
+  replacement;
+- start, stop, recreate, expose, and update declared application services;
+- reconcile recorded intent with observed runtime and storage state;
+- apply a bounded repair chosen from fresh evidence;
+- back up and restore managed application storage within a strict
+  same-installation boundary; and
+- inspect durable operations and release provenance.
+
+Debian 13 and Arch Linux are the supported public baseline. Ubuntu has
+development and validation evidence only. Rocky Linux 10 and Podman remain
+Experimental.
+
+## Alpha limitations
+
+KITPro Server is active alpha software. Breaking changes and incomplete
+workflows may occur. Alpha.12 does not provide application-aware readiness,
+imported-storage backup, host-to-host restore, bare-host recovery, automatic
+rollback of irreversible upstream schema changes, destructive application-data
+deletion, clustering, automatic failover, or public TLS and domain automation.
+Some repair and recovery actions require the API or root-local tooling rather
+than a complete browser workflow.
+
+Read the [current-state reference](docs/product/kitpro-server-current-state.md)
+and [known limitations](docs/release/known-limitations.md) before using KITPro
+with important data.
 
 ![KITPro Server dashboard](docs/assets/screenshots/kitpro-server-dashboard.png)
 
-## Get started
+## Try alpha.12
 
-1. Download the current public prerelease, [`v0.1.0-alpha.12`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12).
-2. Follow the [public alpha quickstart](docs/release/quickstart.md) for Debian or Arch.
-3. Open `http://127.0.0.1:8080/`, create the first local administrator, choose an app, and select its access mode.
+> Review the alpha limitations and keep an independent backup of important
+> data. Alpha software can contain breaking changes and incomplete recovery
+> paths.
 
-Fresh alpha.12 installs use the normal package-manager instructions. Existing alpha.11 installations must use the [guarded transition wrappers](docs/release/quickstart.md#upgrade-from-alpha11). Do not use raw `apt install`, `dpkg -i`, or `pacman -U` for the alpha.11 to alpha.12 transition.
+For a fresh supported host, follow the [alpha.12 quickstart](docs/release/quickstart.md).
+An existing alpha.11 installation must use the documented transition wrapper.
+Raw `apt install`, `dpkg -i`, and `pacman -U` transitions from alpha.11 are
+unsupported because they bypass KITPro's application-level safety checks.
 
-Release notes, the release manifest, and checksums on the release page are authoritative for downloaded packages.
+## Documentation
 
-## Explore
+### Start here
 
-- [Current product brief](docs/product/kitpro-server-current-state.md)
-- [Application catalog](docs/application-catalog.md)
+- [What alpha.12 does today](docs/product/kitpro-server-current-state.md)
+- [Known limitations](docs/release/known-limitations.md)
+- [Platform support matrix](docs/support-matrix.md)
+
+### Installation and first use
+
+- [Alpha.12 quickstart](docs/release/quickstart.md)
+- [Install on Debian 13](docs/install-debian-package.md)
+- [Install on Arch Linux](docs/install-arch-package.md)
+- [Complete first use](docs/release/quickstart.md#first-run)
+
+### Operate, back up, and recover
+
+- [Operations index](docs/operations/README.md)
+- [Back up and restore an application](docs/operations/application-backup-restore.md)
+- [Recover application lifecycle state](docs/operations/lifecycle-recovery.md)
+- [Upgrade or remove the Debian package](docs/upgrade-uninstall-debian-package.md)
+
+### Concepts and reference
+
 - [Architecture](docs/architecture.md)
-- [Security model](docs/security/current-security-boundary.md)
-- [Trusted storage guide](docs/trusted-storage.md)
-- [Hardware acceleration guide](docs/hardware-acceleration.md)
-- [Screenshots and video visual inventory](docs/product/video-broll-inventory.md)
-- [Launch-video production baseline](docs/product/kitpro-server-video-baseline.md)
-- [KITPro Server product page](https://kitpro.us/server)
+- [Operating principles](docs/principles.md)
+- [Security boundary](docs/security/current-security-boundary.md)
+- [API reference](docs/api-reference.md)
+- [Roadmap](docs/roadmap.md)
+- [Complete documentation index](docs/README.md)
 
-The technical implementation entry point is [software/server/README.md](software/server/README.md). KITPro is licensed under the [Apache License 2.0](LICENSE). Future KITPro OS, hardware, and cloud ideas are separate from this Server alpha and are not current features.
+The implementation entry point is [software/server/README.md](software/server/README.md).
+KITPro is licensed under the [Apache License 2.0](LICENSE).
+
+## Release provenance
+
+The alpha.12 release includes SHA-256 checksums, a CycloneDX JSON SBOM, build
+metadata, a release manifest, and a frozen source revision. These artifacts let
+an owner verify downloaded bytes, inspect packaged components, trace the
+release to reviewed source, and distinguish the official frozen files from an
+unverified replacement. They do not claim that every build is reproducible or
+provide a formal supply-chain guarantee.
+
+## Development transparency
+
+KITPro uses AI-assisted development tools as part of a human-directed
+engineering workflow. Project ownership, architecture, security decisions,
+review, and release approval remain human responsibilities. The source is
+available in this repository, and the project accepts reports through its
+public issue tracker. Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a
+change.

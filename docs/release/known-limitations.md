@@ -1,17 +1,18 @@
-# Known alpha limitations
+# Known alpha.12 limitations
 
-Status date: 2026-09-21. These limits apply to the current public release, `v0.1.0-alpha.12`.
+Status date: 2026-09-21. These limits apply to `v0.1.0-alpha.12`.
 
 ## Platform and runtime
 
-- The public baseline is Debian 13 amd64 and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor.
-- Rocky Linux 10 and Podman remain Experimental and are not promoted by alpha.12.
+- The current public baseline is Debian 13 amd64 and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor.
+- Ubuntu 26.04 LTS has development validation evidence but is not in the current public support baseline.
+- Rocky Linux 10 amd64 and Podman remain Experimental. Development acceptance evidence does not establish public support or a published RPM.
 - The catalog is intentionally limited. Arbitrary Compose, shell commands, capabilities, privileged mode, host networking, devices, bind mounts, and user-supplied manifests are not accepted.
 - LAN exposure binds one configured host address. Wildcard/public-Internet exposure, reverse proxies, domains, and TLS automation are outside the current scope.
 
 ## Hardware acceleration
 
-- NVIDIA Ollama inference is validated on the supported Debian and Arch boundaries with an RTX A2000 12GB and NVIDIA Container Toolkit 1.20.0. Ubuntu results are development evidence only. Other driver, toolkit, and GPU combinations remain unvalidated.
+- NVIDIA Ollama inference is validated on the supported Debian and Arch boundaries with an RTX A2000 12GB and NVIDIA Container Toolkit 1.20.0. Ubuntu results remain development evidence. Other driver, toolkit, and GPU combinations remain unvalidated.
 - KITPro currently accepts one unambiguous GPU. Multi-GPU selection and scheduling are not implemented.
 - KITPro grants bounded device access but does not schedule GPU work or reserve VRAM when applications share one GPU.
 - AMD device scoping has limited evidence, but AMD compute workloads are not live-certified.
@@ -24,12 +25,15 @@ Status date: 2026-09-21. These limits apply to the current public release, `v0.1
 - Jellyfin supports one administrator-approved read-only media root. Multiple libraries and write-enabled media changes are not supported.
 - Read-write trusted roots are exclusive. KITPro does not merge concurrent writers or provide file-level locking.
 - KITPro registers existing local or host-mounted NFS/CIFS storage; it does not mount network shares or manage NAS credentials.
-- Imported external data is not included in KITPro control-plane backups. Root reassociation after restore is explicit.
-- A complete automatic application-data backup, host-to-host restore, or disaster-recovery workflow is not implemented.
+- Application backup format version 1 protects catalog-declared managed files, detected SQLite databases, and generated secrets for exact existing-installation restore. Restore records swaps and recovery in a durable helper journal.
+- Imported external data is reference-only. KITPro records the trusted binding but does not copy NAS, media, music, audiobook, or SFTPGo external file content.
+- Backup destinations are local and archives are not encrypted by KITPro. Scheduling, retention, object storage, bare-host recovery, and host-to-host restore are not implemented.
+- PostgreSQL and MariaDB backup strategies are not implemented. No current visible catalog application deploys either database engine.
 - Rollback of irreversible upstream schema migrations is not promised.
-- Runtime running state is not the same as application readiness.
-- Same-port replacement can have a bounded cutover interruption.
-- Failed restore or cleanup trees may require later cleanup. Some cleanup debt requires an explicit repair action.
+- Mixed restore state or ambiguous ownership can require a reviewed recovery decision. KITPro does not guess which tree or runtime owns the installation.
+- A running container is runtime evidence, not application readiness. The current catalog does not provide manifest-defined readiness probes.
+- Same-port replacement requires a bounded cutover interruption because the old and replacement runtimes cannot own the same host binding concurrently.
+- Failed restore trees can be retained under an operation-specific name for investigation. Automated long-term retention and deletion policy is not implemented.
 
 ## Application and network boundaries
 
@@ -39,10 +43,12 @@ Status date: 2026-09-21. These limits apply to the current public release, `v0.1
 - The archived original File Browser is not supported. SFTPGo is the maintained, first-run-authenticated read-write catalog choice.
 - LocalAI is excluded because its official image can fetch an unsigned mutable backend during model installation; pinning only the outer image does not provide end-to-end provenance.
 - Clustering, high availability, and automatic failover are not implemented.
+- Not every reconciliation, repair, backup, restore, or recovery workflow has a complete browser interface.
+- Destructive application-data deletion is not a completed lifecycle.
 
 ## Update boundary
 
 - Application updates are trusted-catalog and administrator initiated.
 - Native package managers remain authoritative for KITPro package updates.
 - Pre-update backups protect bounded control-plane state, not imported external data or the complete host.
-- Downgrades after the alpha.11 schema 7 to alpha.12 schema 13 migration are unsupported.
+- Cleanup after a safely committed generation can fail independently. KITPro records `cleanup_pending`; the committed generation remains successful and requires an explicit cleanup repair.

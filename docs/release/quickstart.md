@@ -1,10 +1,20 @@
 # KITPro Server public alpha quickstart
 
-Download the package and `kitpro-alpha12-SHA256SUMS` from the [v0.1.0-alpha.12 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12). Use the exact public filenames below.
+KITPro Server `v0.1.0-alpha.12` is active alpha software. Breaking changes and
+incomplete workflows may occur. Review the [current state](../product/kitpro-server-current-state.md)
+and [known limitations](known-limitations.md) before using it with important
+data.
 
-## Fresh install
+Download the package and matching checksum file from the
+[`v0.1.0-alpha.12` release](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12).
+Verify the package before installation.
 
-These commands are only for hosts without an existing KITPro alpha.11 package.
+If this host runs alpha.11, do not use the fresh-install commands below. Use
+the guarded alpha.11 to alpha.12 transition for
+[Debian](../upgrade-uninstall-debian-package.md#upgrade-from-alpha11-to-alpha12)
+or [Arch Linux](../install-arch-package.md#upgrade-from-alpha11-to-alpha12).
+Raw `apt install`, `dpkg -i`, and `pacman -U` transitions from alpha.11 are
+unsupported because they bypass KITPro's application-level safety checks.
 
 ## Debian 13
 
@@ -29,34 +39,8 @@ sudo pacman -U ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
 sudo systemctl status kitpro-api kitpro-helper
 ```
 
-Reboot into `linux-lts` after installing or changing the kernel/AppArmor boundary before expecting the helper to pass readiness checks.
-
-## Upgrade from alpha.11
-
-Do not use raw package-manager commands for this one transition.
-
-### Debian
-
-```sh
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-chmod +x kitpro-debian-upgrade
-sudo ./kitpro-debian-upgrade ./kitpro-server_0.1.0.alpha12_amd64.deb
-```
-
-### Arch Linux
-
-```sh
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-chmod +x kitpro-server-0.1.0_alpha12-1-upgrade.sh
-sudo ./kitpro-server-0.1.0_alpha12-1-upgrade.sh \
-  ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
-```
-
-The Debian wrapper validates existing state and creates the complete backup
-set before invoking APT. The Arch wrapper installs a temporary fail-closed
-pre-transaction gate. Alpha.12 installs permanent native upgrade protection
-for future upgrades. Alpha.11 schema 7 to alpha.12 schema 13 migration is
-supported and validated. Downgrading after migration is unsupported.
+Reboot into `linux-lts` after installing or changing the kernel and AppArmor
+boundary before expecting the helper's platform checks to pass.
 
 ## First run
 
@@ -69,4 +53,9 @@ supported and validated. Downgrading after migration is unsupported.
 
 Managed data lives under `/srv/kitpro/apps/<application>/<installation>/` and survives runtime recreation. Imported data stays at the administrator-approved root and is not deleted or backed up by KITPro. Package migrations and trusted app updates protect control state, not the complete external library.
 
-See the [Debian guide](../install-debian-package.md), [Arch guide](../install-arch-package.md), [support matrix](../support-matrix.md), and [known limitations](known-limitations.md).
+Ubuntu 26.04 has development validation evidence but is not in the current public support baseline. Rocky Linux and Podman remain Experimental.
+
+See the [Debian guide](../install-debian-package.md), [Arch guide](../install-arch-package.md),
+[backup and restore guide](../operations/application-backup-restore.md),
+[lifecycle recovery guide](../operations/lifecycle-recovery.md),
+[support matrix](../support-matrix.md), and [known limitations](known-limitations.md).

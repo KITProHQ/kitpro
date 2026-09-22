@@ -3,26 +3,29 @@
 | Platform | Status | Boundary |
 | --- | --- | --- |
 | Debian 13 amd64 | Supported | Rootful Docker, enforcing AppArmor |
-| Ubuntu 26.04 LTS amd64 | Development evidence only | Not part of the public support baseline |
 | Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor; no partial upgrades |
-| Rocky Linux 10 amd64 | Experimental | Podman and SELinux development work is not promoted by alpha.12 |
+| Ubuntu 26.04 LTS amd64 | Development / validation only | `.deb`, rootful Docker, enforcing AppArmor; not part of the public support baseline |
+| Rocky Linux 10 amd64 | Experimental | Rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; development acceptance does not promote this path into the public baseline |
+
+Podman is Experimental in alpha.12 and is used only by the experimental Rocky
+Linux path. It is not a supported runtime on Debian, Arch Linux, or Ubuntu.
 
 ## Capability matrix
 
 | Capability | Debian 13 | Ubuntu 26.04 LTS | Arch Linux `linux-lts` | Rocky Linux 10 |
 | --- | --- | --- | --- | --- |
-| Basic KITPro | Certified | Development evidence only | Certified | Experimental |
-| Enforcing AppArmor | Required and certified | Development evidence only | Required and certified | Not applicable; SELinux path remains Experimental |
-| Rootful Docker | Required and certified | Development evidence only | Required and certified | Podman path remains Experimental |
-| 15-app trusted catalog | Certified | Development evidence only | Certified | Experimental |
-| Multi-container Paperless-ngx | Certified | Certified | Certified | Not certified |
-| Trusted external storage | Certified | Smoke certified | Smoke certified | Not certified |
-| Ollama CPU | Certified | Certified | Certified | Not certified |
-| NVIDIA Ollama inference | Certified: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Not certified |
+| Basic KITPro | Certified | Development evidence only | Certified | Experimental acceptance evidence |
+| Mandatory access control | AppArmor required and certified | AppArmor development evidence | AppArmor required and certified | Experimental SELinux Enforcing evidence |
+| Container runtime | Rootful Docker certified | Rootful Docker development evidence | Rootful Docker certified | Experimental rootful Podman 5 and Quadlet evidence |
+| 15-app trusted catalog | Certified | Development evidence only | Certified | Experimental acceptance evidence |
+| Multi-container Paperless-ngx | Certified | Development evidence only | Certified | Experimental acceptance evidence, including backup/restore |
+| Trusted external storage | Certified | Smoke certified | Smoke certified | Local read-only/read-write acceptance passed; NAS not exercised |
+| Ollama CPU | Certified | Certified | Certified | Acceptance passed |
+| NVIDIA Ollama inference | Certified: RTX A2000 / Toolkit 1.20.0 | Development evidence: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Not certified |
 | AMD accelerated workload | Not certified | Not certified | Device scoping evidence only; compute not certified | Not certified |
 | Intel accelerated workload | Not certified | Not certified | Device scoping evidence only; workload not certified | Not certified |
 | Existing host-mounted NFS/CIFS root | Detection implemented; KITPro does not mount shares | Detection implemented; KITPro does not mount shares | Detection implemented; KITPro does not mount shares | Not certified |
-| Jellyfin, Navidrome, Audiobookshelf, SFTPGo | Certified | Smoke certified | Smoke certified | Not certified |
+| Jellyfin, Navidrome, Audiobookshelf, SFTPGo | Certified | Smoke certified | Smoke certified | Acceptance passed |
 | Jellyfin NVIDIA transcoding | Not certified | Not certified | Not certified | Not certified |
 
 ## Hardware acceleration
@@ -32,6 +35,7 @@
 | Debian 13 amd64 | Validated | Validated | Validated: driver 550.163.01 and NVIDIA Container Toolkit 1.20.0 | Architecture only | Architecture only |
 | Ubuntu 26.04 LTS amd64 | Validated | Validated | Validated: driver 580.178.04 and NVIDIA Container Toolkit 1.20.0 | Unvalidated | Unvalidated |
 | Arch Linux x86_64 | Validated | Validated | Validated: `linux-lts`, open DKMS driver 615.71.09, and NVIDIA Container Toolkit 1.20.0 | Device scoping validated locally; compute unvalidated | Device scoping validated locally; accelerated workload unvalidated |
+| Rocky Linux 10 amd64 | Validated | Validated | Out of scope pending CDI design and certification | Not certified | Not certified |
 
 GPU support is not universal. It requires visible vendor hardware, its host driver, a suitable render/compute node, and vendor runtime integration where applicable. QXL virtual graphics does not qualify.
 The validated NVIDIA device was an RTX A2000 12GB passed through exclusively to
@@ -46,12 +50,14 @@ Ollama and Jellyfin declare optional NVIDIA access. Ollama inference is live-cer
 | Debian 13 amd64 | Validated | Filesystem detection implemented; disposable live NAS unavailable | Validated with read-only media, drift, recreation, and reboot |
 | Ubuntu 26.04 LTS amd64 | Validated smoke | Same host-mounted model | Validated smoke |
 | Arch Linux x86_64 | Validated smoke | Same host-mounted model | Validated smoke under the existing `linux-lts` boundary |
+| Rocky Linux 10 amd64 | Validated | Host-mounted NAS unavailable during acceptance | Validated with SELinux Enforcing |
 
 Navidrome and Audiobookshelf use read-only imported libraries. SFTPGo is the
 first read-write consumer and requires an exclusive root. Navidrome and SFTPGo
 passed live authenticated install, exact-mount, private-exposure, and reboot
-smoke tests on Debian and Arch. Ubuntu results remain development evidence. Audiobookshelf received full Debian
-acceptance with the same packaged schema and helper boundary.
+smoke tests on Debian and Arch. Ubuntu results remain development evidence.
+Audiobookshelf received full Debian acceptance with the same packaged schema
+and helper boundary.
 
 KITPro does not mount or credential network shares. The operating system must
 mount them first. Missing or changed mount identity fails closed.

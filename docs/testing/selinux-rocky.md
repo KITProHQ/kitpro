@@ -1,5 +1,11 @@
 # Rocky Linux 10 SELinux validation
 
+This document records the earlier Docker experiment. The current Rocky runtime
+uses Podman and Quadlet. Use
+[the frozen SELinux notes](https://github.com/KITProHQ/kitpro/blob/v0.1.0-alpha.12/docs/security/selinux-rocky-podman.md)
+and [the frozen Rocky validation plan](https://github.com/KITProHQ/kitpro/blob/v0.1.0-alpha.12/docs/testing/rocky-linux-10-validation.md)
+for Podman validation. Do not treat the results below as Podman evidence.
+
 ## Status
 
 The initial 2026-09-12 Rocky Linux 10.2 run `FAILED` the intended mandatory-access-control posture. SELinux remained `Enforcing`, but Docker did not enable SELinux integration. The helper ran as `unconfined_service_t`, and the test container ran as `spc_t` with empty Docker process and mount labels.
@@ -72,7 +78,7 @@ The narrow remediation was a validated `/etc/docker/daemon.json` containing `{"s
 
 ## Minimum future policy boundary
 
-A production policy, if Rocky remains supported, should be narrower than the test's generic domains. Conceptually it needs to:
+A production policy, if Rocky is later promoted to supported, should be narrower than the test's generic domains. Conceptually it needs to:
 
 - transition the helper executable into a KITPro helper domain;
 - assign dedicated types to the helper socket, runtime directory, state, audit data, and approved application-data roots;

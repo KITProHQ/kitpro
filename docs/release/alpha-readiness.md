@@ -10,8 +10,8 @@ the limitations in this document.
 - Fresh installation, authenticated setup, catalog installation, lifecycle,
   controlled exposure, and reconciliation work.
 - Single- and multi-container applications preserve installation-scoped data.
-- Debian, Ubuntu, and Arch package artifacts are reproducible and AppArmor /
-  systemd hardening remains active.
+- Debian and Arch package artifacts passed the alpha.12 release validation,
+  and AppArmor and systemd hardening remain active.
 - Native package upgrades create a validated pre-update backup and surface
   migration or service failures without deleting application data.
 - Application updates accept only trusted catalog releases and preserve the
@@ -25,6 +25,7 @@ rollback of irreversible schema migrations is not promised.
 
 ## Support boundary
 
-Supported: Debian 13 amd64; Ubuntu 26.04 LTS amd64; Arch Linux x86_64 with
-linux-lts, fully updated official repositories, rootful Docker, and enforcing
-AppArmor. Rocky Linux 10 amd64 is experimental.
+Supported: Debian 13 amd64 and Arch Linux x86_64 with `linux-lts`, fully
+updated official repositories, rootful Docker, and enforcing AppArmor. Ubuntu
+26.04 LTS has development evidence but is not in the public baseline. Rocky
+Linux 10 and Podman remain Experimental.
