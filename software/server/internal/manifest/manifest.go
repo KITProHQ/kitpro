@@ -28,7 +28,7 @@ var catalogCategories = map[string]bool{
 	"AI": true, "Developer Tools": true, "Documents": true,
 	"Files": true, "Finance": true, "Food and recipes": true,
 	"Home automation": true, "Media": true, "Monitoring": true,
-	"Music": true, "Networking": true, "Notes": true,
+	"Music": true, "Networking": true, "Notes": true, "Productivity": true,
 	"Reading": true, "Security": true,
 }
 

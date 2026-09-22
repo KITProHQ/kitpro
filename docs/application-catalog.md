@@ -6,7 +6,7 @@ runtime validation. Catalog content cannot request host paths, Docker socket
 access, privileged mode, host namespaces, devices, capabilities, or host port
 bindings. Service exposure is an installation policy and defaults to internal.
 
-The 17 visible entries use manifest schema version 7. Their category,
+The 18 visible entries use manifest schema version 7. Their category,
 application kind, catalog status, official links, and non-derivable limitations
 come from the manifest. The API and server-rendered catalog use that same
 source. Logo keys can reference reviewed packaged assets; entries without one
@@ -39,6 +39,7 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | Open WebUI | AI | Authenticated AI interface | Single | Managed data and generated secret | CPU | HTTP, private by default; backend configured separately |
 | IT-Tools | Developer Tools | Browser utilities | Single | Stateless | CPU | HTTP, private by default |
 | Forgejo | Developer Tools | Self-hosted Git service | Single | Managed `/data` | CPU | HTTP, private by default; no Git-over-SSH or public HTTPS |
+| Nextcloud | Productivity | File synchronization and collaboration | Single | Managed `/var/www/html` | CPU | Experimental minimal SQLite profile; browser-focused and private by default |
 | Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
 | Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
 | Plex | Media | Media library streaming | Single | Managed config plus read-only trusted media | CPU | TCP 32400 only; reduced discovery and no automatic remote access |
@@ -63,6 +64,7 @@ and automatic Internet exposure are unavailable.
 | Open WebUI | 0.11.3 | `ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c` | `data` at `/app/backend/data` | HTTP 8080 | Open WebUI license |
 | IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
 | Forgejo | 16.0.5 | `codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74` | managed `data` at `/data` | HTTP 3000 | GPL-3.0-or-later |
+| Nextcloud | 34.0.4-apache | `docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1` | managed `html` at `/var/www/html` | HTTP 80 | AGPL-3.0 |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 | Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
 | Plex | 1.43.4.10903-e5521bd8c | `docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee` | managed `/config`; trusted read-only `/data` | HTTP 32400 | Proprietary |
@@ -70,7 +72,7 @@ and automatic Internet exposure are unavailable.
 | Audiobookshelf | 2.36.0 | `ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8` | managed `/config` and `/metadata`; trusted read-only `/audiobooks` | HTTP 80 | GPL-3.0 |
 | SFTPGo | 2.7.5 | `ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e` | managed config; exclusive trusted read-write `/srv/sftpgo/data` | HTTP 8080; internal SFTP 2022/TCP | AGPL-3.0-only |
 
-The sixteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The seventeen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -102,6 +104,23 @@ managed `/data` tree: repositories, configuration, the SQLite database, and
 generated application state. Runtime removal preserves that data. The first
 run remains Forgejo's browser onboarding flow, and future Forgejo transitions
 require release-specific migration validation before catalog publication.
+
+Nextcloud is an experimental minimal profile. The official Apache image starts
+as root so its entrypoint can initialize `/var/www/html`; Apache then serves
+requests as `www-data`. KITPro does not override that path or force a runtime
+UID/GID. The browser setup wizard creates the administrator and selects the
+image's default SQLite database. KITPro neither asks for nor stores that
+administrator password. The managed `/var/www/html` tree contains config,
+default user data, the SQLite database, custom applications, themes, and the
+state required by image upgrades.
+
+This profile is for small personal, primarily browser-based use. Nextcloud
+discourages SQLite for sync-client and multi-user workloads, so the profile is
+not a general production topology. It has no external database, Redis, high
+availability, external storage, or public HTTPS integration. Cold backup stops
+the container and copies the complete managed tree. Future image transitions
+must start with a backup, use reviewed releases, and advance no more than one
+major version at a time.
 
 Plex uses the official fixed-version image rather than the self-updating
 `public` or `plexpass` variants. KITPro manages `/config`, which contains the
@@ -190,6 +209,7 @@ The following official sources were retrieved on 2026-09-13 unless noted:
 - InvokeAI: [official Docker documentation](https://github.com/invoke-ai/InvokeAI/blob/main/docker/README.md)
 - Forgejo (2026-09-22): [release index](https://forgejo.org/releases/), [16.0.5 download](https://forgejo.org/download/), [official Docker installation](https://forgejo.org/docs/v16.0/admin/installation/docker/), and [upgrade guidance](https://forgejo.org/docs/v16.0/admin/upgrade/)
 - Plex (2026-09-22): [official container project](https://github.com/plexinc/pms-docker), [official image tags](https://hub.docker.com/r/plexinc/pms-docker/tags), and [Plex installation guidance](https://support.plex.tv/articles/200288586-installation/)
+- Nextcloud (2026-09-22): [official container project and persistence guidance](https://github.com/nextcloud/docker), [official image tags](https://hub.docker.com/_/nextcloud), [installation wizard](https://docs.nextcloud.com/server/stable/admin_manual/installation/installation_wizard.html), and [upgrade guidance](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/upgrade.html)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one

@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "ollama", "open-webui", "paperless-ngx", "plex", "sftpgo", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "nextcloud", "ollama", "open-webui", "paperless-ngx", "plex", "sftpgo", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -38,6 +38,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"home-assistant", "stable", "ghcr.io/home-assistant/home-assistant@sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa", "/config", 8123, nil},
 		{"paperless-ngx", "2.20.15", "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", "/usr/src/paperless/data", 8000, nil},
 		{"plex", "1.43.4.10903-e5521bd8c", "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee", "/config", 32400, nil},
+		{"nextcloud", "34.0.4-apache", "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1", "/var/www/html", 80, nil},
 		{"open-webui", "0.11.3", "ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "/app/backend/data", 8080, nil},
 		{"it-tools", "2024.10.22-7ca5933", "docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b", "", 80, nil},
 		{"ollama", "0.34.0", "docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4", "/root/.ollama", 11434, nil},
@@ -97,10 +98,11 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		"mealie": "Food and recipes", "memos": "Notes",
 		"navidrome": "Music", "ollama": "AI", "open-webui": "AI",
 		"paperless-ngx": "Documents", "plex": "Media", "sftpgo": "Files",
+		"nextcloud":   "Productivity",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
 	}
-	if len(wantCategories) != 17 {
-		t.Fatal("visible catalog metadata fixture must cover all 17 applications")
+	if len(wantCategories) != 18 {
+		t.Fatal("visible catalog metadata fixture must cover all 18 applications")
 	}
 	for id, category := range wantCategories {
 		entry, ok := c[id]
@@ -108,7 +110,11 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 			t.Fatalf("visible application %s is missing", id)
 		}
 		m := entry.Manifest
-		if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.Category != category || m.Kind != "application" || m.CatalogStatus != "standard" {
+		wantStatus := "standard"
+		if id == "nextcloud" {
+			wantStatus = "experimental"
+		}
+		if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.Category != category || m.Kind != "application" || m.CatalogStatus != wantStatus {
 			t.Fatalf("incomplete metadata for %s: %#v", id, m)
 		}
 		if m.WebsiteURL == "" && m.SourceURL == "" && m.DocumentationURL == "" {
@@ -120,6 +126,44 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 	}
 	if c["busybox"].Manifest.SchemaVersion != manifest.BackupSchemaVersion {
 		t.Fatal("busybox must remain a schema-v6 compatibility fixture")
+	}
+}
+
+func TestNextcloudProfileIsConstrained(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c["nextcloud"].Manifest
+	if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.ID != "nextcloud" || m.Name != "Nextcloud" || m.Category != "Productivity" || m.Kind != "application" || m.CatalogStatus != "experimental" {
+		t.Fatalf("unexpected Nextcloud identity or metadata: %#v", m)
+	}
+	if m.WebsiteURL != "https://nextcloud.com/" || m.SourceURL != "https://github.com/nextcloud/docker" || m.DocumentationURL == "" || m.Logo != "" || len(m.Limitations) != 5 {
+		t.Fatalf("unexpected Nextcloud presentation metadata: %#v", m)
+	}
+	for _, required := range []string{"SQLite", "sync-client", "external database", "Redis", "public HTTPS", "one-major-version-at-a-time"} {
+		found := false
+		for _, limitation := range m.Limitations {
+			found = found || strings.Contains(limitation, required)
+		}
+		if !found {
+			t.Fatalf("Nextcloud limitations do not mention %s: %#v", required, m.Limitations)
+		}
+	}
+	if len(m.Releases) != 1 || m.Releases[0].Version != "34.0.4-apache" || m.Releases[0].Registry != "docker.io" || m.Releases[0].Repository != "library/nextcloud" || m.Releases[0].Digest != "sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1" || m.Releases[0].Platform != "linux/amd64" {
+		t.Fatalf("unexpected Nextcloud release: %#v", m.Releases)
+	}
+	if len(m.Components) != 0 || len(m.ExternalStorage) != 0 || len(m.Hardware) != 0 || len(m.Command) != 0 || len(m.Environment) != 0 || m.RunAs != nil {
+		t.Fatalf("Nextcloud acquired unexpected runtime authority: %#v", m)
+	}
+	if len(m.Storage) != 1 || m.Storage[0].ID != "html" || m.Storage[0].ContainerPath != "/var/www/html" || !m.Storage[0].Persistent || m.Storage[0].ReadOnly || m.Storage[0].OwnerUID != 0 || m.Storage[0].OwnerGID != 0 {
+		t.Fatalf("unexpected Nextcloud storage: %#v", m.Storage)
+	}
+	if len(m.Services) != 1 || m.Services[0].ID != "web" || m.Services[0].Protocol != "http" || m.Services[0].ContainerPort != 80 {
+		t.Fatalf("unexpected Nextcloud services: %#v", m.Services)
+	}
+	if m.Restart != "unless-stopped" || m.Backup == nil || m.Backup.Strategy != "cold-sqlite-filesystem" || len(m.Backup.Storage) != 1 || m.Backup.Storage[0] != (manifest.BackupStorage{Component: "app", ID: "html", Disposition: "include"}) {
+		t.Fatalf("unexpected Nextcloud lifecycle policy: restart=%q backup=%#v", m.Restart, m.Backup)
 	}
 }
 

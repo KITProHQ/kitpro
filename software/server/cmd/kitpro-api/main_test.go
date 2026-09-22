@@ -310,7 +310,7 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	request.AddCookie(csrf)
 	a.home(recorder, request)
 	body := recorder.Body.String()
-	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") {
+	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") || !strings.Contains(body, "Nextcloud") || !strings.Contains(body, ">NE</span>") || !strings.Contains(body, "https://github.com/nextcloud/docker") || !strings.Contains(body, "Experimental") || !strings.Contains(body, "sync-client") {
 		t.Fatalf("catalog presentation is not curated: %s", body)
 	}
 }
@@ -333,7 +333,7 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &items); err != nil {
 		t.Fatal(err)
 	}
-	visible, found := 0, false
+	visible, found, foundNextcloud := 0, false, false
 	for _, item := range items {
 		if catalogVisible(item.ID) {
 			visible++
@@ -344,12 +344,21 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 				t.Fatalf("incomplete catalog metadata: %#v", item)
 			}
 		}
+		if item.ID == "nextcloud" {
+			foundNextcloud = true
+			if item.Category != "Productivity" || item.Kind != "application" || item.CatalogStatus != "experimental" || item.SourceURL != "https://github.com/nextcloud/docker" || len(item.Limitations) != 5 {
+				t.Fatalf("incomplete Nextcloud catalog metadata: %#v", item)
+			}
+		}
 	}
-	if visible != 17 {
-		t.Fatalf("visible catalog has %d applications, want 17", visible)
+	if visible != 18 {
+		t.Fatalf("visible catalog has %d applications, want 18", visible)
 	}
 	if !found {
 		t.Fatal("Forgejo missing from catalog API")
+	}
+	if !foundNextcloud {
+		t.Fatal("Nextcloud missing from catalog API")
 	}
 
 	recorder = httptest.NewRecorder()
@@ -666,6 +675,32 @@ func TestPlexInstallUsesReadOnlyExternalMediaPlan(t *testing.T) {
 	}
 	if len(received.ExternalStorage) != 1 || received.ExternalStorage[0] != (protocol.ExternalStorageBinding{SlotID: "media", RootID: "storage-0123456789abcdef"}) {
 		t.Fatalf("unexpected Plex external storage selection: %#v", received.ExternalStorage)
+	}
+}
+
+func TestNextcloudInstallUsesConstrainedSQLitePlan(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.apps)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/apps/nextcloud/install", "", session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.Image != "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1" || received.ReleaseID != "34.0.4-apache" || received.ExposureMode != "internal" || received.RestartPolicy != "unless-stopped" {
+		t.Fatalf("unexpected Nextcloud release or lifecycle plan: %#v", received)
+	}
+	if len(received.Components) != 0 || len(received.Hardware) != 0 || len(received.ExternalStorage) != 0 || received.RunAs != nil || len(received.Command) != 0 || len(received.Environment) != 0 {
+		t.Fatalf("Nextcloud plan acquired unexpected runtime authority: %#v", received)
+	}
+	if len(received.Services) != 1 || received.Services[0] != (protocol.Service{ID: "web", Protocol: "http", ContainerPort: 80}) {
+		t.Fatalf("unexpected Nextcloud services: %#v", received.Services)
+	}
+	if len(received.Storage) != 1 || received.Storage[0].ID != "html" || received.Storage[0].ContainerPath != "/var/www/html" || received.Storage[0].ReadOnly || received.Storage[0].OwnerUID != 0 || received.Storage[0].OwnerGID != 0 {
+		t.Fatalf("unexpected Nextcloud managed storage: %#v", received.Storage)
 	}
 }
 

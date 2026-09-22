@@ -34,7 +34,8 @@ rejected.
 
 `category` uses the reviewed values `AI`, `Developer Tools`, `Documents`,
 `Files`, `Finance`, `Food and recipes`, `Home automation`, `Media`,
-`Monitoring`, `Music`, `Networking`, `Notes`, `Reading`, and `Security`.
+`Monitoring`, `Music`, `Networking`, `Notes`, `Productivity`, `Reading`, and
+`Security`.
 `kind` is `application` or `network-service`. The kind describes the
 application's operational role. It does not grant new networking or lifecycle
 authority.

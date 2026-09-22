@@ -15,7 +15,7 @@ and restore operations.
 
 ## Scope and evidence
 
-The assessment covers the 17 applications currently visible in the KITPro
+The assessment covers the 18 applications currently visible in the KITPro
 catalog. The hidden BusyBox lifecycle fixture is considered separately because
 it is not a public application. The repository manifests are authoritative for
 the state KITPro mounts and the image releases KITPro runs. Upstream application
@@ -107,6 +107,7 @@ and strategy tests but has not received its own live data round trip.
 | Mealie | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Memos | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Navidrome | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
+| Nextcloud | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Ollama | `cold-filesystem` | Filesystem fixture | PASS: Rocky/Podman |
 | Open WebUI | `cold-sqlite-filesystem` | Direct SQLite and secret round trip | PASS: Rocky/Podman |
 | Paperless-ngx | `cold-sqlite-filesystem` | Direct multi-component round trip | PASS: Rocky/Podman |
@@ -426,6 +427,28 @@ References: [Uptime Kuma data directory and database options](https://github.com
 - KITPro strategy: `cold-sqlite-filesystem`, include `data`.
 
 Reference: [Vaultwarden backup inventory and restore rules](https://github.com/dani-garcia/vaultwarden/wiki/Backing-up-your-vault).
+
+### Nextcloud
+
+- Components: one official Nextcloud Apache container.
+- Managed storage: `html` at `/var/www/html`.
+- Database and files: the default SQLite database is in `data` alongside user
+  files; configuration, custom applications, themes, and generated instance
+  state are also below the managed tree.
+- Configuration/secrets: browser setup writes the administrator account and
+  generated application secrets into Nextcloud state. KITPro does not collect
+  the administrator password or inject database credentials.
+- User content: default-layout uploads below `/var/www/html/data`.
+- Imported storage: none.
+- Ephemeral data: process and temporary state outside `/var/www/html`.
+- Native backup: Nextcloud documents configuration, data, database, and themes
+  as required restore inputs. The bounded SQLite profile keeps all four inside
+  the one managed tree.
+- Consistency: stop required before copying the SQLite database and adjacent
+  files as one recovery point. This is not an online transactional backup.
+- KITPro strategy: `cold-sqlite-filesystem`, include `html`.
+
+References: [official image persistent-data layout](https://github.com/nextcloud/docker#persistent-data), [Nextcloud restore requirements](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/restore.html).
 
 ## Hidden validation fixture
 

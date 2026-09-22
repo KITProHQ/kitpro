@@ -81,6 +81,10 @@ func TestCatalogMetadataSchemaValidation(t *testing.T) {
 	if _, err := Parse([]byte(networkService)); err != nil {
 		t.Fatalf("valid experimental network service metadata: %v", err)
 	}
+	productivity := strings.Replace(validV7Manifest(), `"category":"Developer Tools"`, `"category":"Productivity"`, 1)
+	if _, err := Parse([]byte(productivity)); err != nil {
+		t.Fatalf("valid Productivity category: %v", err)
+	}
 
 	tests := map[string]string{
 		"category":        strings.Replace(validV7Manifest(), `"category":"Developer Tools"`, `"category":"Unreviewed"`, 1),

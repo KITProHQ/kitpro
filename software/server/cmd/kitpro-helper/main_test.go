@@ -340,6 +340,20 @@ func validPlexRequest() protocol.Request {
 	}
 }
 
+func validNextcloudRequest() protocol.Request {
+	return protocol.Request{
+		Version: 1, ID: "op-nextcloud123456", Operation: "InstallApplication",
+		ApplicationID: "nextcloud", ReleaseID: "34.0.4-apache", InstanceID: "inst-nextcloud01", RuntimeGeneration: 1,
+		Image:         "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1",
+		NetworkName:   "kitpro-net-inst-nextcloud01-g1",
+		DataPath:      "/srv/kitpro/apps/nextcloud/inst-nextcloud01/data",
+		RestartPolicy: "unless-stopped",
+		Storage:       []protocol.StorageMount{{ID: "html", ContainerPath: "/var/www/html", HostPath: "/srv/kitpro/apps/nextcloud/inst-nextcloud01/html"}},
+		Services:      []protocol.Service{{ID: "web", Protocol: "http", ContainerPort: 80}},
+		ExposureMode:  "internal",
+	}
+}
+
 func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	if err := validateApplicationPlan(validFreshRSSRequest()); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
@@ -393,6 +407,34 @@ func TestApplicationPlanValidationAcceptsBoundedPlexPlan(t *testing.T) {
 			mutate(&q)
 			if err := validateApplicationPlan(q); err == nil {
 				t.Fatalf("accepted Plex plan mutation %s", name)
+			}
+		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsBoundedNextcloudPlan(t *testing.T) {
+	if err := validateApplicationPlan(validNextcloudRequest()); err != nil {
+		t.Fatalf("valid Nextcloud plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"extra-port": func(r *protocol.Request) {
+			r.Services = append(r.Services, protocol.Service{ID: "https", Protocol: "http", ContainerPort: 443})
+		},
+		"environment": func(r *protocol.Request) {
+			r.Environment = []protocol.EnvVar{{Name: "NEXTCLOUD_ADMIN_USER", Value: "admin"}}
+		},
+		"forced-user": func(r *protocol.Request) {
+			r.RunAs = &protocol.RuntimeIdentity{UID: 33, GID: 33}
+		},
+		"external-storage": func(r *protocol.Request) {
+			r.ExternalStorage = []protocol.ExternalStorageBinding{{SlotID: "data", RootID: "storage-0123456789abcdef"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := validNextcloudRequest()
+			mutate(&q)
+			if err := validateApplicationPlan(q); err == nil {
+				t.Fatalf("accepted Nextcloud plan mutation %s", name)
 			}
 		})
 	}
