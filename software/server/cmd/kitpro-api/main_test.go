@@ -310,7 +310,7 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	request.AddCookie(csrf)
 	a.home(recorder, request)
 	body := recorder.Body.String()
-	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") {
+	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") {
 		t.Fatalf("catalog presentation is not curated: %s", body)
 	}
 }
@@ -345,8 +345,8 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 			}
 		}
 	}
-	if visible != 16 {
-		t.Fatalf("visible catalog has %d applications, want 16", visible)
+	if visible != 17 {
+		t.Fatalf("visible catalog has %d applications, want 17", visible)
 	}
 	if !found {
 		t.Fatal("Forgejo missing from catalog API")
@@ -635,6 +635,37 @@ func TestForgejoInstallUsesConstrainedRuntimePlan(t *testing.T) {
 	}
 	if len(received.Environment) != 2 || received.Environment[0] != (protocol.EnvVar{Name: "USER_UID", Value: "1000"}) || received.Environment[1] != (protocol.EnvVar{Name: "USER_GID", Value: "1000"}) {
 		t.Fatalf("unexpected Forgejo environment: %#v", received.Environment)
+	}
+}
+
+func TestPlexInstallUsesReadOnlyExternalMediaPlan(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/v1/apps/plex/install", "storage_media=storage-0123456789abcdef", session, csrf)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	a.guard(a.apps)(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.Image != "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee" || received.ReleaseID != "1.43.4.10903-e5521bd8c" || received.ExposureMode != "internal" || received.RestartPolicy != "unless-stopped" {
+		t.Fatalf("unexpected Plex release or lifecycle plan: %#v", received)
+	}
+	if len(received.Components) != 0 || len(received.Hardware) != 0 || received.RunAs != nil || len(received.Command) != 0 || len(received.Environment) != 0 {
+		t.Fatalf("Plex plan acquired unexpected runtime authority: %#v", received)
+	}
+	if len(received.Services) != 1 || received.Services[0] != (protocol.Service{ID: "web", Protocol: "http", ContainerPort: 32400}) {
+		t.Fatalf("unexpected Plex services: %#v", received.Services)
+	}
+	if len(received.Storage) != 1 || received.Storage[0].ID != "config" || received.Storage[0].ContainerPath != "/config" || received.Storage[0].ReadOnly || received.Storage[0].OwnerUID != 0 || received.Storage[0].OwnerGID != 0 {
+		t.Fatalf("unexpected Plex managed storage: %#v", received.Storage)
+	}
+	if len(received.ExternalStorage) != 1 || received.ExternalStorage[0] != (protocol.ExternalStorageBinding{SlotID: "media", RootID: "storage-0123456789abcdef"}) {
+		t.Fatalf("unexpected Plex external storage selection: %#v", received.ExternalStorage)
 	}
 }
 

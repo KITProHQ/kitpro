@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "ollama", "open-webui", "paperless-ngx", "sftpgo", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "ollama", "open-webui", "paperless-ngx", "plex", "sftpgo", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -37,6 +37,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"vaultwarden", "1.37.2", "docker.io/vaultwarden/server@sha256:5d326778c22f063d093d6b0c9c766a28249561632266776f2c93132ab0ad3a80", "/data", 80, nil},
 		{"home-assistant", "stable", "ghcr.io/home-assistant/home-assistant@sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa", "/config", 8123, nil},
 		{"paperless-ngx", "2.20.15", "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", "/usr/src/paperless/data", 8000, nil},
+		{"plex", "1.43.4.10903-e5521bd8c", "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee", "/config", 32400, nil},
 		{"open-webui", "0.11.3", "ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "/app/backend/data", 8080, nil},
 		{"it-tools", "2024.10.22-7ca5933", "docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b", "", 80, nil},
 		{"ollama", "0.34.0", "docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4", "/root/.ollama", 11434, nil},
@@ -95,11 +96,11 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		"it-tools": "Developer Tools", "jellyfin": "Media",
 		"mealie": "Food and recipes", "memos": "Notes",
 		"navidrome": "Music", "ollama": "AI", "open-webui": "AI",
-		"paperless-ngx": "Documents", "sftpgo": "Files",
+		"paperless-ngx": "Documents", "plex": "Media", "sftpgo": "Files",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
 	}
-	if len(wantCategories) != 16 {
-		t.Fatal("visible catalog metadata fixture must cover all 16 applications")
+	if len(wantCategories) != 17 {
+		t.Fatal("visible catalog metadata fixture must cover all 17 applications")
 	}
 	for id, category := range wantCategories {
 		entry, ok := c[id]
@@ -119,6 +120,47 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 	}
 	if c["busybox"].Manifest.SchemaVersion != manifest.BackupSchemaVersion {
 		t.Fatal("busybox must remain a schema-v6 compatibility fixture")
+	}
+}
+
+func TestPlexProfileIsConstrained(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c["plex"].Manifest
+	if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.ID != "plex" || m.Name != "Plex" || m.Category != "Media" || m.Kind != "application" || m.CatalogStatus != "standard" {
+		t.Fatalf("unexpected Plex identity or metadata: %#v", m)
+	}
+	if m.WebsiteURL != "https://www.plex.tv/" || m.SourceURL != "https://github.com/plexinc/pms-docker" || m.DocumentationURL != "https://support.plex.tv/articles/200288586-installation/" || m.Logo != "" || len(m.Limitations) != 4 {
+		t.Fatalf("unexpected Plex presentation metadata: %#v", m)
+	}
+	for _, required := range []string{"CPU-only", "GPU", "Remote Access", "32400/TCP", "discovery"} {
+		found := false
+		for _, limitation := range m.Limitations {
+			found = found || strings.Contains(limitation, required)
+		}
+		if !found {
+			t.Fatalf("Plex limitations do not mention %s: %#v", required, m.Limitations)
+		}
+	}
+	if len(m.Releases) != 1 || m.Releases[0].Version != "1.43.4.10903-e5521bd8c" || m.Releases[0].Registry != "docker.io" || m.Releases[0].Repository != "plexinc/pms-docker" || m.Releases[0].Digest != "sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee" || m.Releases[0].Platform != "linux/amd64" {
+		t.Fatalf("unexpected Plex release: %#v", m.Releases)
+	}
+	if len(m.Components) != 0 || len(m.Hardware) != 0 || len(m.Command) != 0 || len(m.Environment) != 0 || m.RunAs != nil {
+		t.Fatalf("Plex acquired unexpected runtime authority: %#v", m)
+	}
+	if len(m.Storage) != 1 || m.Storage[0].ID != "config" || m.Storage[0].ContainerPath != "/config" || !m.Storage[0].Persistent || m.Storage[0].ReadOnly || m.Storage[0].OwnerUID != 0 || m.Storage[0].OwnerGID != 0 {
+		t.Fatalf("unexpected Plex managed storage: %#v", m.Storage)
+	}
+	if len(m.ExternalStorage) != 1 || m.ExternalStorage[0] != (manifest.ExternalStorage{ID: "media", ContainerPath: "/data", Mode: "read-only", Required: true, Purpose: "Media library"}) {
+		t.Fatalf("unexpected Plex external storage: %#v", m.ExternalStorage)
+	}
+	if len(m.Services) != 1 || m.Services[0].ID != "web" || m.Services[0].Protocol != "http" || m.Services[0].ContainerPort != 32400 {
+		t.Fatalf("unexpected Plex services: %#v", m.Services)
+	}
+	if m.Restart != "unless-stopped" || m.Backup == nil || m.Backup.Strategy != "cold-sqlite-filesystem" || len(m.Backup.Storage) != 1 || m.Backup.Storage[0] != (manifest.BackupStorage{Component: "app", ID: "config", Disposition: "include"}) {
+		t.Fatalf("unexpected Plex lifecycle policy: restart=%q backup=%#v", m.Restart, m.Backup)
 	}
 }
 

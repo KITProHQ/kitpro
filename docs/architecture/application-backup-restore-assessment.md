@@ -15,7 +15,7 @@ and restore operations.
 
 ## Scope and evidence
 
-The assessment covers the 16 applications currently visible in the KITPro
+The assessment covers the 17 applications currently visible in the KITPro
 catalog. The hidden BusyBox lifecycle fixture is considered separately because
 it is not a public application. The repository manifests are authoritative for
 the state KITPro mounts and the image releases KITPro runs. Upstream application
@@ -33,7 +33,7 @@ The deployed catalog currently has these properties:
   database, but the current KITPro manifests do not deploy one.
 - Paperless-ngx has an internal Redis component. Redis is a broker/cache, not
   the authoritative document database.
-- Audiobookshelf, Jellyfin, and Navidrome import read-only external libraries.
+- Audiobookshelf, Jellyfin, Navidrome, and Plex import read-only external libraries.
   SFTPGo imports a read-write external file root. These paths are approved by
   logical storage references and are not KITPro-managed application data.
 - `WEBUI_SECRET_KEY` is the only catalog-generated secret today. Its value is
@@ -110,6 +110,7 @@ and strategy tests but has not received its own live data round trip.
 | Ollama | `cold-filesystem` | Filesystem fixture | PASS: Rocky/Podman |
 | Open WebUI | `cold-sqlite-filesystem` | Direct SQLite and secret round trip | PASS: Rocky/Podman |
 | Paperless-ngx | `cold-sqlite-filesystem` | Direct multi-component round trip | PASS: Rocky/Podman |
+| Plex | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | SFTPGo | `cold-sqlite-filesystem` | Live opt-in Docker round trip | PASS: Docker |
 | Uptime Kuma | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Vaultwarden | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |

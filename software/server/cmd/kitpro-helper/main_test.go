@@ -323,6 +323,23 @@ func validForgejoRequest() protocol.Request {
 	}
 }
 
+func validPlexRequest() protocol.Request {
+	return protocol.Request{
+		Version: 1, ID: "op-plex1234567890", Operation: "InstallApplication",
+		ApplicationID: "plex", ReleaseID: "1.43.4.10903-e5521bd8c", InstanceID: "inst-plex0001", RuntimeGeneration: 1,
+		Image:         "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee",
+		NetworkName:   "kitpro-net-inst-plex0001-g1",
+		DataPath:      "/srv/kitpro/apps/plex/inst-plex0001/data",
+		RestartPolicy: "unless-stopped",
+		Storage:       []protocol.StorageMount{{ID: "config", ContainerPath: "/config", HostPath: "/srv/kitpro/apps/plex/inst-plex0001/config"}},
+		ExternalStorage: []protocol.ExternalStorageBinding{{
+			SlotID: "media", RootID: "storage-0123456789abcdef",
+		}},
+		Services:     []protocol.Service{{ID: "web", Protocol: "http", ContainerPort: 32400}},
+		ExposureMode: "internal",
+	}
+}
+
 func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	if err := validateApplicationPlan(validFreshRSSRequest()); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
@@ -350,6 +367,32 @@ func TestApplicationPlanValidationAcceptsExactForgejoPlan(t *testing.T) {
 			q.Image = image
 			if err := validateApplicationPlan(q); err == nil {
 				t.Fatalf("untrusted Forgejo image accepted: %s", image)
+			}
+		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsBoundedPlexPlan(t *testing.T) {
+	if err := validateApplicationPlan(validPlexRequest()); err != nil {
+		t.Fatalf("valid Plex plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing-media": func(r *protocol.Request) { r.ExternalStorage = nil },
+		"read-only-managed-config": func(r *protocol.Request) {
+			r.Storage[0].ReadOnly = true
+		},
+		"discovery-port": func(r *protocol.Request) {
+			r.Services = append(r.Services, protocol.Service{ID: "discovery", Protocol: "tcp", ContainerPort: 32469})
+		},
+		"gpu": func(r *protocol.Request) {
+			r.Hardware = []protocol.HardwareRequirement{{Class: "gpu.nvidia", Optional: true, CPUFallback: true}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := validPlexRequest()
+			mutate(&q)
+			if err := validateApplicationPlan(q); err == nil {
+				t.Fatalf("accepted Plex plan mutation %s", name)
 			}
 		})
 	}

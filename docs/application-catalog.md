@@ -6,7 +6,7 @@ runtime validation. Catalog content cannot request host paths, Docker socket
 access, privileged mode, host namespaces, devices, capabilities, or host port
 bindings. Service exposure is an installation policy and defaults to internal.
 
-The 16 visible entries use manifest schema version 7. Their category,
+The 17 visible entries use manifest schema version 7. Their category,
 application kind, catalog status, official links, and non-derivable limitations
 come from the manifest. The API and server-rendered catalog use that same
 source. Logo keys can reference reviewed packaged assets; entries without one
@@ -41,6 +41,7 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | Forgejo | Developer Tools | Self-hosted Git service | Single | Managed `/data` | CPU | HTTP, private by default; no Git-over-SSH or public HTTPS |
 | Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
 | Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
+| Plex | Media | Media library streaming | Single | Managed config plus read-only trusted media | CPU | TCP 32400 only; reduced discovery and no automatic remote access |
 | Navidrome | Music | Music streaming | Single | Managed database plus read-only trusted music | CPU | HTTP, private by default |
 | Audiobookshelf | Media | Audiobook streaming | Single | Managed config/metadata plus read-only trusted library | CPU | HTTP, private by default |
 | SFTPGo | Files | Scoped file access | Single | Managed config plus exclusive trusted read-write root | CPU | Web UI exposable; SFTP remains internal |
@@ -64,11 +65,12 @@ and automatic Internet exposure are unavailable.
 | Forgejo | 16.0.5 | `codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74` | managed `data` at `/data` | HTTP 3000 | GPL-3.0-or-later |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 | Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
+| Plex | 1.43.4.10903-e5521bd8c | `docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee` | managed `/config`; trusted read-only `/data` | HTTP 32400 | Proprietary |
 | Navidrome | 0.64.0 | `docker.io/deluan/navidrome@sha256:1a64cbb2603cec5d2615c3a27e91442436b2229583408a55cdc8d85705b95e65` | managed `/data`; trusted read-only `/music` | HTTP 4533 | GPL-3.0 |
 | Audiobookshelf | 2.36.0 | `ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8` | managed `/config` and `/metadata`; trusted read-only `/audiobooks` | HTTP 80 | GPL-3.0 |
 | SFTPGo | 2.7.5 | `ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e` | managed config; exclusive trusted read-write `/srv/sftpgo/data` | HTTP 8080; internal SFTP 2022/TCP | AGPL-3.0-only |
 
-The fifteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The sixteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -100,6 +102,16 @@ managed `/data` tree: repositories, configuration, the SQLite database, and
 generated application state. Runtime removal preserves that data. The first
 run remains Forgejo's browser onboarding flow, and future Forgejo transitions
 require release-specific migration validation before catalog publication.
+
+Plex uses the official fixed-version image rather than the self-updating
+`public` or `plexpass` variants. KITPro manages `/config`, which contains the
+server database, metadata, artwork, and configuration. The selected media root
+is mounted read-only at `/data` and is never copied into application backups.
+KITPro does not mount `/transcode`; Plex uses disposable container storage for
+temporary transcodes. Only HTTP 32400 is declared. Discovery, DLNA, companion
+ports, automatic remote access, GPU devices, and router configuration are not
+exposed or configured by KITPro. Initial claiming uses Plex's browser flow through loopback access;
+KITPro does not collect or generate `PLEX_CLAIM` tokens.
 
 Open WebUI and Ollama remain independent installations. KITPro installation networks are isolated, and no trusted cross-installation service-discovery primitive exists. Administrators can configure a separately reachable Ollama endpoint in Open WebUI, but KITPro does not add host networking or inject an unvalidated URL.
 
@@ -177,6 +189,7 @@ The following official sources were retrieved on 2026-09-13 unless noted:
 - whisper.cpp: [official repository and container definitions](https://github.com/ggml-org/whisper.cpp)
 - InvokeAI: [official Docker documentation](https://github.com/invoke-ai/InvokeAI/blob/main/docker/README.md)
 - Forgejo (2026-09-22): [release index](https://forgejo.org/releases/), [16.0.5 download](https://forgejo.org/download/), [official Docker installation](https://forgejo.org/docs/v16.0/admin/installation/docker/), and [upgrade guidance](https://forgejo.org/docs/v16.0/admin/upgrade/)
+- Plex (2026-09-22): [official container project](https://github.com/plexinc/pms-docker), [official image tags](https://hub.docker.com/r/plexinc/pms-docker/tags), and [Plex installation guidance](https://support.plex.tv/articles/200288586-installation/)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one
