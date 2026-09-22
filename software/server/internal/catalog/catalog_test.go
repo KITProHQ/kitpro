@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "ollama", "open-webui", "paperless-ngx", "sftpgo", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "ollama", "open-webui", "paperless-ngx", "sftpgo", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -29,6 +29,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		environment                     map[string]string
 	}{
 		{"freshrss", "1.29.1", "docker.io/freshrss/freshrss@sha256:118f51ee604853547c085a0235d08a2ed98222e7a7010156cb9e7c86a7f24c21", "/var/www/FreshRSS/data", 80, map[string]string{"TZ": "UTC"}},
+		{"forgejo", "16.0.5", "codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74", "/data", 3000, map[string]string{"USER_UID": "1000", "USER_GID": "1000"}},
 		{"uptime-kuma", "2.3.1", "docker.io/louislam/uptime-kuma@sha256:92fd01c488771d1bcb0b299770255c06994ab7e4f079b7c7fcf52b8e08789a67", "/app/data", 3001, nil},
 		{"mealie", "3.24.0", "ghcr.io/mealie-recipes/mealie@sha256:3d2384661634e954c12ec27bb5b25a0263832f9e39044f145d726d388e9f8268", "/app/data", 9000, map[string]string{"ALLOW_SIGNUP": "false", "TZ": "UTC"}},
 		{"memos", "0.30.0", "docker.io/neosmemo/memos@sha256:51a4cef418b1f173ac37139ad99de08da5b8662136007231d3ac8a0498a3095a", "/var/opt/memos", 5230, nil},
@@ -90,15 +91,15 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 	}
 	wantCategories := map[string]string{
 		"actual-budget": "Finance", "audiobookshelf": "Media",
-		"freshrss": "Reading", "home-assistant": "Home automation",
+		"forgejo": "Developer Tools", "freshrss": "Reading", "home-assistant": "Home automation",
 		"it-tools": "Developer Tools", "jellyfin": "Media",
 		"mealie": "Food and recipes", "memos": "Notes",
 		"navidrome": "Music", "ollama": "AI", "open-webui": "AI",
 		"paperless-ngx": "Documents", "sftpgo": "Files",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
 	}
-	if len(wantCategories) != 15 {
-		t.Fatal("visible catalog metadata fixture must cover all 15 applications")
+	if len(wantCategories) != 16 {
+		t.Fatal("visible catalog metadata fixture must cover all 16 applications")
 	}
 	for id, category := range wantCategories {
 		entry, ok := c[id]
@@ -118,5 +119,43 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 	}
 	if c["busybox"].Manifest.SchemaVersion != manifest.BackupSchemaVersion {
 		t.Fatal("busybox must remain a schema-v6 compatibility fixture")
+	}
+}
+
+func TestForgejoProfileIsConstrained(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c["forgejo"].Manifest
+	if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.ID != "forgejo" || m.Name != "Forgejo" || m.Category != "Developer Tools" || m.Kind != "application" || m.CatalogStatus != "standard" {
+		t.Fatalf("unexpected Forgejo identity or metadata: %#v", m)
+	}
+	if m.WebsiteURL != "https://forgejo.org/" || m.SourceURL != "https://codeberg.org/forgejo/forgejo" || m.DocumentationURL != "https://forgejo.org/docs/latest/" || m.Logo != "" || len(m.Limitations) != 3 {
+		t.Fatalf("unexpected Forgejo presentation metadata: %#v", m)
+	}
+	for _, required := range []string{"Git-over-SSH", "SQLite", "HTTPS"} {
+		found := false
+		for _, limitation := range m.Limitations {
+			found = found || strings.Contains(limitation, required)
+		}
+		if !found {
+			t.Fatalf("Forgejo limitations do not mention %s: %#v", required, m.Limitations)
+		}
+	}
+	if len(m.Releases) != 1 || m.Releases[0].Version != "16.0.5" || m.Releases[0].Registry != "codeberg.org" || m.Releases[0].Repository != "forgejo/forgejo" || m.Releases[0].Digest != "sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74" || m.Releases[0].Platform != "linux/amd64" {
+		t.Fatalf("unexpected Forgejo release: %#v", m.Releases)
+	}
+	if len(m.Components) != 0 || len(m.ExternalStorage) != 0 || m.RunAs != nil || len(m.Hardware) != 0 || len(m.Command) != 0 {
+		t.Fatalf("Forgejo acquired unexpected runtime authority: %#v", m)
+	}
+	if len(m.Storage) != 1 || m.Storage[0].ID != "data" || m.Storage[0].ContainerPath != "/data" || !m.Storage[0].Persistent || m.Storage[0].ReadOnly || m.Storage[0].OwnerUID != 1000 || m.Storage[0].OwnerGID != 1000 {
+		t.Fatalf("unexpected Forgejo storage: %#v", m.Storage)
+	}
+	if len(m.Services) != 1 || m.Services[0].ID != "web" || m.Services[0].Protocol != "http" || m.Services[0].ContainerPort != 3000 {
+		t.Fatalf("unexpected Forgejo services: %#v", m.Services)
+	}
+	if m.Restart != "unless-stopped" || m.Backup == nil || m.Backup.Strategy != "cold-sqlite-filesystem" || len(m.Backup.Storage) != 1 || m.Backup.Storage[0] != (manifest.BackupStorage{Component: "app", ID: "data", Disposition: "include"}) {
+		t.Fatalf("unexpected Forgejo lifecycle policy: restart=%q backup=%#v", m.Restart, m.Backup)
 	}
 }

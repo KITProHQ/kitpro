@@ -252,7 +252,7 @@ func Validate(m Manifest) error {
 			return fmt.Errorf("duplicate/invalid release version")
 		}
 		seen[r.Version] = true
-		if r.Registry != "docker.io" && r.Registry != "ghcr.io" {
+		if r.Registry != "docker.io" && r.Registry != "ghcr.io" && r.Registry != "codeberg.org" {
 			return fmt.Errorf("registry not allowed")
 		}
 		if strings.ContainsAny(r.Repository, " \t\n") || !digestPattern.MatchString(r.Digest) || r.Platform != "linux/amd64" {

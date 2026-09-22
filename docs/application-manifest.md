@@ -179,8 +179,10 @@ See [GPU and device access architecture](architecture/gpu-device-access.md).
 
 IDs are lowercase, bounded, and stable. Release versions are metadata; the
 deployment image is always `registry/repository@sha256:digest`. The
-single-container schema allows
-only Docker Hub and GHCR image identities and `linux/amd64` releases.
+single-container schema allows only Docker Hub, GHCR, and Codeberg image
+identities and `linux/amd64` releases. This is a registry-host allowlist. Each
+shipped repository and digest is still fixed by the embedded catalog and
+revalidated against the resolved helper plan.
 
 Storage declarations contain logical IDs and container paths only. KITPro
 derives host paths under `/srv/kitpro/apps/<application>/<installation>/`; users

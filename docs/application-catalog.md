@@ -6,7 +6,7 @@ runtime validation. Catalog content cannot request host paths, Docker socket
 access, privileged mode, host namespaces, devices, capabilities, or host port
 bindings. Service exposure is an installation policy and defaults to internal.
 
-The 15 visible entries use manifest schema version 7. Their category,
+The 16 visible entries use manifest schema version 7. Their category,
 application kind, catalog status, official links, and non-derivable limitations
 come from the manifest. The API and server-rendered catalog use that same
 source. Logo keys can reference reviewed packaged assets; entries without one
@@ -38,6 +38,7 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | Paperless-ngx | Documents | Document archive | Multi | Managed app, media, consume, export, and broker data | CPU | Web only; Redis remains internal |
 | Open WebUI | AI | Authenticated AI interface | Single | Managed data and generated secret | CPU | HTTP, private by default; backend configured separately |
 | IT-Tools | Developer Tools | Browser utilities | Single | Stateless | CPU | HTTP, private by default |
+| Forgejo | Developer Tools | Self-hosted Git service | Single | Managed `/data` | CPU | HTTP, private by default; no Git-over-SSH or public HTTPS |
 | Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
 | Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
 | Navidrome | Music | Music streaming | Single | Managed database plus read-only trusted music | CPU | HTTP, private by default |
@@ -60,13 +61,14 @@ and automatic Internet exposure are unavailable.
 | Paperless-ngx | 2.20.15 + Redis 7.4.11 | `docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f` plus `docker.io/library/redis@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7` | web `data`, `media`, `consume`, `export`; broker `data` | HTTP 8000 (web only) | GPL-3.0 |
 | Open WebUI | 0.11.3 | `ghcr.io/open-webui/open-webui@sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c` | `data` at `/app/backend/data` | HTTP 8080 | Open WebUI license |
 | IT-Tools | 2024.10.22-7ca5933 | `docker.io/corentinth/it-tools@sha256:6f177c156b9466610e0f2093e24668b78da501c66f0054f98bccb582b74ab26b` | None | HTTP 80 | GPL-3.0 |
+| Forgejo | 16.0.5 | `codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74` | managed `data` at `/data` | HTTP 3000 | GPL-3.0-or-later |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 | Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
 | Navidrome | 0.64.0 | `docker.io/deluan/navidrome@sha256:1a64cbb2603cec5d2615c3a27e91442436b2229583408a55cdc8d85705b95e65` | managed `/data`; trusted read-only `/music` | HTTP 4533 | GPL-3.0 |
 | Audiobookshelf | 2.36.0 | `ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8` | managed `/config` and `/metadata`; trusted read-only `/audiobooks` | HTTP 80 | GPL-3.0 |
 | SFTPGo | 2.7.5 | `ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e` | managed config; exclusive trusted read-write `/srv/sftpgo/data` | HTTP 8080; internal SFTP 2022/TCP | AGPL-3.0-only |
 
-The fourteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The fifteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -88,6 +90,16 @@ loopback.
 
 IT-Tools is intentionally stateless. It needs one HTTP container, no storage,
 secrets, devices, capabilities, host networking, or background components.
+
+Forgejo uses its official single-container image with SQLite and managed
+`/data`. KITPro sets the documented UID/GID to match managed storage but does
+not force a container user, allowing the official entrypoint to initialize
+ownership before it starts Forgejo. Only HTTP 3000 is declared; the image's SSH
+port is not published. The cold SQLite/filesystem backup includes the complete
+managed `/data` tree: repositories, configuration, the SQLite database, and
+generated application state. Runtime removal preserves that data. The first
+run remains Forgejo's browser onboarding flow, and future Forgejo transitions
+require release-specific migration validation before catalog publication.
 
 Open WebUI and Ollama remain independent installations. KITPro installation networks are isolated, and no trusted cross-installation service-discovery primitive exists. Administrators can configure a separately reachable Ollama endpoint in Open WebUI, but KITPro does not add host networking or inject an unvalidated URL.
 
@@ -143,7 +155,7 @@ current schema rather than accepted from an old rejection or an old workaround.
 
 ## Upstream provenance
 
-The following official sources were retrieved on 2026-09-13:
+The following official sources were retrieved on 2026-09-13 unless noted:
 
 - FreshRSS: [project releases](https://github.com/FreshRSS/FreshRSS/releases), [official image](https://hub.docker.com/r/freshrss/freshrss)
 - Uptime Kuma: [project and Docker instructions](https://github.com/louislam/uptime-kuma), [2.3.1 release](https://github.com/louislam/uptime-kuma/releases/tag/2.3.1), [image tag policy](https://github.com/louislam/uptime-kuma/wiki/Docker-Tags)
@@ -164,6 +176,7 @@ The following official sources were retrieved on 2026-09-13:
 - Frigate: [official installation](https://docs.frigate.video/frigate/installation/)
 - whisper.cpp: [official repository and container definitions](https://github.com/ggml-org/whisper.cpp)
 - InvokeAI: [official Docker documentation](https://github.com/invoke-ai/InvokeAI/blob/main/docker/README.md)
+- Forgejo (2026-09-22): [release index](https://forgejo.org/releases/), [16.0.5 download](https://forgejo.org/download/), [official Docker installation](https://forgejo.org/docs/v16.0/admin/installation/docker/), and [upgrade guidance](https://forgejo.org/docs/v16.0/admin/upgrade/)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one

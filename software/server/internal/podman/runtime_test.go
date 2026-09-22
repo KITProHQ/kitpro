@@ -212,6 +212,30 @@ func TestPlanValidationRejectsWildcardAndSecretNewline(t *testing.T) {
 	}
 }
 
+func TestImagePolicyAcceptsCodebergAndRejectsLookalikeHosts(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for _, image := range []string{
+		"docker.io/library/busybox" + digest,
+		"ghcr.io/example/project" + digest,
+		"codeberg.org/forgejo/forgejo" + digest,
+		"codeberg.org/unrelated/project" + digest,
+	} {
+		if !validImage(image) {
+			t.Fatalf("trusted host image rejected: %s", image)
+		}
+	}
+	for _, image := range []string{
+		"evil.example/project/image" + digest,
+		"evil.codeberg.org/project/image" + digest,
+		"codeberg.org.evil.example/project/image" + digest,
+		"codeberg.org/forgejo/forgejo:16.0.5",
+	} {
+		if validImage(image) {
+			t.Fatalf("untrusted or mutable image accepted: %s", image)
+		}
+	}
+}
+
 func TestCreateContainerPlanBracketsIPv6PublishAddress(t *testing.T) {
 	runtime, _, units, _ := testRuntime(t)
 	plan := containers.ContainerPlan{

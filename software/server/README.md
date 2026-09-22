@@ -13,7 +13,7 @@ See the definitive [support matrix](../../docs/support-matrix.md).
 
 ## Runtime model
 
-- Strict, schema-versioned catalog manifests resolve to typed single- or multi-container plans. Fourteen catalog apps are single-container; Paperless-ngx owns a web component and internal Redis broker.
+- Strict, schema-versioned catalog manifests resolve to typed single- or multi-container plans. Fifteen catalog apps are single-container; Paperless-ngx owns a web component and internal Redis broker.
 - Installation identity, generated secrets, managed storage, exposure policy, and external-storage bindings persist independently of disposable runtime generations.
 - Services begin internal-only and may be published only on loopback or one configured LAN address. Wildcard publication and host networking are rejected.
 - Hardware requests use bounded device classes. NVIDIA acceleration is certified for Ollama on the published test boundary; CPU fallback remains available.

@@ -27,6 +27,27 @@ func TestParseAndResolve(t *testing.T) {
 	}
 }
 
+func TestTrustedRegistryPolicyIncludesExactCodebergHost(t *testing.T) {
+	for _, registry := range []string{"docker.io", "ghcr.io", "codeberg.org"} {
+		data := strings.Replace(valid, `"registry":"docker.io"`, `"registry":"`+registry+`"`, 1)
+		if _, err := Parse([]byte(data)); err != nil {
+			t.Fatalf("trusted registry %s rejected: %v", registry, err)
+		}
+	}
+	// Registry policy is host-scoped today. Catalog review and helper-side exact
+	// plan comparison provide the narrower repository trust boundary.
+	arbitraryCodebergRepository := strings.Replace(valid, `"registry":"docker.io","repository":"library/busybox"`, `"registry":"codeberg.org","repository":"unrelated/project"`, 1)
+	if _, err := Parse([]byte(arbitraryCodebergRepository)); err != nil {
+		t.Fatalf("host-scoped Codeberg policy changed: %v", err)
+	}
+	for _, registry := range []string{"evil.example", "evil.codeberg.org", "codeberg.org.evil.example"} {
+		data := strings.Replace(valid, `"registry":"docker.io"`, `"registry":"`+registry+`"`, 1)
+		if _, err := Parse([]byte(data)); err == nil {
+			t.Fatalf("untrusted registry %s accepted", registry)
+		}
+	}
+}
+
 func TestSchemaVersionsOneThroughSevenRemainParseable(t *testing.T) {
 	versions := map[string]string{
 		"v1": valid,

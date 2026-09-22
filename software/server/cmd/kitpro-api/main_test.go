@@ -310,7 +310,7 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	request.AddCookie(csrf)
 	a.home(recorder, request)
 	body := recorder.Body.String()
-	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") {
+	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") {
 		t.Fatalf("catalog presentation is not curated: %s", body)
 	}
 }
@@ -333,21 +333,27 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &items); err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	visible, found := 0, false
 	for _, item := range items {
-		if item.ID == "vaultwarden" {
+		if catalogVisible(item.ID) {
+			visible++
+		}
+		if item.ID == "forgejo" {
 			found = true
-			if item.Category != "Security" || item.Kind != "application" || item.CatalogStatus != "standard" || item.SourceURL == "" || len(item.Limitations) != 1 {
+			if item.Category != "Developer Tools" || item.Kind != "application" || item.CatalogStatus != "standard" || item.SourceURL != "https://codeberg.org/forgejo/forgejo" || len(item.Limitations) != 3 {
 				t.Fatalf("incomplete catalog metadata: %#v", item)
 			}
 		}
 	}
+	if visible != 16 {
+		t.Fatalf("visible catalog has %d applications, want 16", visible)
+	}
 	if !found {
-		t.Fatal("vaultwarden missing from catalog API")
+		t.Fatal("Forgejo missing from catalog API")
 	}
 
 	recorder = httptest.NewRecorder()
-	a.apps(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/apps/vaultwarden", nil))
+	a.apps(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/apps/forgejo", nil))
 	var detail struct {
 		SchemaVersion int    `json:"schema_version"`
 		ID            string `json:"id"`
@@ -359,7 +365,7 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.SchemaVersion != manifest.CatalogMetadataSchemaVersion || detail.ID != "vaultwarden" || detail.Category != "Security" || detail.Kind != "application" || detail.CatalogStatus != "standard" || detail.SourceURL == "" {
+	if detail.SchemaVersion != manifest.CatalogMetadataSchemaVersion || detail.ID != "forgejo" || detail.Category != "Developer Tools" || detail.Kind != "application" || detail.CatalogStatus != "standard" || detail.SourceURL != "https://codeberg.org/forgejo/forgejo" {
 		t.Fatalf("incomplete catalog detail: %#v", detail)
 	}
 }
@@ -600,6 +606,35 @@ func TestMultiContainerInstallUsesTopLevelRelease(t *testing.T) {
 	}
 	if len(received.Components) != 2 || received.Components[0].ID != "broker" || received.Components[1].ID != "web" {
 		t.Fatalf("unexpected component plan: %#v", received.Components)
+	}
+}
+
+func TestForgejoInstallUsesConstrainedRuntimePlan(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.apps)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/apps/forgejo/install", "", session, csrf))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.Image != "codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74" || received.ReleaseID != "16.0.5" || received.ExposureMode != "internal" || received.RestartPolicy != "unless-stopped" {
+		t.Fatalf("unexpected Forgejo release or lifecycle plan: %#v", received)
+	}
+	if len(received.Components) != 0 || len(received.Hardware) != 0 || len(received.ExternalStorage) != 0 || received.RunAs != nil || len(received.Command) != 0 {
+		t.Fatalf("Forgejo plan acquired unexpected runtime authority: %#v", received)
+	}
+	if len(received.Services) != 1 || received.Services[0] != (protocol.Service{ID: "web", Protocol: "http", ContainerPort: 3000}) {
+		t.Fatalf("unexpected Forgejo services: %#v", received.Services)
+	}
+	if len(received.Storage) != 1 || received.Storage[0].ContainerPath != "/data" || received.Storage[0].ReadOnly || received.Storage[0].OwnerUID != 1000 || received.Storage[0].OwnerGID != 1000 {
+		t.Fatalf("unexpected Forgejo storage: %#v", received.Storage)
+	}
+	if len(received.Environment) != 2 || received.Environment[0] != (protocol.EnvVar{Name: "USER_UID", Value: "1000"}) || received.Environment[1] != (protocol.EnvVar{Name: "USER_GID", Value: "1000"}) {
+		t.Fatalf("unexpected Forgejo environment: %#v", received.Environment)
 	}
 }
 

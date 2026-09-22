@@ -308,6 +308,21 @@ func validFreshRSSRequest() protocol.Request {
 	}
 }
 
+func validForgejoRequest() protocol.Request {
+	return protocol.Request{
+		Version: 1, ID: "op-forgejo12345678", Operation: "InstallApplication",
+		ApplicationID: "forgejo", ReleaseID: "16.0.5", InstanceID: "inst-forgejo01", RuntimeGeneration: 1,
+		Image:         "codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74",
+		NetworkName:   "kitpro-net-inst-forgejo01-g1",
+		DataPath:      "/srv/kitpro/apps/forgejo/inst-forgejo01/data",
+		RestartPolicy: "unless-stopped",
+		Environment:   []protocol.EnvVar{{Name: "USER_UID", Value: "1000"}, {Name: "USER_GID", Value: "1000"}},
+		Storage:       []protocol.StorageMount{{ID: "data", ContainerPath: "/data", HostPath: "/srv/kitpro/apps/forgejo/inst-forgejo01/data", OwnerUID: 1000, OwnerGID: 1000}},
+		Services:      []protocol.Service{{ID: "web", Protocol: "http", ContainerPort: 3000}},
+		ExposureMode:  "internal",
+	}
+}
+
 func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	if err := validateApplicationPlan(validFreshRSSRequest()); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
@@ -319,6 +334,24 @@ func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	q.NetworkName = "kitpro-net-inst-12345678-g2"
 	if err := validateApplicationPlan(q); err != nil {
 		t.Fatalf("valid loopback plan rejected: %v", err)
+	}
+}
+
+func TestApplicationPlanValidationAcceptsExactForgejoPlan(t *testing.T) {
+	if err := validateApplicationPlan(validForgejoRequest()); err != nil {
+		t.Fatalf("valid Forgejo plan rejected: %v", err)
+	}
+	for name, image := range map[string]string{
+		"other-codeberg-repository": "codeberg.org/unrelated/project@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74",
+		"lookalike-host":            "evil.codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74",
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := validForgejoRequest()
+			q.Image = image
+			if err := validateApplicationPlan(q); err == nil {
+				t.Fatalf("untrusted Forgejo image accepted: %s", image)
+			}
+		})
 	}
 }
 

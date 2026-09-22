@@ -526,7 +526,7 @@ func publishAddress(value string) string {
 
 func validImage(value string) bool {
 	parts := strings.Split(value, "@sha256:")
-	if len(parts) != 2 || len(parts[1]) != 64 || (!strings.HasPrefix(parts[0], "docker.io/") && !strings.HasPrefix(parts[0], "ghcr.io/")) {
+	if len(parts) != 2 || len(parts[1]) != 64 || (!strings.HasPrefix(parts[0], "docker.io/") && !strings.HasPrefix(parts[0], "ghcr.io/") && !strings.HasPrefix(parts[0], "codeberg.org/")) {
 		return false
 	}
 	for _, ch := range parts[1] {

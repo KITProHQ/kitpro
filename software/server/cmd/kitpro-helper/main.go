@@ -528,7 +528,7 @@ func hardwareAssignmentView(db *sql.DB, installation string) (map[string]any, er
 }
 func validateApplicationPlan(r protocol.Request) error {
 	digest := r.Image[strings.LastIndex(r.Image, "@sha256:")+1:]
-	if r.ApplicationID == "" || r.ReleaseID == "" || r.InstanceID == "" || (!strings.HasPrefix(r.Image, "docker.io/") && !strings.HasPrefix(r.Image, "ghcr.io/")) || !strings.Contains(r.Image, "@sha256:") || len(digest) != 71 {
+	if r.ApplicationID == "" || r.ReleaseID == "" || r.InstanceID == "" || (!strings.HasPrefix(r.Image, "docker.io/") && !strings.HasPrefix(r.Image, "ghcr.io/") && !strings.HasPrefix(r.Image, "codeberg.org/")) || !strings.Contains(r.Image, "@sha256:") || len(digest) != 71 {
 		return fmt.Errorf("invalid application plan")
 	}
 	for _, c := range digest[7:] {

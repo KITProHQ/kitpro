@@ -15,7 +15,7 @@ and restore operations.
 
 ## Scope and evidence
 
-The assessment covers the 15 applications currently visible in the KITPro
+The assessment covers the 16 applications currently visible in the KITPro
 catalog. The hidden BusyBox lifecycle fixture is considered separately because
 it is not a public application. The repository manifests are authoritative for
 the state KITPro mounts and the image releases KITPro runs. Upstream application
@@ -99,6 +99,7 @@ and strategy tests but has not received its own live data round trip.
 | --- | --- | --- | --- |
 | Actual Budget | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Audiobookshelf | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
+| Forgejo | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | FreshRSS | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Home Assistant | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | IT-Tools | `metadata-only` | Direct no-downtime test | Strategy coverage |
