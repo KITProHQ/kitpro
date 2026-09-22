@@ -7,10 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kitpro/kitpro/software/server/internal/appconfig"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
@@ -27,6 +29,95 @@ import (
 type startupLifecycleRuntime struct {
 	networks   map[string]containers.NetworkObservation
 	containers map[string]containers.ContainerObservation
+}
+
+type configurationBootstrapRuntime struct {
+	plan       containers.ContainerPlan
+	pulled     string
+	started    bool
+	removed    bool
+	configRoot string
+}
+
+func (r *configurationBootstrapRuntime) Name() string { return "test" }
+func (r *configurationBootstrapRuntime) Version() (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) Info() (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) Pull(image string) error { r.pulled = image; return nil }
+func (r *configurationBootstrapRuntime) CreateNetwork(string, map[string]string) (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) CreateContainerPlan(plan containers.ContainerPlan) (string, error) {
+	r.plan = plan
+	return "bootstrap-id", nil
+}
+func (r *configurationBootstrapRuntime) Start(id string) error {
+	return r.StartContainer(context.Background(), id)
+}
+func (r *configurationBootstrapRuntime) Stop(string) error   { return nil }
+func (r *configurationBootstrapRuntime) Remove(string) error { r.removed = true; return nil }
+func (r *configurationBootstrapRuntime) RemoveNetwork(string) error {
+	return errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) Inspect(string) (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) ListContainers() ([]containers.ContainerSummary, error) {
+	return nil, nil
+}
+func (r *configurationBootstrapRuntime) HasForeignNetworkMember(string, string) (bool, error) {
+	return false, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) HasForeignNetworkMembers(string, map[string]bool) (bool, error) {
+	return false, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) PullImage(_ context.Context, image string) error {
+	r.pulled = image
+	return nil
+}
+func (r *configurationBootstrapRuntime) ObserveImage(context.Context, string) (containers.ImageObservation, error) {
+	return containers.ImageObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) CreateLifecycleNetwork(context.Context, string, map[string]string) (containers.NetworkObservation, error) {
+	return containers.NetworkObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) ObserveNetwork(context.Context, string) (containers.NetworkObservation, error) {
+	return containers.NetworkObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) CreateLifecycleContainer(_ context.Context, plan containers.ContainerPlan) (string, error) {
+	r.plan = plan
+	return "bootstrap-id", nil
+}
+func (r *configurationBootstrapRuntime) ObserveContainer(context.Context, string) (containers.ContainerObservation, error) {
+	return containers.ContainerObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) StartContainer(context.Context, string) error {
+	r.started = true
+	directory := filepath.Join(r.configRoot, "config")
+	if err := os.MkdirAll(directory, 0750); err != nil {
+		return err
+	}
+	configuration := `<?xml version="1.0"?><configuration version="52"><device id="GENERATED-DEVICE-ID"></device><gui><apikey>GENERATED-API-KEY</apikey></gui><options><listenAddress>default</listenAddress><listenAddress>quic://0.0.0.0:22000</listenAddress><globalAnnounceEnabled>true</globalAnnounceEnabled><localAnnounceEnabled>true</localAnnounceEnabled><relaysEnabled>true</relaysEnabled><natEnabled>true</natEnabled><startBrowser>true</startBrowser><urAccepted>0</urAccepted><autoUpgradeIntervalH>12</autoUpgradeIntervalH><crashReportingEnabled>true</crashReportingEnabled></options></configuration>`
+	for name, contents := range map[string]string{"config.xml": configuration, "cert.pem": "generated certificate", "key.pem": "generated key"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (r *configurationBootstrapRuntime) StopContainer(context.Context, string) error { return nil }
+func (r *configurationBootstrapRuntime) RemoveContainer(context.Context, string) error {
+	r.removed = true
+	return nil
+}
+func (r *configurationBootstrapRuntime) RemoveLifecycleNetwork(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) WaitContainer(context.Context, string, containers.RuntimeState, time.Duration) (containers.ContainerObservation, error) {
+	return containers.ContainerObservation{Exists: true, State: containers.RuntimeStopped}, nil
 }
 
 func (r *startupLifecycleRuntime) PullImage(context.Context, string) error {
@@ -415,6 +506,33 @@ func validPiHoleRequest() protocol.Request {
 	}
 }
 
+func validSyncthingRequest() protocol.Request {
+	return protocol.Request{
+		Version: 2, ID: "op-syncthing12345", OperationID: "op-1234567890abcdef1234567890abcdef", OperationRevision: 1, Operation: "InstallApplication",
+		ApplicationID: "syncthing", ReleaseID: "2.1.5", InstanceID: "inst-syncthing01", RuntimeGeneration: 1,
+		Image:         "docker.io/syncthing/syncthing@sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef",
+		NetworkName:   "kitpro-net-inst-syncthing01-g1",
+		DataPath:      "/srv/kitpro/apps/syncthing/inst-syncthing01/data",
+		RestartPolicy: "unless-stopped",
+		Environment: []protocol.EnvVar{
+			{Name: "STGUIADDRESS", Value: "0.0.0.0:8384"},
+			{Name: "STNOBROWSER", Value: "true"},
+			{Name: "STNORESTART", Value: "true"},
+			{Name: "STNOUPGRADE", Value: "true"},
+			{Name: "STNOPORTPROBING", Value: "true"},
+		},
+		Storage:         []protocol.StorageMount{{ID: "config", ContainerPath: "/var/syncthing", HostPath: "/srv/kitpro/apps/syncthing/inst-syncthing01/config", OwnerUID: 1000, OwnerGID: 1000}},
+		ExternalStorage: []protocol.ExternalStorageBinding{{SlotID: "sync", RootID: "storage-0123456789abcdef"}},
+		Services:        []protocol.Service{{ID: "gui", Protocol: "http", ContainerPort: 8384}, {ID: "sync-tcp", Protocol: "tcp", ContainerPort: 22000}},
+		Bindings: []protocol.ServiceBinding{
+			{ServiceID: "gui", Transport: "tcp", ContainerPort: 8384, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+			{ServiceID: "sync-tcp", Transport: "tcp", ContainerPort: 22000, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 22000},
+		},
+		RunAs:         &protocol.RuntimeIdentity{UID: 1000, GID: 1000},
+		Configuration: &protocol.ConfigurationPolicy{Type: "syncthing-tcp-only-v1", StorageID: "config"},
+	}
+}
+
 func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	if err := validateApplicationPlan(validFreshRSSRequest()); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
@@ -502,6 +620,116 @@ func TestApplicationPlanValidationAcceptsExactPiHolePlan(t *testing.T) {
 				t.Fatal("tampered Pi-hole plan accepted")
 			}
 		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsBoundedSyncthingPlan(t *testing.T) {
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", "10.0.0.2")
+	request := validSyncthingRequest()
+	if err := validateApplicationPlan(request); err != nil {
+		t.Fatalf("valid Syncthing plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing policy":       func(r *protocol.Request) { r.Configuration = nil },
+		"wrong policy":         func(r *protocol.Request) { r.Configuration.Type = "arbitrary-template" },
+		"wrong policy storage": func(r *protocol.Request) { r.Configuration.StorageID = "sync" },
+		"missing TCP":          func(r *protocol.Request) { r.Bindings = r.Bindings[:1] },
+		"UDP sync":             func(r *protocol.Request) { r.Bindings[1].Transport = "udp" },
+		"dynamic sync port":    func(r *protocol.Request) { r.Bindings[1].HostPort = 22001 },
+		"discovery service": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "discovery", Transport: "udp", ContainerPort: 21027, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 21027})
+		},
+		"missing sync root": func(r *protocol.Request) { r.ExternalStorage = nil },
+		"host network":      func(r *protocol.Request) { r.NetworkName = "host" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			candidate.Bindings = append([]protocol.ServiceBinding(nil), request.Bindings...)
+			if request.Configuration != nil {
+				copyPolicy := *request.Configuration
+				candidate.Configuration = &copyPolicy
+			}
+			mutate(&candidate)
+			if err := validateApplicationPlan(candidate); err == nil {
+				t.Fatal("tampered Syncthing plan accepted")
+			}
+		})
+	}
+}
+
+func TestSyncthingConfigurationBootstrapIsOfflineTypedAndRemoved(t *testing.T) {
+	root := t.TempDir()
+	runtime := &configurationBootstrapRuntime{configRoot: root}
+	request := validSyncthingRequest()
+	request.Storage[0].HostPath = root
+	labels := map[string]string{
+		ownership.LabelManaged:  "true",
+		ownership.LabelInstance: request.InstanceID,
+		ownership.LabelResource: "application",
+	}
+	if err := prepareStructuredConfiguration(context.Background(), runtime, runtime, request, labels); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.pulled != request.Image || !runtime.started || !runtime.removed {
+		t.Fatalf("bootstrap lifecycle incomplete: %#v", runtime)
+	}
+	if runtime.plan.Network != "none" || runtime.plan.RestartPolicy != "" || len(runtime.plan.PortBindings) != 0 || len(runtime.plan.Environment) != 0 || len(runtime.plan.Devices) != 0 || len(runtime.plan.DeviceRequests) != 0 {
+		t.Fatalf("bootstrap gained network or runtime authority: %#v", runtime.plan)
+	}
+	if !reflect.DeepEqual(runtime.plan.Command, []string{"generate", "--no-port-probing"}) || runtime.plan.User != "1000:1000" {
+		t.Fatalf("unexpected bootstrap command or identity: %#v", runtime.plan)
+	}
+	if len(runtime.plan.Storage) != 1 || runtime.plan.Storage[0] != (containers.StorageMount{HostPath: root, ContainerPath: "/var/syncthing"}) {
+		t.Fatalf("unexpected bootstrap storage: %#v", runtime.plan.Storage)
+	}
+	if runtime.plan.Labels[ownership.LabelResource] != "configuration-bootstrap" {
+		t.Fatalf("bootstrap ownership labels missing: %#v", runtime.plan.Labels)
+	}
+	if err := appconfig.Verify(appconfig.SyncthingTCPOnlyV1, root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "config", "config.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "GENERATED-DEVICE-ID") || !strings.Contains(string(data), "GENERATED-API-KEY") {
+		t.Fatal("Syncthing-generated identity was not preserved")
+	}
+}
+
+func TestSyncthingConfigurationIsReappliedWithoutRegeneratingIdentity(t *testing.T) {
+	root := t.TempDir()
+	runtime := &configurationBootstrapRuntime{configRoot: root}
+	if err := runtime.StartContainer(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	runtime.started = false
+	request := validSyncthingRequest()
+	request.Storage[0].HostPath = root
+	if err := prepareStructuredConfiguration(context.Background(), runtime, runtime, request, nil); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.started || runtime.pulled != "" || runtime.removed {
+		t.Fatalf("existing identity was regenerated: %#v", runtime)
+	}
+	if err := appconfig.Verify(appconfig.SyncthingTCPOnlyV1, root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncthingConfigurationRejectsIncompleteExistingIdentity(t *testing.T) {
+	root := t.TempDir()
+	runtime := &configurationBootstrapRuntime{configRoot: root}
+	if err := runtime.StartContainer(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "key.pem"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	request := validSyncthingRequest()
+	request.Storage[0].HostPath = root
+	if err := prepareStructuredConfiguration(context.Background(), runtime, runtime, request, nil); err == nil {
+		t.Fatal("incomplete existing Syncthing identity was accepted")
 	}
 }
 

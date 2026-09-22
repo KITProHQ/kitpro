@@ -1,0 +1,73 @@
+{
+  "schema_version": 8,
+  "id": "syncthing",
+  "name": "Syncthing",
+  "description": "Synchronize files directly between trusted devices using a constrained manual TCP profile.",
+  "category": "Productivity",
+  "kind": "application",
+  "catalog_status": "experimental",
+  "website_url": "https://syncthing.net/",
+  "source_url": "https://github.com/syncthing/syncthing",
+  "documentation_url": "https://docs.syncthing.net/",
+  "limitations": [
+    "This KITPro profile supports manually addressed peers over TCP only; global discovery, local discovery, relays, NAT traversal, and QUIC are disabled.",
+    "The administration interface is loopback-only by default and initially has no Syncthing GUI password.",
+    "KITPro does not automate device pairing, peer addresses, folder creation, firewall changes, or router configuration.",
+    "One administrator-registered read-write storage root is required and is mounted at /sync.",
+    "Application backup includes Syncthing configuration and device identity but excludes files stored in the external sync root.",
+    "Changing the constrained network settings inside Syncthing is outside this experimental KITPro profile."
+  ],
+  "releases": [{
+    "version": "2.1.5",
+    "registry": "docker.io",
+    "repository": "syncthing/syncthing",
+    "digest": "sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{
+    "id": "config",
+    "container_path": "/var/syncthing",
+    "persistent": true,
+    "read_only": false,
+    "owner_uid": 1000,
+    "owner_gid": 1000
+  }],
+  "environment": [
+    {"name": "STGUIADDRESS", "value": "0.0.0.0:8384"},
+    {"name": "STNOBROWSER", "value": "true"},
+    {"name": "STNORESTART", "value": "true"},
+    {"name": "STNOUPGRADE", "value": "true"},
+    {"name": "STNOPORTPROBING", "value": "true"}
+  ],
+  "external_storage": [{
+    "id": "sync",
+    "container_path": "/sync",
+    "mode": "read-write",
+    "required": true,
+    "purpose": "Synced files"
+  }],
+  "services": [
+    {
+      "id": "gui",
+      "name": "Administration Interface",
+      "protocol": "http",
+      "container_port": 8384,
+      "default_exposure": "loopback"
+    },
+    {
+      "id": "sync-tcp",
+      "name": "TCP Synchronization",
+      "protocol": "tcp",
+      "container_port": 22000,
+      "default_exposure": "lan",
+      "fixed_host_port": 22000
+    }
+  ],
+  "run_as": {"uid": 1000, "gid": 1000},
+  "configuration": {"type": "syncthing-tcp-only-v1", "storage_id": "config"},
+  "restart": "unless-stopped",
+  "backup": {
+    "strategy": "cold-filesystem",
+    "storage": [{"component": "app", "id": "config", "disposition": "include"}]
+  }
+}

@@ -6,10 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/kitpro/kitpro/software/server/internal/hardware"
 )
 
 const SchemaVersion = 1
@@ -36,30 +37,31 @@ var catalogCategories = map[string]bool{
 }
 
 type Manifest struct {
-	SchemaVersion    int               `json:"schema_version"`
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Description      string            `json:"description,omitempty"`
-	Releases         []Release         `json:"releases"`
-	Storage          []Storage         `json:"storage,omitempty"`
-	Environment      []Env             `json:"environment,omitempty"`
-	Command          []string          `json:"command,omitempty"`
-	Restart          string            `json:"restart,omitempty"`
-	Services         []Service         `json:"services,omitempty"`
-	Components       []Component       `json:"components,omitempty"`
-	Hardware         []Accelerator     `json:"hardware,omitempty"`
-	ExternalStorage  []ExternalStorage `json:"external_storage,omitempty"`
-	RunAs            *RuntimeIdentity  `json:"run_as,omitempty"`
-	Backup           *BackupPolicy     `json:"backup,omitempty"`
-	Category         string            `json:"category,omitempty"`
-	Kind             string            `json:"kind,omitempty"`
-	CatalogStatus    string            `json:"catalog_status,omitempty"`
-	WebsiteURL       string            `json:"website_url,omitempty"`
-	SourceURL        string            `json:"source_url,omitempty"`
-	DocumentationURL string            `json:"documentation_url,omitempty"`
-	Logo             string            `json:"logo,omitempty"`
-	Limitations      []string          `json:"limitations,omitempty"`
-	LifecycleNotice  *LifecycleNotice  `json:"lifecycle_notice,omitempty"`
+	SchemaVersion    int                  `json:"schema_version"`
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	Description      string               `json:"description,omitempty"`
+	Releases         []Release            `json:"releases"`
+	Storage          []Storage            `json:"storage,omitempty"`
+	Environment      []Env                `json:"environment,omitempty"`
+	Command          []string             `json:"command,omitempty"`
+	Restart          string               `json:"restart,omitempty"`
+	Services         []Service            `json:"services,omitempty"`
+	Components       []Component          `json:"components,omitempty"`
+	Hardware         []Accelerator        `json:"hardware,omitempty"`
+	ExternalStorage  []ExternalStorage    `json:"external_storage,omitempty"`
+	RunAs            *RuntimeIdentity     `json:"run_as,omitempty"`
+	Backup           *BackupPolicy        `json:"backup,omitempty"`
+	Category         string               `json:"category,omitempty"`
+	Kind             string               `json:"kind,omitempty"`
+	CatalogStatus    string               `json:"catalog_status,omitempty"`
+	WebsiteURL       string               `json:"website_url,omitempty"`
+	SourceURL        string               `json:"source_url,omitempty"`
+	DocumentationURL string               `json:"documentation_url,omitempty"`
+	Logo             string               `json:"logo,omitempty"`
+	Limitations      []string             `json:"limitations,omitempty"`
+	LifecycleNotice  *LifecycleNotice     `json:"lifecycle_notice,omitempty"`
+	Configuration    *ConfigurationPolicy `json:"configuration,omitempty"`
 }
 
 // LifecycleNotice supplies trusted display text and opts infrastructure-sensitive
@@ -69,6 +71,13 @@ type LifecycleNotice struct {
 	Stop                   string `json:"stop,omitempty"`
 	Remove                 string `json:"remove,omitempty"`
 	RequireAcknowledgement bool   `json:"require_acknowledgement,omitempty"`
+}
+
+// ConfigurationPolicy selects a reviewed, helper-owned structured bootstrap.
+// It cannot carry templates, commands, file paths, or arbitrary configuration.
+type ConfigurationPolicy struct {
+	Type      string `json:"type"`
+	StorageID string `json:"storage_id"`
 }
 type Release struct {
 	Version    string `json:"version"`
@@ -187,6 +196,7 @@ type Plan struct {
 	ExternalStorage                                                                   []ExternalStorage
 	RunAs                                                                             *RuntimeIdentity
 	Backup                                                                            *BackupPolicy
+	Configuration                                                                     *ConfigurationPolicy
 }
 
 // ResolvedComponent is the helper-facing, digest-pinned component plan. It is
@@ -375,6 +385,9 @@ func Validate(m Manifest) error {
 	if err := validateCredentialPresentations(m); err != nil {
 		return err
 	}
+	if err := validateConfigurationPolicy(m); err != nil {
+		return err
+	}
 	for _, c := range m.Components {
 		for _, dep := range c.DependsOn {
 			if !componentIDs[dep] {
@@ -386,6 +399,24 @@ func Validate(m Manifest) error {
 		return err
 	}
 	return nil
+}
+
+func validateConfigurationPolicy(m Manifest) error {
+	if m.Configuration == nil {
+		return nil
+	}
+	if m.SchemaVersion < NetworkBindingSchemaVersion || len(m.Components) != 0 || m.Configuration.Type != "syncthing-tcp-only-v1" || !idPattern.MatchString(m.Configuration.StorageID) {
+		return fmt.Errorf("invalid structured configuration policy")
+	}
+	for _, storage := range m.Storage {
+		if storage.ID == m.Configuration.StorageID {
+			if !storage.Persistent || storage.ReadOnly || storage.ContainerPath != "/var/syncthing" {
+				return fmt.Errorf("structured configuration policy requires managed read-write Syncthing storage")
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("structured configuration policy storage not found")
 }
 
 // PresentedCredentials returns the administrator-facing credential inventory
@@ -770,7 +801,7 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 	if !idPattern.MatchString(instance) || network == "" || strings.ContainsAny(network, "/.\\") || !strings.HasPrefix(dataPath, "/srv/kitpro/apps/") || strings.Contains(dataPath, "..") || strings.ContainsAny(dataPath, "\\\r\n") {
 		return Plan{}, fmt.Errorf("invalid instance paths")
 	}
-	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...), RunAs: m.RunAs, Backup: cloneBackupPolicy(m.Backup)}
+	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...), RunAs: m.RunAs, Backup: cloneBackupPolicy(m.Backup), Configuration: cloneConfigurationPolicy(m.Configuration)}
 	for _, c := range m.Components {
 		var cr Release
 		for _, candidate := range m.Releases {
@@ -783,6 +814,14 @@ func Resolve(m Manifest, release string, instance string, network string, dataPa
 		p.ResolvedComponents = append(p.ResolvedComponents, resolved)
 	}
 	return p, nil
+}
+
+func cloneConfigurationPolicy(policy *ConfigurationPolicy) *ConfigurationPolicy {
+	if policy == nil {
+		return nil
+	}
+	copy := *policy
+	return &copy
 }
 
 func cloneBackupPolicy(policy *BackupPolicy) *BackupPolicy {

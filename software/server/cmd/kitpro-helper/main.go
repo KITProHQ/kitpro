@@ -9,6 +9,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"os"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/kitpro/kitpro/software/server/internal/appconfig"
 	"github.com/kitpro/kitpro/software/server/internal/backup"
 	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
@@ -27,14 +38,6 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 	"golang.org/x/sys/unix"
-	"io"
-	"log/slog"
-	"net"
-	"os"
-	"os/user"
-	"strconv"
-	"strings"
-	"time"
 )
 
 var detectPlatform = platform.Detect
@@ -608,6 +611,9 @@ func validateApplicationPlan(r protocol.Request) error {
 	if !runtimeIdentityEqual(r.RunAs, entry.Manifest.RunAs) {
 		return fmt.Errorf("trusted runtime identity mismatch")
 	}
+	if !configurationPolicyEqual(r.Configuration, entry.Manifest.Configuration) {
+		return fmt.Errorf("trusted structured configuration policy mismatch")
+	}
 	for i, command := range entry.Manifest.Command {
 		if r.Command[i] != command {
 			return fmt.Errorf("trusted command mismatch")
@@ -667,6 +673,13 @@ func runtimeIdentityEqual(got *protocol.RuntimeIdentity, want *manifest.RuntimeI
 		return got == nil && want == nil
 	}
 	return got.UID == want.UID && got.GID == want.GID
+}
+
+func configurationPolicyEqual(got *protocol.ConfigurationPolicy, want *manifest.ConfigurationPolicy) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return got.Type == want.Type && got.StorageID == want.StorageID
 }
 
 func containsRuntimeSocket(value string) bool {
@@ -1133,6 +1146,10 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 			return
 		}
 	}
+	if e := prepareStructuredConfiguration(context.Background(), d, lifecycleRuntime, r, labels); e != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application configuration bootstrap failed"})
+		return
+	}
 	mounts := make([]containers.StorageMount, 0, len(r.Storage))
 	for _, s := range r.Storage {
 		mounts = append(mounts, containers.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
@@ -1192,6 +1209,127 @@ func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator 
 	}
 	slog.Default().Info("runtime created", "event", "exposure_applied", "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "binding_count", len(r.Bindings), "result", "succeeded")
 	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+}
+
+func prepareStructuredConfiguration(ctx context.Context, runtime containers.Runtime, lifecycleRuntime containers.LifecycleRuntime, request protocol.Request, labels map[string]string) error {
+	if request.Configuration == nil {
+		return nil
+	}
+	var storage protocol.StorageMount
+	for _, candidate := range request.Storage {
+		if candidate.ID == request.Configuration.StorageID {
+			storage = candidate
+			break
+		}
+	}
+	if storage.ID == "" || storage.ReadOnly || storage.ContainerPath != "/var/syncthing" || request.Configuration.Type != appconfig.SyncthingTCPOnlyV1 {
+		return errors.New("invalid structured configuration storage")
+	}
+	configPath := filepath.Join(storage.HostPath, "config", "config.xml")
+	certPath := filepath.Join(storage.HostPath, "config", "cert.pem")
+	keyPath := filepath.Join(storage.HostPath, "config", "key.pem")
+	configExists, err := regularFileExists(configPath)
+	if err != nil {
+		return err
+	}
+	if !configExists {
+		if err = lifecycleRuntime.PullImage(ctx, request.Image); err != nil {
+			return err
+		}
+		bootstrapName := "kitpro-" + request.ApplicationID + "-" + request.InstanceID + "-config-bootstrap"
+		if err = removeStaleConfigurationBootstrap(runtime, bootstrapName, request.InstanceID); err != nil {
+			return err
+		}
+		bootstrapLabels := make(map[string]string, len(labels))
+		for key, value := range labels {
+			bootstrapLabels[key] = value
+		}
+		bootstrapLabels[ownership.LabelResource] = "configuration-bootstrap"
+		userName := ""
+		if request.RunAs != nil {
+			userName = strconv.Itoa(request.RunAs.UID) + ":" + strconv.Itoa(request.RunAs.GID)
+		}
+		containerID, createErr := lifecycleRuntime.CreateLifecycleContainer(ctx, containers.ContainerPlan{
+			Image:   request.Image,
+			Name:    bootstrapName,
+			Network: "none",
+			User:    userName,
+			Labels:  bootstrapLabels,
+			Command: []string{"generate", "--no-port-probing"},
+			Storage: []containers.StorageMount{{HostPath: storage.HostPath, ContainerPath: storage.ContainerPath}},
+		})
+		if createErr != nil {
+			return createErr
+		}
+		removed := false
+		defer func() {
+			if !removed {
+				_ = lifecycleRuntime.RemoveContainer(context.Background(), containerID)
+			}
+		}()
+		if err = lifecycleRuntime.StartContainer(ctx, containerID); err != nil {
+			return err
+		}
+		if _, err = lifecycleRuntime.WaitContainer(ctx, containerID, containers.RuntimeStopped, 60*time.Second); err != nil {
+			return err
+		}
+		if err = lifecycleRuntime.RemoveContainer(ctx, containerID); err != nil {
+			return err
+		}
+		removed = true
+	}
+	for _, required := range []string{configPath, certPath, keyPath} {
+		exists, checkErr := regularFileExists(required)
+		if checkErr != nil || !exists {
+			return errors.New("Syncthing identity bootstrap is incomplete")
+		}
+	}
+	if err = appconfig.Apply(request.Configuration.Type, storage.HostPath); err != nil {
+		return err
+	}
+	return appconfig.Verify(request.Configuration.Type, storage.HostPath)
+}
+
+func regularFileExists(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err == os.ErrNotExist || os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, errors.New("application configuration identity path is not a regular file")
+	}
+	if info.Size() <= 0 || info.Size() > 1024*1024 {
+		return false, errors.New("application configuration identity file has an invalid size")
+	}
+	return true, nil
+}
+
+func removeStaleConfigurationBootstrap(runtime containers.Runtime, name, instance string) error {
+	items, err := runtime.ListContainers()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		matched := false
+		for _, candidate := range item.Names {
+			if strings.TrimPrefix(candidate, "/") == name {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if item.Labels[ownership.LabelManaged] != "true" || item.Labels[ownership.LabelInstance] != instance || item.Labels[ownership.LabelResource] != "configuration-bootstrap" {
+			return errors.New("configuration bootstrap name is owned by an unmanaged runtime")
+		}
+		_ = runtime.Stop(item.ID)
+		return runtime.Remove(item.ID)
+	}
+	return nil
 }
 
 func validateTrustedMultiRecreation(db *sql.DB, r protocol.Request) error {

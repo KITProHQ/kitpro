@@ -356,7 +356,7 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	request.AddCookie(csrf)
 	a.home(recorder, request)
 	body := recorder.Body.String()
-	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") || !strings.Contains(body, "Nextcloud") || !strings.Contains(body, ">NE</span>") || !strings.Contains(body, "https://github.com/nextcloud/docker") || !strings.Contains(body, "Experimental") || !strings.Contains(body, "sync-client") || !strings.Contains(body, "Pi-hole") || !strings.Contains(body, ">PH</span>") || !strings.Contains(body, "Network Service") || !strings.Contains(body, "port 53/tcp") || !strings.Contains(body, "DNS only") {
+	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") || !strings.Contains(body, "Forgejo") || !strings.Contains(body, ">FO</span>") || !strings.Contains(body, "Plex") || !strings.Contains(body, ">PL</span>") || !strings.Contains(body, "https://github.com/plexinc/pms-docker") || !strings.Contains(body, "CPU-only") || !strings.Contains(body, "Nextcloud") || !strings.Contains(body, ">NE</span>") || !strings.Contains(body, "https://github.com/nextcloud/docker") || !strings.Contains(body, "Experimental") || !strings.Contains(body, "sync-client") || !strings.Contains(body, "Pi-hole") || !strings.Contains(body, ">PH</span>") || !strings.Contains(body, "Network Service") || !strings.Contains(body, "port 53/tcp") || !strings.Contains(body, "DNS only") || !strings.Contains(body, "Syncthing") || !strings.Contains(body, ">SY</span>") || !strings.Contains(body, "TCP only") || !strings.Contains(body, "read-write") {
 		t.Fatalf("catalog presentation is not curated: %s", body)
 	}
 }
@@ -509,7 +509,7 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &items); err != nil {
 		t.Fatal(err)
 	}
-	visible, found, foundNextcloud, foundPiHole := 0, false, false, false
+	visible, found, foundNextcloud, foundPiHole, foundSyncthing := 0, false, false, false, false
 	for _, item := range items {
 		if catalogVisible(item.ID) {
 			visible++
@@ -532,9 +532,15 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 				t.Fatalf("incomplete Pi-hole catalog metadata: %#v", item)
 			}
 		}
+		if item.ID == "syncthing" {
+			foundSyncthing = true
+			if item.Category != "Productivity" || item.Kind != "application" || item.CatalogStatus != "experimental" || item.SourceURL != "https://github.com/syncthing/syncthing" || len(item.Limitations) != 6 {
+				t.Fatalf("incomplete Syncthing catalog metadata: %#v", item)
+			}
+		}
 	}
-	if visible != 19 {
-		t.Fatalf("visible catalog has %d applications, want 19", visible)
+	if visible != 20 {
+		t.Fatalf("visible catalog has %d applications, want 20", visible)
 	}
 	if !found {
 		t.Fatal("Forgejo missing from catalog API")
@@ -544,6 +550,9 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	}
 	if !foundPiHole {
 		t.Fatal("Pi-hole missing from catalog API")
+	}
+	if !foundSyncthing {
+		t.Fatal("Syncthing missing from catalog API")
 	}
 
 	recorder = httptest.NewRecorder()
@@ -936,6 +945,78 @@ func TestPiHoleInstallUsesConstrainedNetworkServicePlan(t *testing.T) {
 	}
 }
 
+func TestSyncthingInstallUsesBoundedTCPOnlyPlan(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	lanAddress := localLANTestAddress(t)
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", lanAddress)
+	a.allocatePort = func(used map[int]bool, address string) (int, error) {
+		if address != "127.0.0.1" || used[20000] {
+			t.Fatalf("unexpected GUI allocation: address=%q used=%v", address, used)
+		}
+		return 20000, nil
+	}
+	var received protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		received = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/v1/apps/syncthing/install", "storage_sync=storage-0123456789abcdef", session, csrf)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	a.guard(a.apps)(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("install status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.Image != "docker.io/syncthing/syncthing@sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef" || received.ReleaseID != "2.1.5" || received.RestartPolicy != "unless-stopped" {
+		t.Fatalf("unexpected Syncthing release or lifecycle plan: %#v", received)
+	}
+	wantBindings := []protocol.ServiceBinding{
+		{ServiceID: "gui", Transport: "tcp", ContainerPort: 8384, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+		{ServiceID: "sync-tcp", Transport: "tcp", ContainerPort: 22000, Mode: "lan", HostAddress: lanAddress, HostPort: 22000},
+	}
+	if !reflect.DeepEqual(received.Bindings, wantBindings) {
+		t.Fatalf("unexpected Syncthing bindings: %#v", received.Bindings)
+	}
+	wantEnvironment := []protocol.EnvVar{
+		{Name: "STGUIADDRESS", Value: "0.0.0.0:8384"},
+		{Name: "STNOBROWSER", Value: "true"},
+		{Name: "STNORESTART", Value: "true"},
+		{Name: "STNOUPGRADE", Value: "true"},
+		{Name: "STNOPORTPROBING", Value: "true"},
+	}
+	if !reflect.DeepEqual(received.Environment, wantEnvironment) {
+		t.Fatalf("unexpected Syncthing environment: %#v", received.Environment)
+	}
+	if len(received.Storage) != 1 || received.Storage[0].ID != "config" || received.Storage[0].ContainerPath != "/var/syncthing" || received.Storage[0].ReadOnly || received.Storage[0].OwnerUID != 1000 || received.Storage[0].OwnerGID != 1000 {
+		t.Fatalf("unexpected Syncthing managed storage: %#v", received.Storage)
+	}
+	if len(received.ExternalStorage) != 1 || received.ExternalStorage[0] != (protocol.ExternalStorageBinding{SlotID: "sync", RootID: "storage-0123456789abcdef"}) {
+		t.Fatalf("unexpected Syncthing external storage: %#v", received.ExternalStorage)
+	}
+	if received.RunAs == nil || *received.RunAs != (protocol.RuntimeIdentity{UID: 1000, GID: 1000}) || received.Configuration == nil || *received.Configuration != (protocol.ConfigurationPolicy{Type: "syncthing-tcp-only-v1", StorageID: "config"}) {
+		t.Fatalf("unexpected Syncthing identity/configuration policy: %#v", received)
+	}
+	if len(received.Components) != 0 || len(received.Hardware) != 0 || len(received.Command) != 0 {
+		t.Fatalf("Syncthing plan acquired unexpected runtime authority: %#v", received)
+	}
+}
+
+func TestSyncthingInstallRequiresExternalSyncRoot(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	calls := 0
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		calls++
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	recorder := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/v1/apps/syncthing/install", "", session, csrf)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	a.guard(a.apps)(recorder, request)
+	if recorder.Code != http.StatusAccepted || !strings.Contains(recorder.Body.String(), `"status":"failed"`) || calls != 0 {
+		t.Fatalf("missing sync root status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestPiHoleFailedInitialInstallRecreateRestoresDefaultBindings(t *testing.T) {
 	a, _, _ := newTestApp(t)
 	lanAddress := localLANTestAddress(t)
@@ -1289,6 +1370,37 @@ func TestNonHTTPServiceStatusIsEndpointOnly(t *testing.T) {
 	}
 }
 
+func TestSyncthingServiceStatusSeparatesGUIFromTCPEndpoint(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES('inst-syncthing01','syncthing','2.1.5','running',1,?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	bindings := []exposure.ServiceBinding{
+		{ServiceID: "gui", Transport: exposure.TCP, ContainerPort: 8384, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000},
+		{ServiceID: "sync-tcp", Transport: exposure.TCP, ContainerPort: 22000, Mode: exposure.LAN, HostAddress: "192.0.2.10", HostPort: 22000},
+	}
+	for _, binding := range bindings {
+		fixed := 0
+		if binding.ServiceID == "sync-tcp" {
+			fixed = 22000
+		}
+		if _, err := exposure.UpsertBinding(context.Background(), a.db, "inst-syncthing01", binding, "192.0.2.10", fixed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	statuses, err := a.serviceStatuses(context.Background(), "inst-syncthing01")
+	if err != nil || len(statuses) != 2 {
+		t.Fatalf("statuses=%#v err=%v", statuses, err)
+	}
+	if statuses[0].Endpoint != "http://127.0.0.1:20000" || statuses[0].OpenEndpoint == "" {
+		t.Fatalf("GUI status=%#v", statuses[0])
+	}
+	if statuses[1].Endpoint != "192.0.2.10:22000/tcp" || statuses[1].OpenEndpoint != "" {
+		t.Fatalf("TCP synchronization status=%#v", statuses[1])
+	}
+}
+
 func TestBindingPreflightRejectsReservedAndHostListenerConflicts(t *testing.T) {
 	a, _, _ := newTestApp(t)
 	if _, err := exposure.UpsertBinding(context.Background(), a.db, "inst-reserved01", exposure.ServiceBinding{ServiceID: "dns", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 25001}, "", 0); err != nil {
@@ -1347,6 +1459,39 @@ func TestPiHolePort53PreflightIsTransportAndAddressAware(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), address+":"+tc.want) {
 				t.Fatalf("conflict=%v, want address, port, and transport %s:%s", err, address, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyncthingTCP22000PreflightUsesGenericFixedPortConflictModel(t *testing.T) {
+	const address = "192.0.2.10"
+	requested := []exposure.ServiceBinding{{ServiceID: "sync-tcp", Transport: exposure.TCP, ContainerPort: 22000, Mode: exposure.LAN, HostAddress: address, HostPort: 22000}}
+	for _, tc := range []struct {
+		name      string
+		reserved  []exposure.ServiceBinding
+		listeners []exposure.ServiceBinding
+		conflict  bool
+	}{
+		{name: "available"},
+		{name: "UDP same port is independent", reserved: []exposure.ServiceBinding{{ServiceID: "other-udp", Transport: exposure.UDP, ContainerPort: 22000, Mode: exposure.LAN, HostAddress: address, HostPort: 22000}}},
+		{name: "TCP exact address", reserved: []exposure.ServiceBinding{{ServiceID: "other-tcp", Transport: exposure.TCP, ContainerPort: 22000, Mode: exposure.LAN, HostAddress: address, HostPort: 22000}}, conflict: true},
+		{name: "TCP wildcard listener", listeners: []exposure.ServiceBinding{{Transport: exposure.TCP, Mode: exposure.LAN, HostAddress: "0.0.0.0", HostPort: 22000}}, conflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := newTestApp(t)
+			a.hostListeners = func() ([]exposure.ServiceBinding, error) { return tc.listeners, nil }
+			for i, binding := range tc.reserved {
+				if _, err := exposure.UpsertBinding(context.Background(), a.db, fmt.Sprintf("inst-syncowner%02d", i), binding, address, 22000); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := a.preflightBindings(context.Background(), "inst-syncthing01", requested)
+			if tc.conflict && (err == nil || !strings.Contains(err.Error(), address+":22000/tcp")) {
+				t.Fatalf("conflict=%v, want exact endpoint", err)
+			}
+			if !tc.conflict && err != nil {
+				t.Fatalf("valid binding rejected: %v", err)
 			}
 		})
 	}

@@ -8,7 +8,7 @@ exposure is an installation policy. Schema version 8 can authorize an exact
 fixed port and constrained initial exposure without accepting an address from
 the manifest or user.
 
-The 19 visible entries use manifest schema versions 7 and 8. Their category,
+The 20 visible entries use manifest schema versions 7 and 8. Their category,
 application kind, catalog status, official links, and non-derivable limitations
 come from the manifest. The API and server-rendered catalog use that same
 source. Logo keys can reference reviewed packaged assets; entries without one
@@ -43,6 +43,7 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | Forgejo | Developer Tools | Self-hosted Git service | Single | Managed `/data` | CPU | HTTP, private by default; no Git-over-SSH or public HTTPS |
 | Nextcloud | Productivity | File synchronization and collaboration | Single | Managed `/var/www/html` | CPU | Experimental minimal SQLite profile; browser-focused and private by default |
 | Pi-hole | Networking | Network-wide DNS filtering | Single | Managed `/etc/pihole` | CPU | Experimental Network Service; TCP/UDP 53 on the configured LAN address, dynamic loopback admin HTTP, DNS only |
+| Syncthing | Productivity | Direct file synchronization | Single | Managed `/var/syncthing` plus one trusted read-write `/sync` root | CPU | Experimental manual-peer profile; loopback GUI and fixed 22000/TCP only |
 | Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
 | Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
 | Plex | Media | Media library streaming | Single | Managed config plus read-only trusted media | CPU | TCP 32400 only; reduced discovery and no automatic remote access |
@@ -50,11 +51,12 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 | Audiobookshelf | Media | Audiobook streaming | Single | Managed config/metadata plus read-only trusted library | CPU | HTTP, private by default |
 | SFTPGo | Files | Scoped file access | Single | Managed config plus exclusive trusted read-write root | CPU | Web UI exposable; SFTP remains internal |
 
-Ordinary user-facing services start internal-only. Pi-hole is the reviewed
-exception: its DNS services start on the configured exact LAN address at
-53/TCP and 53/UDP, and its admin HTTP service starts on a dynamic loopback
-port. Wildcard publication, host networking, and automatic Internet exposure
-remain unavailable.
+Ordinary user-facing services start internal-only unless a reviewed manifest
+declares a constrained initial exposure. Pi-hole publishes DNS on the exact
+configured LAN address at 53/TCP and 53/UDP. Syncthing publishes its manually
+addressed synchronization service on that address at 22000/TCP. Their admin
+HTTP services use separate dynamic loopback ports. Wildcard publication, host
+networking, and automatic Internet exposure remain unavailable.
 
 | Application | Release | Image identity | Persistent storage | Service | License |
 | --- | --- | --- | --- | --- | --- |
@@ -71,6 +73,7 @@ remain unavailable.
 | Forgejo | 16.0.5 | `codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74` | managed `data` at `/data` | HTTP 3000 | GPL-3.0-or-later |
 | Nextcloud | 34.0.4-apache | `docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1` | managed `html` at `/var/www/html` | HTTP 80 | AGPL-3.0 |
 | Pi-hole | 2026.09.0 | `docker.io/pihole/pihole@sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63` | managed `config` at `/etc/pihole` | DNS 53/TCP and 53/UDP; dynamic HTTP 80 | EUPL-1.2 |
+| Syncthing | 2.1.5 | `docker.io/syncthing/syncthing@sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef` | managed `/var/syncthing`; trusted read-write `/sync` | HTTP 8384; synchronization 22000/TCP | MPL-2.0 |
 | Ollama | 0.34.0 | `docker.io/ollama/ollama@sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4` | `models` at `/root/.ollama` | HTTP 11434 | MIT |
 | Jellyfin | 12.1 | `docker.io/jellyfin/jellyfin@sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b` | managed `/config` and `/cache`; trusted read-only `/media` | HTTP 8096 | GPL-2.0-or-later |
 | Plex | 1.43.4.10903-e5521bd8c | `docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee` | managed `/config`; trusted read-only `/data` | HTTP 32400 | Proprietary |
@@ -78,7 +81,7 @@ remain unavailable.
 | Audiobookshelf | 2.36.0 | `ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8` | managed `/config` and `/metadata`; trusted read-only `/audiobooks` | HTTP 80 | GPL-3.0 |
 | SFTPGo | 2.7.5 | `ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e` | managed config; exclusive trusted read-write `/srv/sftpgo/data` | HTTP 8080; internal SFTP 2022/TCP | AGPL-3.0-only |
 
-The eighteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
+The nineteen single-container releases are pinned to their `linux/amd64` platform digest. Mutable
 tags and release names are display and provenance metadata, not deployment
 identity. Persistent host paths are derived as
 `/srv/kitpro/apps/<application>/<installation>/<storage>/`.
@@ -157,6 +160,35 @@ it excludes router and client configuration. Stop, restart, update, recreate,
 and runtime removal require server-validated acknowledgement because they can
 interrupt DNS. Runtime removal keeps the installation record and managed data.
 
+Syncthing is an experimental application integration, not a claim that
+Syncthing itself is immature. KITPro persists `/var/syncthing`, including the
+device certificate, key, device ID, GUI API key, peer definitions, and folder
+definitions. One administrator-registered read-write root is required and is
+mounted at `/sync`; KITPro never accepts an arbitrary host path or includes
+that external content in the application backup.
+
+Before the ordinary bridge-network container is created, KITPro runs the exact
+pinned image once with network mode `none` and the fixed command `generate
+--no-port-probing`. Syncthing therefore creates its own identity. KITPro then
+applies the typed `syncthing-tcp-only-v1` policy to the generated XML. The
+policy leaves identity, peers, folders, and GUI state application-owned while
+setting the sole listener to `tcp://0.0.0.0:22000` and disabling global and
+local discovery, relays, NAT traversal, QUIC, browser launch, crash reporting,
+and dynamic upgrades. The policy is verified before every create or recreate.
+No shell hook, generic template, host network, privilege, capability, device,
+or UDP binding is involved.
+
+The GUI starts on a dynamic loopback port and has no KITPro-generated password;
+administrators should configure GUI authentication in Syncthing before any
+future broader exposure. Peers and folders are configured manually in that
+GUI. Remote peers must use an explicit TCP address that reaches the configured
+LAN address and fixed port 22000. KITPro does not pair devices, change
+firewalls or routers, or provide discovery, relay, NAT, QUIC, or UDP support.
+Runtime removal retains both managed identity/configuration and the registered
+external storage reference, and never deletes sync data. Cold backup includes
+managed Syncthing configuration and identity but excludes the external sync
+root.
+
 Open WebUI and Ollama remain independent installations. KITPro installation networks are isolated, and no trusted cross-installation service-discovery primitive exists. Administrators can configure a separately reachable Ollama endpoint in Open WebUI, but KITPro does not add host networking or inject an unvalidated URL.
 
 ## GPU candidate decisions
@@ -185,19 +217,15 @@ bounded PostgreSQL shared memory, atomic multi-component updates, and
 database-aware backup/rollback. KITPro does not substitute SQLite or omit ML.
 
 The original File Browser 2.63.23 is rejected because upstream archived the
-repository and ended fixes, including security fixes. Syncthing remains
-rejected: its official container needs 22000/TCP+UDP and 21027/UDP, and
-upstream documents that bridge networking prevents correct local address
-discovery. Typed UDP alone would not make the topology correct without host
-networking, which KITPro prohibits.
+repository and ended fixes, including security fixes. The earlier Syncthing
+rejection applied to a discovery-enabled topology. Alpha.13 instead accepts a
+deliberately narrower manual-address TCP profile after adding an offline,
+typed configuration bootstrap; it does not claim LAN discovery support.
 
 For the storage and media milestone, Jellyfin is **accepted** with one required
-read-only trusted media root. Syncthing 2.1.5 is **rejected for the current
-model**: its authoritative container exposes the GUI on 8384/TCP, synchronization
-on 22000/TCP and UDP, and discovery on 21027/UDP, while upstream strongly
-recommends host networking for correct LAN discovery. KITPro has neither host
-networking nor typed UDP multi-service exposure, and does not ship an incomplete
-GUI-only topology. Immich is **rejected for the current model**: its supported
+read-only trusted media root. Syncthing 2.1.5 is now **accepted only for the
+experimental manual-address TCP profile described above**; the prior rejection
+of its discovery-enabled topology still stands. Immich is **rejected for the current model**: its supported
 production deployment is a Compose stack with server, PostgreSQL, Redis, and
 machine-learning components; its upload library needs read-write lifecycle
 semantics and PostgreSQL must remain on a compatible local filesystem. The
@@ -236,6 +264,7 @@ The following official sources were retrieved on 2026-09-13 unless noted:
 - Plex (2026-09-22): [official container project](https://github.com/plexinc/pms-docker), [official image tags](https://hub.docker.com/r/plexinc/pms-docker/tags), and [Plex installation guidance](https://support.plex.tv/articles/200288586-installation/)
 - Nextcloud (2026-09-22): [official container project and persistence guidance](https://github.com/nextcloud/docker), [official image tags](https://hub.docker.com/_/nextcloud), [installation wizard](https://docs.nextcloud.com/server/stable/admin_manual/installation/installation_wizard.html), and [upgrade guidance](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/upgrade.html)
 - Pi-hole (2026-09-22): [official Docker guide](https://docs.pi-hole.net/docker/), [container configuration and capabilities](https://docs.pi-hole.net/docker/configuration/), [official image source](https://github.com/pi-hole/docker-pi-hole), [2026.09.0 release](https://github.com/pi-hole/docker-pi-hole/releases/tag/2026.09.0), and [official image package](https://github.com/pi-hole/docker-pi-hole/pkgs/container/pihole)
+- Syncthing (2026-09-22): [2.1.5 release](https://github.com/syncthing/syncthing/releases/tag/v2.1.5), [official container guide](https://github.com/syncthing/syncthing/blob/main/README-Docker.md), [official Dockerfile](https://github.com/syncthing/syncthing/blob/main/Dockerfile), [configuration reference](https://docs.syncthing.net/users/config.html), and [firewall and port reference](https://docs.syncthing.net/users/firewall.html)
 
 Paperless-ngx is the first schema-version-2 multi-container entry. It uses a
 Paperless web component and an internal Redis broker on one

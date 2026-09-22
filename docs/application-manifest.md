@@ -249,6 +249,28 @@ uppercase or underscore first character. This supports typed upstream names
 such as Pi-hole v6 FTL configuration without permitting arbitrary environment
 input. Schemas 1 through 7 retain the original uppercase-only rule.
 
+Schema version 8 may declare one typed `configuration` policy for a
+single-container application:
+
+```json
+{
+  "configuration": {
+    "type": "syncthing-tcp-only-v1",
+    "storage_id": "config"
+  }
+}
+```
+
+This is not a template, command, or general configuration mutation API. The
+only accepted type is `syncthing-tcp-only-v1`, and its storage must be a
+persistent, writable managed mount at `/var/syncthing`. The helper uses the
+official image with network mode `none` to generate Syncthing's identity on an
+empty managed tree, then applies and verifies the reviewed XML option policy
+before an ordinary runtime can be created. Existing identity, GUI state,
+peers, and folders are preserved. Unknown policy names, component use,
+arbitrary paths, missing required options, symlinks, oversized files, and
+unreviewed configuration shapes fail closed.
+
 ## FreshRSS catalog entry
 
 An installed application has a stable installation identity independent of disposable runtime generations. KITPro derives persistent storage from the application ID and installation ID, never from Docker IDs or runtime generations. Runtime removal preserves the installation and data; explicit recreation reuses that storage with a new runtime generation.

@@ -12,7 +12,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "nextcloud", "ollama", "open-webui", "paperless-ngx", "pihole", "plex", "sftpgo", "uptime-kuma", "vaultwarden"}
+	wantIDs := []string{"actual-budget", "audiobookshelf", "busybox", "forgejo", "freshrss", "home-assistant", "it-tools", "jellyfin", "mealie", "memos", "navidrome", "nextcloud", "ollama", "open-webui", "paperless-ngx", "pihole", "plex", "sftpgo", "syncthing", "uptime-kuma", "vaultwarden"}
 	got := IDs(c)
 	if len(c) != len(wantIDs) || len(got) != len(wantIDs) {
 		t.Fatalf("unexpected catalog: %#v", got)
@@ -47,6 +47,7 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		{"navidrome", "0.64.0", "docker.io/deluan/navidrome@sha256:1a64cbb2603cec5d2615c3a27e91442436b2229583408a55cdc8d85705b95e65", "/data", 4533, map[string]string{"ND_LOGLEVEL": "info", "ND_SCANSCHEDULE": "1h"}},
 		{"audiobookshelf", "2.36.0", "ghcr.io/advplyr/audiobookshelf@sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8", "/config", 13378, map[string]string{"TZ": "UTC", "PORT": "13378"}},
 		{"sftpgo", "2.7.5", "ghcr.io/drakkan/sftpgo@sha256:d819bcea946470940416b63604f820aee965a02127b07126785e279fa311258e", "/var/lib/sftpgo", 8080, nil},
+		{"syncthing", "2.1.5", "docker.io/syncthing/syncthing@sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef", "/var/syncthing", 8384, map[string]string{"STGUIADDRESS": "0.0.0.0:8384", "STNOBROWSER": "true", "STNORESTART": "true", "STNOUPGRADE": "true", "STNOPORTPROBING": "true"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
@@ -101,10 +102,11 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		"paperless-ngx": "Documents", "plex": "Media", "sftpgo": "Files",
 		"pihole":      "Networking",
 		"nextcloud":   "Productivity",
+		"syncthing":   "Productivity",
 		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
 	}
-	if len(wantCategories) != 19 {
-		t.Fatal("visible catalog metadata fixture must cover all 19 applications")
+	if len(wantCategories) != 20 {
+		t.Fatal("visible catalog metadata fixture must cover all 20 applications")
 	}
 	for id, category := range wantCategories {
 		entry, ok := c[id]
@@ -114,14 +116,14 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		m := entry.Manifest
 		wantStatus := "standard"
 		wantKind := "application"
-		if id == "nextcloud" || id == "pihole" {
+		if id == "nextcloud" || id == "pihole" || id == "syncthing" {
 			wantStatus = "experimental"
 		}
 		if id == "pihole" {
 			wantKind = "network-service"
 		}
 		wantSchema := manifest.CatalogMetadataSchemaVersion
-		if id == "pihole" {
+		if id == "pihole" || id == "syncthing" {
 			wantSchema = manifest.NetworkBindingSchemaVersion
 		}
 		if m.SchemaVersion != wantSchema || m.Category != category || m.Kind != wantKind || m.CatalogStatus != wantStatus {
@@ -185,6 +187,40 @@ func TestPiHoleProfileIsConstrained(t *testing.T) {
 	}
 	if m.Restart != "unless-stopped" || m.Backup == nil || m.Backup.Strategy != "cold-filesystem" || len(m.Backup.Storage) != 1 || m.Backup.Storage[0] != (manifest.BackupStorage{Component: "app", ID: "config", Disposition: "include"}) {
 		t.Fatalf("unexpected Pi-hole lifecycle policy: restart=%q backup=%#v", m.Restart, m.Backup)
+	}
+}
+
+func TestSyncthingProfileIsBoundedAndTCPOnly(t *testing.T) {
+	catalog, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := catalog["syncthing"].Manifest
+	if m.SchemaVersion != manifest.NetworkBindingSchemaVersion || m.ID != "syncthing" || m.Name != "Syncthing" || m.Category != "Productivity" || m.Kind != "application" || m.CatalogStatus != "experimental" || m.Logo != "" {
+		t.Fatalf("unexpected Syncthing identity: %#v", m)
+	}
+	if len(m.Releases) != 1 || m.Releases[0].Version != "2.1.5" || m.Releases[0].Registry != "docker.io" || m.Releases[0].Repository != "syncthing/syncthing" || m.Releases[0].Digest != "sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef" || m.Releases[0].Platform != "linux/amd64" {
+		t.Fatalf("unexpected Syncthing release: %#v", m.Releases)
+	}
+	if len(m.Storage) != 1 || m.Storage[0].ID != "config" || m.Storage[0].ContainerPath != "/var/syncthing" || !m.Storage[0].Persistent || m.Storage[0].ReadOnly || m.Storage[0].OwnerUID != 1000 || m.Storage[0].OwnerGID != 1000 {
+		t.Fatalf("unexpected Syncthing managed storage: %#v", m.Storage)
+	}
+	if len(m.ExternalStorage) != 1 || m.ExternalStorage[0].ID != "sync" || m.ExternalStorage[0].ContainerPath != "/sync" || m.ExternalStorage[0].Mode != "read-write" || !m.ExternalStorage[0].Required {
+		t.Fatalf("unexpected Syncthing external storage: %#v", m.ExternalStorage)
+	}
+	if len(m.Services) != 2 || m.Services[0].ID != "gui" || m.Services[0].Protocol != "http" || m.Services[0].ContainerPort != 8384 || m.Services[0].DefaultExposure != "loopback" || m.Services[0].FixedHostPort != 0 || m.Services[1].ID != "sync-tcp" || m.Services[1].Protocol != "tcp" || m.Services[1].ContainerPort != 22000 || m.Services[1].DefaultExposure != "lan" || m.Services[1].FixedHostPort != 22000 {
+		t.Fatalf("unexpected Syncthing services: %#v", m.Services)
+	}
+	for _, service := range m.Services {
+		if service.Protocol == "udp" || service.ContainerPort == 21027 {
+			t.Fatalf("Syncthing profile exposed discovery or QUIC: %#v", m.Services)
+		}
+	}
+	if len(m.Hardware) != 0 || len(m.Command) != 0 || m.RunAs == nil || m.RunAs.UID != 1000 || m.RunAs.GID != 1000 || m.Configuration == nil || m.Configuration.Type != "syncthing-tcp-only-v1" || m.Configuration.StorageID != "config" {
+		t.Fatalf("Syncthing gained unexpected runtime authority or lost its bootstrap: %#v", m)
+	}
+	if m.Backup == nil || m.Backup.Strategy != "cold-filesystem" || len(m.Backup.Storage) != 1 || m.Backup.Storage[0].ID != "config" || m.Backup.Storage[0].Disposition != "include" || len(m.Limitations) != 6 {
+		t.Fatalf("unexpected Syncthing backup or limitations: %#v %#v", m.Backup, m.Limitations)
 	}
 }
 

@@ -15,7 +15,7 @@ and restore operations.
 
 ## Scope and evidence
 
-The assessment covers the 18 applications currently visible in the KITPro
+The assessment covers the 20 applications currently visible in the KITPro
 catalog. The hidden BusyBox lifecycle fixture is considered separately because
 it is not a public application. The repository manifests are authoritative for
 the state KITPro mounts and the image releases KITPro runs. Upstream application
@@ -34,10 +34,11 @@ The deployed catalog currently has these properties:
 - Paperless-ngx has an internal Redis component. Redis is a broker/cache, not
   the authoritative document database.
 - Audiobookshelf, Jellyfin, Navidrome, and Plex import read-only external libraries.
-  SFTPGo imports a read-write external file root. These paths are approved by
+  SFTPGo and Syncthing import read-write external file roots. These paths are approved by
   logical storage references and are not KITPro-managed application data.
-- `WEBUI_SECRET_KEY` is the only catalog-generated secret today. Its value is
-  stored by the privileged helper, not in the catalog manifest or API database.
+- Catalog-generated secrets are stored by the privileged helper, not in the
+  catalog manifest or API database. Only a manifest-authorized credential may
+  be revealed through the protected credential action.
 
 ## Backup behavior at discovery time
 
@@ -113,6 +114,7 @@ and strategy tests but has not received its own live data round trip.
 | Paperless-ngx | `cold-sqlite-filesystem` | Direct multi-component round trip | PASS: Rocky/Podman |
 | Plex | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | SFTPGo | `cold-sqlite-filesystem` | Live opt-in Docker round trip | PASS: Docker |
+| Syncthing | `cold-filesystem` | Shared strategy tests | Strategy coverage |
 | Uptime Kuma | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 | Vaultwarden | `cold-sqlite-filesystem` | Shared strategy tests | Strategy coverage |
 
@@ -449,6 +451,22 @@ Reference: [Vaultwarden backup inventory and restore rules](https://github.com/d
 - KITPro strategy: `cold-sqlite-filesystem`, include `html`.
 
 References: [official image persistent-data layout](https://github.com/nextcloud/docker#persistent-data), [Nextcloud restore requirements](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/restore.html).
+
+### Syncthing
+
+- Components: one official Syncthing container.
+- Managed storage: `config` at `/var/syncthing`, including device identity,
+  certificates, configuration, GUI state, peer definitions, folder
+  definitions, and application-generated index state.
+- Imported storage: one required read-write root mounted at `/sync`.
+- User content: synchronized files below `/sync`; these are not copied into the
+  application backup and must be protected separately by the administrator.
+- Consistency: stop required before copying the managed tree so configuration,
+  identity, and index state share one filesystem point.
+- KITPro strategy: `cold-filesystem`, include managed `config`; preserve the
+  external binding as metadata and exclude the external root's contents.
+
+Reference: [official container storage layout](https://github.com/syncthing/syncthing/blob/main/README-Docker.md).
 
 ## Hidden validation fixture
 

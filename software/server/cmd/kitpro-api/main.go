@@ -1146,6 +1146,9 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			helperOperation = "InstallApplication"
 		}
 		q := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: id, Operation: helperOperation, OperationRevision: 1, InstanceID: inst, RuntimeGeneration: gen, Image: plan.ImageDigest, ApplicationID: plan.ApplicationID, ReleaseID: plan.ReleaseID, NetworkName: plan.NetworkName, DataPath: plan.DataPath, RestartPolicy: plan.Restart}
+		if plan.Configuration != nil {
+			q.Configuration = &protocol.ConfigurationPolicy{Type: plan.Configuration.Type, StorageID: plan.Configuration.StorageID}
+		}
 		q.RepairAction = r.URL.Query().Get("repair_action")
 		helperRequest = q
 		for _, item := range plan.Hardware {

@@ -56,6 +56,7 @@ type Request struct {
 	BackupID        string                   `json:"backup_id,omitempty"`
 	RepairAction    string                   `json:"repair_action,omitempty"`
 	CredentialID    string                   `json:"credential_id,omitempty"`
+	Configuration   *ConfigurationPolicy     `json:"configuration,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -74,6 +75,10 @@ type StorageMount struct {
 type RuntimeIdentity struct {
 	UID int `json:"uid"`
 	GID int `json:"gid"`
+}
+type ConfigurationPolicy struct {
+	Type      string `json:"type"`
+	StorageID string `json:"storage_id"`
 }
 type ExternalStorageBinding struct {
 	SlotID string `json:"slot_id"`

@@ -157,6 +157,31 @@ func TestSchemaEightCredentialPresentationIsExplicitAndBounded(t *testing.T) {
 	}
 }
 
+func TestSchemaEightStructuredConfigurationPolicyIsNarrow(t *testing.T) {
+	base := strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":8`, 1)
+	base = strings.Replace(base, `"storage":[{"id":"data","container_path":"/data","persistent":true,"read_only":false}]`, `"storage":[{"id":"config","container_path":"/var/syncthing","persistent":true,"read_only":false}]`, 1)
+	base = strings.Replace(base, `"restart":"unless-stopped"`, `"configuration":{"type":"syncthing-tcp-only-v1","storage_id":"config"},"restart":"unless-stopped"`, 1)
+	base = strings.Replace(base, `"id":"data","disposition":"include"`, `"id":"config","disposition":"include"`, 1)
+	m, err := Parse([]byte(base))
+	if err != nil || m.Configuration == nil || m.Configuration.Type != "syncthing-tcp-only-v1" || m.Configuration.StorageID != "config" {
+		t.Fatalf("structured configuration policy rejected: %v %#v", err, m.Configuration)
+	}
+	invalid := map[string]string{
+		"older schema":      strings.Replace(base, `"schema_version":8`, `"schema_version":7`, 1),
+		"unknown policy":    strings.Replace(base, `syncthing-tcp-only-v1`, `arbitrary-template`, 1),
+		"missing storage":   strings.Replace(base, `"storage_id":"config"`, `"storage_id":"missing"`, 1),
+		"read-only storage": strings.Replace(base, `"persistent":true`, `"persistent":true,"read_only":true`, 1),
+		"wrong mount":       strings.Replace(base, `/var/syncthing`, `/config`, 1),
+	}
+	for name, data := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if _, parseErr := Parse([]byte(data)); parseErr == nil {
+				t.Fatal("unsafe structured configuration policy accepted")
+			}
+		})
+	}
+}
+
 func TestCatalogMetadataSchemaValidation(t *testing.T) {
 	m, err := Parse([]byte(validV7Manifest()))
 	if err != nil {
