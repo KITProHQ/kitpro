@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -17,26 +18,54 @@ const HardwareSchemaVersion = 3
 const ExternalStorageSchemaVersion = 4
 const RuntimeIdentitySchemaVersion = 5
 const BackupSchemaVersion = 6
+const CatalogMetadataSchemaVersion = 7
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+var logoPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
+
+var catalogCategories = map[string]bool{
+	"AI": true, "Developer Tools": true, "Documents": true,
+	"Files": true, "Finance": true, "Food and recipes": true,
+	"Home automation": true, "Media": true, "Monitoring": true,
+	"Music": true, "Networking": true, "Notes": true,
+	"Reading": true, "Security": true,
+}
 
 type Manifest struct {
-	SchemaVersion   int               `json:"schema_version"`
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Description     string            `json:"description,omitempty"`
-	Releases        []Release         `json:"releases"`
-	Storage         []Storage         `json:"storage,omitempty"`
-	Environment     []Env             `json:"environment,omitempty"`
-	Command         []string          `json:"command,omitempty"`
-	Restart         string            `json:"restart,omitempty"`
-	Services        []Service         `json:"services,omitempty"`
-	Components      []Component       `json:"components,omitempty"`
-	Hardware        []Accelerator     `json:"hardware,omitempty"`
-	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
-	RunAs           *RuntimeIdentity  `json:"run_as,omitempty"`
-	Backup          *BackupPolicy     `json:"backup,omitempty"`
+	SchemaVersion    int               `json:"schema_version"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description,omitempty"`
+	Releases         []Release         `json:"releases"`
+	Storage          []Storage         `json:"storage,omitempty"`
+	Environment      []Env             `json:"environment,omitempty"`
+	Command          []string          `json:"command,omitempty"`
+	Restart          string            `json:"restart,omitempty"`
+	Services         []Service         `json:"services,omitempty"`
+	Components       []Component       `json:"components,omitempty"`
+	Hardware         []Accelerator     `json:"hardware,omitempty"`
+	ExternalStorage  []ExternalStorage `json:"external_storage,omitempty"`
+	RunAs            *RuntimeIdentity  `json:"run_as,omitempty"`
+	Backup           *BackupPolicy     `json:"backup,omitempty"`
+	Category         string            `json:"category,omitempty"`
+	Kind             string            `json:"kind,omitempty"`
+	CatalogStatus    string            `json:"catalog_status,omitempty"`
+	WebsiteURL       string            `json:"website_url,omitempty"`
+	SourceURL        string            `json:"source_url,omitempty"`
+	DocumentationURL string            `json:"documentation_url,omitempty"`
+	Logo             string            `json:"logo,omitempty"`
+	Limitations      []string          `json:"limitations,omitempty"`
+	LifecycleNotice  *LifecycleNotice  `json:"lifecycle_notice,omitempty"`
+}
+
+// LifecycleNotice is display metadata. Runtime acknowledgement remains a
+// separate, future policy so catalog text cannot authorize lifecycle changes.
+type LifecycleNotice struct {
+	Install                string `json:"install,omitempty"`
+	Stop                   string `json:"stop,omitempty"`
+	Remove                 string `json:"remove,omitempty"`
+	RequireAcknowledgement bool   `json:"require_acknowledgement,omitempty"`
 }
 type Release struct {
 	Version    string `json:"version"`
@@ -167,7 +196,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion && m.SchemaVersion != RuntimeIdentitySchemaVersion && m.SchemaVersion != BackupSchemaVersion {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != MultiContainerSchemaVersion && m.SchemaVersion != HardwareSchemaVersion && m.SchemaVersion != ExternalStorageSchemaVersion && m.SchemaVersion != RuntimeIdentitySchemaVersion && m.SchemaVersion != BackupSchemaVersion && m.SchemaVersion != CatalogMetadataSchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -191,8 +220,16 @@ func Validate(m Manifest) error {
 	if m.SchemaVersion < BackupSchemaVersion && m.Backup != nil {
 		return fmt.Errorf("backup policy requires schema version 6")
 	}
-	if m.SchemaVersion == BackupSchemaVersion && m.Backup == nil {
-		return fmt.Errorf("schema version 6 requires backup policy")
+	if m.SchemaVersion >= BackupSchemaVersion && m.Backup == nil {
+		return fmt.Errorf("schema version %d requires backup policy", m.SchemaVersion)
+	}
+	if m.SchemaVersion < CatalogMetadataSchemaVersion && hasCatalogMetadata(m) {
+		return fmt.Errorf("catalog metadata requires schema version 7")
+	}
+	if m.SchemaVersion == CatalogMetadataSchemaVersion {
+		if err := validateCatalogMetadata(m); err != nil {
+			return err
+		}
 	}
 	if err := validateRuntimeIdentity(m.RunAs); err != nil {
 		return err
@@ -309,6 +346,67 @@ func Validate(m Manifest) error {
 		return err
 	}
 	return nil
+}
+
+func hasCatalogMetadata(m Manifest) bool {
+	return m.Category != "" || m.Kind != "" || m.CatalogStatus != "" ||
+		m.WebsiteURL != "" || m.SourceURL != "" || m.DocumentationURL != "" ||
+		m.Logo != "" || len(m.Limitations) != 0 || m.LifecycleNotice != nil
+}
+
+func validateCatalogMetadata(m Manifest) error {
+	if !catalogCategories[m.Category] {
+		return fmt.Errorf("invalid catalog category")
+	}
+	if m.Kind != "application" && m.Kind != "network-service" {
+		return fmt.Errorf("invalid application kind")
+	}
+	if m.CatalogStatus != "standard" && m.CatalogStatus != "experimental" {
+		return fmt.Errorf("invalid catalog status")
+	}
+	for _, value := range []string{m.WebsiteURL, m.SourceURL, m.DocumentationURL} {
+		if value != "" && !validCatalogURL(value) {
+			return fmt.Errorf("invalid catalog URL")
+		}
+	}
+	if m.Logo != "" && !logoPattern.MatchString(m.Logo) {
+		return fmt.Errorf("invalid catalog logo")
+	}
+	if len(m.Limitations) > 8 {
+		return fmt.Errorf("too many catalog limitations")
+	}
+	seen := map[string]bool{}
+	for _, limitation := range m.Limitations {
+		if !validCatalogText(limitation, 280) || seen[limitation] {
+			return fmt.Errorf("invalid catalog limitation")
+		}
+		seen[limitation] = true
+	}
+	if notice := m.LifecycleNotice; notice != nil {
+		if !optionalCatalogText(notice.Install, 280) || !optionalCatalogText(notice.Stop, 280) || !optionalCatalogText(notice.Remove, 280) {
+			return fmt.Errorf("invalid lifecycle notice")
+		}
+		if notice.Install == "" && notice.Stop == "" && notice.Remove == "" {
+			return fmt.Errorf("empty lifecycle notice")
+		}
+	}
+	return nil
+}
+
+func validCatalogURL(value string) bool {
+	if len(value) > 512 || strings.ContainsAny(value, "\r\n\t") {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+}
+
+func validCatalogText(value string, limit int) bool {
+	return value != "" && value == strings.TrimSpace(value) && len(value) <= limit && !strings.ContainsAny(value, "\r\n")
+}
+
+func optionalCatalogText(value string, limit int) bool {
+	return value == "" || validCatalogText(value, limit)
 }
 
 func validateBackupPolicy(m Manifest) error {

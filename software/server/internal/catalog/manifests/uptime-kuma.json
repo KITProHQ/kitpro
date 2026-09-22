@@ -1,8 +1,13 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "uptime-kuma",
   "name": "Uptime Kuma",
   "description": "Monitor websites and network services from a self-hosted dashboard.",
+  "category": "Monitoring",
+  "kind": "application",
+  "catalog_status": "standard",
+  "source_url": "https://github.com/louislam/uptime-kuma",
+  "documentation_url": "https://github.com/louislam/uptime-kuma/wiki",
   "releases": [{
     "version": "2.3.1",
     "registry": "docker.io",

@@ -1,8 +1,14 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "ollama",
   "name": "Ollama",
   "description": "Run local language models with CPU support and optional trusted GPU acceleration.",
+  "category": "AI",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://ollama.com/",
+  "source_url": "https://github.com/ollama/ollama",
+  "limitations": ["Models are not downloaded automatically.", "AMD and Intel acceleration are not enabled."],
   "releases": [
     {"version": "0.34.0", "registry": "docker.io", "repository": "ollama/ollama", "digest": "sha256:aa6f86f01fee264c81f1edd9083ebfb07c8116d95d8bedd1ad470874b66a40b4", "platform": "linux/amd64"}
   ],

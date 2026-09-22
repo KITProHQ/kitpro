@@ -1,8 +1,13 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "actual-budget",
   "name": "Actual Budget",
   "description": "Private, local-first budgeting and financial planning.",
+  "category": "Finance",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://actualbudget.org/",
+  "documentation_url": "https://actualbudget.org/docs/",
   "releases": [{
     "version": "26.9.0",
     "registry": "docker.io",

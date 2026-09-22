@@ -1,8 +1,14 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "paperless-ngx",
   "name": "Paperless-ngx",
   "description": "Document management with a web application and internal Redis broker.",
+  "category": "Documents",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://docs.paperless-ngx.com/",
+  "source_url": "https://github.com/paperless-ngx/paperless-ngx",
+  "documentation_url": "https://docs.paperless-ngx.com/",
   "releases": [
     {"version": "2.20.15", "registry": "docker.io", "repository": "paperlessngx/paperless-ngx", "digest": "sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", "platform": "linux/amd64"},
     {"version": "redis-7.4.11", "registry": "docker.io", "repository": "library/redis", "digest": "sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7", "platform": "linux/amd64"}

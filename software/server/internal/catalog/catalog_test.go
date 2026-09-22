@@ -82,3 +82,41 @@ func TestBuiltInCatalogLoads(t *testing.T) {
 		t.Fatal("Linkding must not be catalogued before secure bootstrap secrets are supported")
 	}
 }
+
+func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCategories := map[string]string{
+		"actual-budget": "Finance", "audiobookshelf": "Media",
+		"freshrss": "Reading", "home-assistant": "Home automation",
+		"it-tools": "Developer Tools", "jellyfin": "Media",
+		"mealie": "Food and recipes", "memos": "Notes",
+		"navidrome": "Music", "ollama": "AI", "open-webui": "AI",
+		"paperless-ngx": "Documents", "sftpgo": "Files",
+		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
+	}
+	if len(wantCategories) != 15 {
+		t.Fatal("visible catalog metadata fixture must cover all 15 applications")
+	}
+	for id, category := range wantCategories {
+		entry, ok := c[id]
+		if !ok {
+			t.Fatalf("visible application %s is missing", id)
+		}
+		m := entry.Manifest
+		if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.Category != category || m.Kind != "application" || m.CatalogStatus != "standard" {
+			t.Fatalf("incomplete metadata for %s: %#v", id, m)
+		}
+		if m.WebsiteURL == "" && m.SourceURL == "" && m.DocumentationURL == "" {
+			t.Fatalf("%s has no reviewed project link", id)
+		}
+		if strings.Contains(m.Logo, "://") || strings.Contains(m.Logo, "/") {
+			t.Fatalf("%s has a remote or path-based logo reference %q", id, m.Logo)
+		}
+	}
+	if c["busybox"].Manifest.SchemaVersion != manifest.BackupSchemaVersion {
+		t.Fatal("busybox must remain a schema-v6 compatibility fixture")
+	}
+}

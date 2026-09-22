@@ -5,6 +5,66 @@ constrained application definitions, not Docker Compose. Unknown fields,
 duplicate keys, oversized documents, unknown schema versions, and invalid
 values are rejected before a helper request is created.
 
+## Catalog metadata (schema version 7)
+
+Schema version 7 keeps catalog presentation metadata in the same trusted
+manifest as the deployment definition. It also retains the schema-version-6
+backup requirement. A version-7 manifest without a valid `backup` policy is
+rejected.
+
+```json
+{
+  "schema_version": 7,
+  "category": "Reading",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://example.org/",
+  "source_url": "https://github.com/example/project",
+  "documentation_url": "https://docs.example.org/",
+  "logo": "example-project",
+  "limitations": ["Public publishing is not configured automatically."],
+  "lifecycle_notice": {
+    "install": "Review the application settings before installation.",
+    "stop": "Stopping interrupts the service.",
+    "remove": "Removing the runtime does not delete stored data.",
+    "require_acknowledgement": true
+  }
+}
+```
+
+`category` uses the reviewed values `AI`, `Developer Tools`, `Documents`,
+`Files`, `Finance`, `Food and recipes`, `Home automation`, `Media`,
+`Monitoring`, `Music`, `Networking`, `Notes`, `Reading`, and `Security`.
+`kind` is `application` or `network-service`. The kind describes the
+application's operational role. It does not grant new networking or lifecycle
+authority.
+
+`catalog_status` is `standard` or `experimental`. It describes the maturity of
+the catalog entry. It does not describe operating-system support. Platform
+support remains in the [support matrix](support-matrix.md).
+
+Website, source, and documentation links are optional HTTPS URLs. Validation
+is offline and never fetches them. User information, fragments, malformed
+URLs, and other schemes are rejected.
+
+`logo` is an optional packaged-asset key, not a URL or path. The UI loads a
+reviewed SVG from its local catalog assets. If no logo is declared, the UI uses
+generated initials. Each packaged logo needs a recorded source and license;
+KITPro never downloads catalog artwork at runtime.
+
+`limitations` contains at most eight non-empty, single-line entries of 280
+bytes each. Use it only for important behavior that structured storage,
+service, hardware, or backup declarations cannot already express.
+
+`lifecycle_notice` is structured display metadata. Schema version 7 validates
+its text, but it does not implement acknowledgement or alter lifecycle
+behavior. A later phase must add server-side policy before
+`require_acknowledgement` can enforce anything.
+
+Schemas 1 through 6 remain parseable. They cannot use schema-version-7
+metadata fields. This keeps one metadata contract and prevents older manifests
+from silently adopting only part of it.
+
 ## Backup policy (schema version 6)
 
 Schema version 6 requires one typed `backup` policy. The strategy is

@@ -1,8 +1,14 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "vaultwarden",
   "name": "Vaultwarden",
   "description": "A lightweight self-hosted Bitwarden-compatible password server.",
+  "category": "Security",
+  "kind": "application",
+  "catalog_status": "standard",
+  "source_url": "https://github.com/dani-garcia/vaultwarden",
+  "documentation_url": "https://github.com/dani-garcia/vaultwarden/wiki",
+  "limitations": ["Public TLS is outside KITPro's current publishing model."],
   "releases": [{
     "version": "1.37.2",
     "registry": "docker.io",

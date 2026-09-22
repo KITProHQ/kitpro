@@ -114,6 +114,7 @@ h4 { margin-bottom: 3px; font-size: 14px; }
 .app-row:hover { background: rgba(255, 255, 255, .018); }
 .app-identity { min-width: 0; display: flex; align-items: center; gap: 12px; }
 .app-mark { width: 38px; height: 38px; display: grid; flex: none; place-items: center; border: 1px solid rgba(96, 165, 250, .24); border-radius: 9px; background: var(--kit-primary-muted); color: #bfdbfe; font-size: 12px; font-weight: 780; letter-spacing: .02em; }
+.app-logo { width: 38px; height: 38px; flex: none; border-radius: 9px; object-fit: contain; }
 .app-name { margin: 0; font-size: 15px; font-weight: 720; }
 .app-description { overflow: hidden; margin: 2px 0 0; color: var(--kit-text-subtle); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .app-meta-label { display: block; margin-bottom: 2px; color: var(--kit-text-subtle); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
@@ -137,9 +138,12 @@ h4 { margin-bottom: 3px; font-size: 14px; }
 .catalog-card { min-height: 238px; display: flex; flex-direction: column; border: 1px solid var(--kit-border); border-radius: var(--kit-radius); background: var(--kit-bg-elevated); padding: 18px; transition: background-color 140ms ease, border-color 140ms ease; }
 .catalog-card:hover { border-color: var(--kit-border-strong); background: var(--kit-surface-muted); }
 .catalog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.catalog-card .app-mark { width: 42px; height: 42px; }
+.catalog-card .app-mark, .catalog-card .app-logo { width: 42px; height: 42px; }
+.catalog-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .catalog-card h2 { margin-top: 15px; font-size: 17px; }
 .catalog-card p { margin: 4px 0 0; color: var(--kit-text-muted); font-size: 13px; }
+.catalog-limitations { margin: 10px 0 0; padding-left: 18px; color: var(--kit-warning); font-size: 12px; }
+.catalog-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; font-size: 12px; }
 .field-label { display: grid; gap: 6px; margin-top: 12px; color: var(--kit-text-muted); font-size: 12px; font-weight: 700; }
 .field-label input, .field-label select { width: 100%; border: 1px solid var(--kit-border-strong); border-radius: 8px; background: var(--kit-bg); color: var(--kit-text); padding: 9px 10px; font: inherit; font-weight: 500; }
 .catalog-category { color: var(--kit-info); font-size: 11px; font-weight: 700; }

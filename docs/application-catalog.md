@@ -6,6 +6,13 @@ runtime validation. Catalog content cannot request host paths, Docker socket
 access, privileged mode, host namespaces, devices, capabilities, or host port
 bindings. Service exposure is an installation policy and defaults to internal.
 
+The 15 visible entries use manifest schema version 7. Their category,
+application kind, catalog status, official links, and non-derivable limitations
+come from the manifest. The API and server-rendered catalog use that same
+source. Logo keys can reference reviewed packaged assets; entries without one
+keep the generated-initials fallback. The internal BusyBox lifecycle fixture
+remains on schema version 6 to preserve backward-compatibility coverage.
+
 ## Ollama
 
 - Category: AI
@@ -23,14 +30,14 @@ bindings. Service exposure is an installation policy and defaults to internal.
 | --- | --- | --- | --- | --- | --- | --- |
 | FreshRSS | Reading | RSS reader | Single | Managed data/extensions | CPU | HTTP, private by default; browser bootstrap |
 | Uptime Kuma | Monitoring | Service monitoring | Single | Managed data | CPU | HTTP, private by default |
-| Mealie | Food | Recipe management | Single | Managed data | CPU | HTTP, private by default; signup disabled by default |
+| Mealie | Food and recipes | Recipe management | Single | Managed data | CPU | HTTP, private by default; signup disabled by default |
 | Memos | Notes | Notes and captures | Single | Managed data | CPU | HTTP, private by default |
 | Actual Budget | Finance | Local budgeting | Single | Managed data | CPU | HTTP, private by default |
 | Vaultwarden | Security | Password vault | Single | Managed data | CPU | HTTP, private by default; public TLS is outside KITPro |
 | Home Assistant | Home automation | Home dashboard | Single | Managed config | CPU | HTTP, private by default; no arbitrary devices or host network |
 | Paperless-ngx | Documents | Document archive | Multi | Managed app, media, consume, export, and broker data | CPU | Web only; Redis remains internal |
 | Open WebUI | AI | Authenticated AI interface | Single | Managed data and generated secret | CPU | HTTP, private by default; backend configured separately |
-| IT-Tools | Developer tools | Browser utilities | Single | Stateless | CPU | HTTP, private by default |
+| IT-Tools | Developer Tools | Browser utilities | Single | Stateless | CPU | HTTP, private by default |
 | Ollama | AI | Local model runtime | Single | Managed models | CPU or optional certified NVIDIA | API, private by default; no automatic model downloads |
 | Jellyfin | Media | Video/music library | Single | Managed config/cache plus read-only trusted media | CPU; NVIDIA optional but transcoding unvalidated | HTTP, private by default; one media root |
 | Navidrome | Music | Music streaming | Single | Managed database plus read-only trusted music | CPU | HTTP, private by default |

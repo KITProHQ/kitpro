@@ -126,7 +126,7 @@ func TestVersionEndpointReportsBuildAndSchemaMetadata(t *testing.T) {
 	req := authenticatedRequest(http.MethodGet, "/api/v1/version", "", session, csrf)
 	rec := httptest.NewRecorder()
 	a.guard(a.version)(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":6`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":7`) {
 		t.Fatalf("version response: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -312,6 +312,95 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	body := recorder.Body.String()
 	if strings.Contains(body, "BusyBox validation workload") || !strings.Contains(body, "Home Assistant") || !strings.Contains(body, "Paperless-ngx") {
 		t.Fatalf("catalog presentation is not curated: %s", body)
+	}
+}
+
+func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	recorder := httptest.NewRecorder()
+	a.apps(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/apps", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("catalog list status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var items []struct {
+		ID            string   `json:"id"`
+		Category      string   `json:"category"`
+		Kind          string   `json:"kind"`
+		CatalogStatus string   `json:"catalog_status"`
+		SourceURL     string   `json:"source_url"`
+		Limitations   []string `json:"limitations"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range items {
+		if item.ID == "vaultwarden" {
+			found = true
+			if item.Category != "Security" || item.Kind != "application" || item.CatalogStatus != "standard" || item.SourceURL == "" || len(item.Limitations) != 1 {
+				t.Fatalf("incomplete catalog metadata: %#v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("vaultwarden missing from catalog API")
+	}
+
+	recorder = httptest.NewRecorder()
+	a.apps(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/apps/vaultwarden", nil))
+	var detail struct {
+		SchemaVersion int    `json:"schema_version"`
+		ID            string `json:"id"`
+		Category      string `json:"category"`
+		Kind          string `json:"kind"`
+		CatalogStatus string `json:"catalog_status"`
+		SourceURL     string `json:"source_url"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.SchemaVersion != manifest.CatalogMetadataSchemaVersion || detail.ID != "vaultwarden" || detail.Category != "Security" || detail.Kind != "application" || detail.CatalogStatus != "standard" || detail.SourceURL == "" {
+		t.Fatalf("incomplete catalog detail: %#v", detail)
+	}
+}
+
+func TestCatalogUIUsesManifestMetadataAndLocalLogoFallback(t *testing.T) {
+	a, _, csrf := newTestApp(t)
+	entry := a.catalog["it-tools"]
+	entry.Manifest.Category = "Networking"
+	entry.Manifest.CatalogStatus = "experimental"
+	entry.Manifest.Logo = "it-tools"
+	entry.Manifest.Limitations = []string{"Test-only catalog limitation."}
+	a.catalog["it-tools"] = entry
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(csrf)
+	a.home(recorder, request)
+	body := recorder.Body.String()
+	for _, want := range []string{"Networking", "Experimental", "Test-only catalog limitation.", `src="/assets/catalog/it-tools.svg"`, ">FR</span>", "Documentation"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("catalog UI missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `class="app-logo" src="https://`) {
+		t.Fatalf("catalog UI rendered a remote logo: %s", body)
+	}
+}
+
+func TestCatalogLogoAssetBoundaryRejectsUnknownPaths(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	if !validCatalogLogoFilename("reviewed-logo.svg") || validCatalogLogoFilename("Reviewed.svg") {
+		t.Fatal("catalog logo filename boundary is incorrect")
+	}
+	for _, path := range []string{"/assets/catalog/../secret.svg", "/assets/catalog/https://example.com/logo.svg", "/assets/catalog/README.txt", "/assets/catalog/missing.svg"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080"+path, nil)
+		request.Host = "127.0.0.1:8080"
+		a.catalogAsset(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("logo path %q returned %d", path, recorder.Code)
+		}
 	}
 }
 

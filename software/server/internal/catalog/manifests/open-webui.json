@@ -1,8 +1,15 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "open-webui",
   "name": "Open WebUI",
   "description": "Private AI chat workspace that connects to a separately configured model backend.",
+  "category": "AI",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://openwebui.com/",
+  "source_url": "https://github.com/open-webui/open-webui",
+  "documentation_url": "https://docs.openwebui.com/",
+  "limitations": ["A model backend must be configured separately; KITPro does not provide cross-installation discovery."],
   "releases": [
     {"version": "0.11.2", "registry": "ghcr.io", "repository": "open-webui/open-webui", "digest": "sha256:4fdd422b9464921d4bef176046c47326b778219408aaee2f4bd8a21c10789f87", "platform": "linux/amd64"},
     {"version": "0.11.3", "registry": "ghcr.io", "repository": "open-webui/open-webui", "digest": "sha256:9cd136effce6bb12a6a1988a35ab3b82cb40c48a6768fceeb17c83baf7cfac9c", "platform": "linux/amd64"}

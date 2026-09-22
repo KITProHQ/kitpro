@@ -1,8 +1,15 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "jellyfin",
   "name": "Jellyfin",
   "description": "Stream a private media library while keeping source media outside KITPro's lifecycle.",
+  "category": "Media",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://jellyfin.org/",
+  "source_url": "https://github.com/jellyfin/jellyfin",
+  "documentation_url": "https://jellyfin.org/docs/",
+  "limitations": ["Hardware transcoding is not certified."],
   "releases": [
     {"version": "12.1", "registry": "docker.io", "repository": "jellyfin/jellyfin", "digest": "sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b", "platform": "linux/amd64"}
   ],

@@ -1,8 +1,13 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "id": "audiobookshelf",
   "name": "Audiobookshelf",
   "description": "Organize and stream audiobooks with managed metadata and a read-only library.",
+  "category": "Media",
+  "kind": "application",
+  "catalog_status": "standard",
+  "source_url": "https://github.com/advplyr/audiobookshelf",
+  "documentation_url": "https://www.audiobookshelf.org/docs/documentation/install/docker/",
   "releases": [
     {"version": "2.36.0", "registry": "ghcr.io", "repository": "advplyr/audiobookshelf", "digest": "sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8", "platform": "linux/amd64"}
   ],

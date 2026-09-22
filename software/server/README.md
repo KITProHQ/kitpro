@@ -5,9 +5,9 @@ KITPro Server is a Go control plane and narrowly privileged helper for trusted s
 ## Supported production boundary
 
 - Debian 13 amd64: `.deb`, rootful Docker, enforcing AppArmor.
+- Ubuntu 26.04 LTS amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Arch Linux x86_64: native package, `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor.
-- Ubuntu 26.04 LTS amd64: development evidence for the `.deb` path, not part of the public baseline.
-- Rocky Linux 10 amd64 and Podman: Experimental, not promoted by alpha.12.
+- Rocky Linux 10 amd64 and Podman: Experimental.
 
 See the definitive [support matrix](../../docs/support-matrix.md).
 

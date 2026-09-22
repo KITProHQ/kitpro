@@ -7,6 +7,12 @@ import (
 
 const valid = `{"schema_version":1,"id":"busybox","name":"BusyBox","releases":[{"version":"1.0","registry":"docker.io","repository":"library/busybox","digest":"sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0","platform":"linux/amd64"}],"storage":[{"id":"data","container_path":"/data","persistent":true,"read_only":false}],"restart":"unless-stopped"}`
 
+func validV7Manifest() string {
+	data := strings.Replace(valid, `"schema_version":1`, `"schema_version":7`, 1)
+	data = strings.Replace(data, `"name":"BusyBox"`, `"name":"BusyBox","category":"Developer Tools","kind":"application","catalog_status":"standard","website_url":"https://example.com","source_url":"https://github.com/example/project","documentation_url":"https://docs.example.com/project","logo":"busybox","limitations":["No automatic public access."],"lifecycle_notice":{"install":"Review the application settings before installation.","stop":"Stopping interrupts service.","remove":"Stored data is retained.","require_acknowledgement":true}`, 1)
+	return strings.Replace(data, `"restart":"unless-stopped"`, `"restart":"unless-stopped","backup":{"strategy":"cold-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, 1)
+}
+
 func TestParseAndResolve(t *testing.T) {
 	m, err := Parse([]byte(valid))
 	if err != nil {
@@ -18,6 +24,79 @@ func TestParseAndResolve(t *testing.T) {
 	}
 	if p.Hash() == "" {
 		t.Fatal("empty hash")
+	}
+}
+
+func TestSchemaVersionsOneThroughSevenRemainParseable(t *testing.T) {
+	versions := map[string]string{
+		"v1": valid,
+		"v2": `{"schema_version":2,"id":"multi-app","name":"Multi app","releases":[{"version":"1","registry":"docker.io","repository":"example/app","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","platform":"linux/amd64"}],"components":[{"id":"broker","release":"1"},{"id":"web","release":"1","depends_on":["broker"]}]}`,
+		"v3": strings.Replace(strings.Replace(valid, `"schema_version":1`, `"schema_version":3`, 1), `"restart":"unless-stopped"`, `"hardware":[{"class":"gpu.nvidia","optional":true,"cpu_fallback":true}],"restart":"unless-stopped"`, 1),
+		"v4": strings.Replace(strings.Replace(valid, `"schema_version":1`, `"schema_version":4`, 1), `"restart":"unless-stopped"`, `"external_storage":[{"id":"media","container_path":"/media","mode":"read-only","purpose":"Media library"}],"restart":"unless-stopped"`, 1),
+		"v5": strings.Replace(strings.Replace(valid, `"schema_version":1`, `"schema_version":5`, 1), `"restart":"unless-stopped"`, `"run_as":{"uid":1000,"gid":1000},"restart":"unless-stopped"`, 1),
+		"v6": strings.Replace(strings.Replace(valid, `"schema_version":1`, `"schema_version":6`, 1), `"restart":"unless-stopped"`, `"restart":"unless-stopped","backup":{"strategy":"cold-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, 1),
+		"v7": validV7Manifest(),
+	}
+	for name, data := range versions {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(data)); err != nil {
+				t.Fatalf("schema %s no longer parses: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestCatalogMetadataSchemaValidation(t *testing.T) {
+	m, err := Parse([]byte(validV7Manifest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Category != "Developer Tools" || m.Kind != "application" || m.CatalogStatus != "standard" || m.Logo != "busybox" || len(m.Limitations) != 1 || m.LifecycleNotice == nil || !m.LifecycleNotice.RequireAcknowledgement {
+		t.Fatalf("metadata was not parsed: %#v", m)
+	}
+	networkService := strings.Replace(validV7Manifest(), `"category":"Developer Tools"`, `"category":"Networking"`, 1)
+	networkService = strings.Replace(networkService, `"kind":"application"`, `"kind":"network-service"`, 1)
+	networkService = strings.Replace(networkService, `"catalog_status":"standard"`, `"catalog_status":"experimental"`, 1)
+	if _, err := Parse([]byte(networkService)); err != nil {
+		t.Fatalf("valid experimental network service metadata: %v", err)
+	}
+
+	tests := map[string]string{
+		"category":        strings.Replace(validV7Manifest(), `"category":"Developer Tools"`, `"category":"Unreviewed"`, 1),
+		"kind":            strings.Replace(validV7Manifest(), `"kind":"application"`, `"kind":"container"`, 1),
+		"status":          strings.Replace(validV7Manifest(), `"catalog_status":"standard"`, `"catalog_status":"preview"`, 1),
+		"http URL":        strings.Replace(validV7Manifest(), `https://example.com`, `http://example.com`, 1),
+		"malformed URL":   strings.Replace(validV7Manifest(), `https://example.com`, `https://`, 1),
+		"URL credentials": strings.Replace(validV7Manifest(), `https://example.com`, `https://user@example.com`, 1),
+		"logo path":       strings.Replace(validV7Manifest(), `"logo":"busybox"`, `"logo":"../busybox"`, 1),
+		"empty limitation": strings.Replace(validV7Manifest(),
+			`"limitations":["No automatic public access."]`, `"limitations":[""]`, 1),
+		"oversized limitation": strings.Replace(validV7Manifest(),
+			`No automatic public access.`, strings.Repeat("x", 281), 1),
+		"empty lifecycle notice": strings.Replace(validV7Manifest(),
+			`"lifecycle_notice":{"install":"Review the application settings before installation.","stop":"Stopping interrupts service.","remove":"Stored data is retained.","require_acknowledgement":true}`, `"lifecycle_notice":{}`, 1),
+		"missing backup": strings.Replace(validV7Manifest(),
+			`,"backup":{"strategy":"cold-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, ``, 1),
+	}
+	tooMany := make([]string, 9)
+	for i := range tooMany {
+		tooMany[i] = `"limitation-` + string(rune('a'+i)) + `"`
+	}
+	tests["too many limitations"] = strings.Replace(validV7Manifest(), `"limitations":["No automatic public access."]`, `"limitations":[`+strings.Join(tooMany, ",")+`]`, 1)
+
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(data)); err == nil {
+				t.Fatalf("accepted invalid v7 metadata: %s", data)
+			}
+		})
+	}
+}
+
+func TestCatalogMetadataRequiresSchemaSeven(t *testing.T) {
+	data := strings.Replace(valid, `"name":"BusyBox"`, `"name":"BusyBox","category":"Developer Tools"`, 1)
+	if _, err := Parse([]byte(data)); err == nil {
+		t.Fatal("accepted catalog metadata in schema version 1")
 	}
 }
 

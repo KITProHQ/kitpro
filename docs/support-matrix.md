@@ -3,8 +3,8 @@
 | Platform | Status | Boundary |
 | --- | --- | --- |
 | Debian 13 amd64 | Supported | Rootful Docker, enforcing AppArmor |
+| Ubuntu 26.04 LTS amd64 | Supported | `.deb`, rootful Docker, enforcing AppArmor; must pass the supported-host release checks |
 | Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor; no partial upgrades |
-| Ubuntu 26.04 LTS amd64 | Development / validation only | `.deb`, rootful Docker, enforcing AppArmor; not part of the public support baseline |
 | Rocky Linux 10 amd64 | Experimental | Rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; development acceptance does not promote this path into the public baseline |
 
 Podman is Experimental in alpha.12 and is used only by the experimental Rocky
@@ -14,11 +14,11 @@ Linux path. It is not a supported runtime on Debian, Arch Linux, or Ubuntu.
 
 | Capability | Debian 13 | Ubuntu 26.04 LTS | Arch Linux `linux-lts` | Rocky Linux 10 |
 | --- | --- | --- | --- | --- |
-| Basic KITPro | Certified | Development evidence only | Certified | Experimental acceptance evidence |
-| Mandatory access control | AppArmor required and certified | AppArmor development evidence | AppArmor required and certified | Experimental SELinux Enforcing evidence |
-| Container runtime | Rootful Docker certified | Rootful Docker development evidence | Rootful Docker certified | Experimental rootful Podman 5 and Quadlet evidence |
-| 15-app trusted catalog | Certified | Development evidence only | Certified | Experimental acceptance evidence |
-| Multi-container Paperless-ngx | Certified | Development evidence only | Certified | Experimental acceptance evidence, including backup/restore |
+| Basic KITPro | Certified | Supported; refresh acceptance before alpha.13 release | Certified | Experimental acceptance evidence |
+| Mandatory access control | AppArmor required and certified | AppArmor required; refresh acceptance before alpha.13 release | AppArmor required and certified | Experimental SELinux Enforcing evidence |
+| Container runtime | Rootful Docker certified | Rootful Docker required; refresh acceptance before alpha.13 release | Rootful Docker certified | Experimental rootful Podman 5 and Quadlet evidence |
+| 15-app trusted catalog | Certified | Supported; refresh catalog acceptance before alpha.13 release | Certified | Experimental acceptance evidence |
+| Multi-container Paperless-ngx | Certified | Supported; refresh lifecycle acceptance before alpha.13 release | Certified | Experimental acceptance evidence, including backup/restore |
 | Trusted external storage | Certified | Smoke certified | Smoke certified | Local read-only/read-write acceptance passed; NAS not exercised |
 | Ollama CPU | Certified | Certified | Certified | Acceptance passed |
 | NVIDIA Ollama inference | Certified: RTX A2000 / Toolkit 1.20.0 | Development evidence: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Not certified |
@@ -55,7 +55,8 @@ Ollama and Jellyfin declare optional NVIDIA access. Ollama inference is live-cer
 Navidrome and Audiobookshelf use read-only imported libraries. SFTPGo is the
 first read-write consumer and requires an exclusive root. Navidrome and SFTPGo
 passed live authenticated install, exact-mount, private-exposure, and reboot
-smoke tests on Debian and Arch. Ubuntu results remain development evidence.
+smoke tests on Debian and Arch. Existing Ubuntu results predate its supported
+designation and must be refreshed before the alpha.13 release.
 Audiobookshelf received full Debian acceptance with the same packaged schema
 and helper boundary.
 

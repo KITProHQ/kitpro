@@ -42,6 +42,9 @@ var webCSS string
 //go:embed web.js
 var webJS string
 
+//go:embed catalog-assets
+var catalogAssets embed.FS
+
 type app struct {
 	db            *sql.DB
 	helper        string
@@ -175,6 +178,7 @@ func main() {
 	auth.Cleanup(context.Background(), db, time.Now())
 	http.HandleFunc("/assets/kitpro.css", a.asset("text/css; charset=utf-8", webCSS))
 	http.HandleFunc("/assets/kitpro.js", a.asset("text/javascript; charset=utf-8", webJS))
+	http.HandleFunc("/assets/catalog/", a.catalogAsset)
 	http.HandleFunc("/setup", a.setup)
 	http.HandleFunc("/login", a.login)
 	http.HandleFunc("/logout", a.guard(a.logout))
@@ -226,6 +230,49 @@ func (a *app) asset(contentType, body string) http.HandlerFunc {
 			_, _ = io.WriteString(w, body)
 		}
 	}
+}
+
+func (a *app) catalogAsset(w http.ResponseWriter, r *http.Request) {
+	if !a.allowedHosts[r.Host] {
+		http.Error(w, "host denied", http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/assets/catalog/")
+	if !validCatalogLogoFilename(name) {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := catalogAssets.ReadFile("catalog-assets/" + name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	a.securityHeaders(w)
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(body)
+	}
+}
+
+func validCatalogLogoFilename(name string) bool {
+	if len(name) < len("a.svg") || len(name) > 68 || !strings.HasSuffix(name, ".svg") {
+		return false
+	}
+	key := strings.TrimSuffix(name, ".svg")
+	for i, r := range key {
+		if i == 0 && (r < 'a' || r > 'z') {
+			return false
+		}
+		if i > 0 && !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *app) renderAuth(w http.ResponseWriter, status int, data authPageData) {
@@ -482,7 +529,7 @@ func (a *app) version(w http.ResponseWriter, r *http.Request) {
 		"package_family":         packageFamily(),
 		"platform":               platformName(),
 		"schema_version":         schema,
-		"catalog_schema_version": manifest.BackupSchemaVersion,
+		"catalog_schema_version": manifest.CatalogMetadataSchemaVersion,
 	})
 }
 func (a *app) hardware(w http.ResponseWriter, r *http.Request) {
@@ -542,15 +589,18 @@ func (a *app) storageRoots(w http.ResponseWriter, r *http.Request) {
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	type appView struct {
 		ID, Name, Description, Release, Category, Initials, Hardware string
+		WebsiteURL, SourceURL, DocumentationURL, LogoURL             string
 		InstalledCount                                               int
-		HardwareUnavailable                                          bool
+		HardwareUnavailable, Experimental                            bool
 		StorageSlots                                                 []storageSlotView
+		Limitations                                                  []string
 	}
 	type installationView struct {
 		ID, Name, Description, Category, Initials, State, StateLabel, StateClass, AppID, Release string
 		AccessLabel, OpenEndpoint, AvailableRelease, HardwareLabel, HardwareClass, HardwareID    string
+		LogoURL                                                                                  string
 		Generation, InstalledCount                                                               int
-		UpdateAvailable                                                                          bool
+		UpdateAvailable, Experimental                                                            bool
 		Services                                                                                 []serviceStatus
 		Components                                                                               []string
 		Storage                                                                                  []installedStorageView
@@ -582,7 +632,8 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 			_ = a.db.QueryRowContext(r.Context(), "SELECT release_id FROM installations WHERE installation_id=?", id).Scan(&view.Release)
 			if entry, ok := a.catalog[appID]; ok {
 				m := entry.Manifest
-				view.Name, view.Description, view.Category, view.Initials = m.Name, m.Description, catalogCategory(m.ID), appInitials(m.Name)
+				view.Name, view.Description, view.Category, view.Initials = m.Name, m.Description, m.Category, appInitials(m.Name)
+				view.LogoURL, view.Experimental = catalogLogoURL(m.Logo), m.CatalogStatus == "experimental"
 				if len(m.Components) == 0 && len(m.Releases) > 1 {
 					candidate := m.Releases[len(m.Releases)-1].Version
 					if candidate != view.Release {
@@ -656,7 +707,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: catalogCategory(m.ID), Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID]}
+		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: m.Category, Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID], WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, LogoURL: catalogLogoURL(m.Logo), Limitations: append([]string(nil), m.Limitations...), Experimental: m.CatalogStatus == "experimental"}
 		for _, slot := range m.ExternalStorage {
 			item := storageSlotView{ID: slot.ID, Purpose: slot.Purpose, Mode: slot.Mode}
 			for _, root := range storageRoots {
@@ -712,7 +763,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.BackupSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
+	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.CatalogMetadataSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
 		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
 	}
 }
@@ -849,19 +900,11 @@ func packageFamily() string {
 
 func catalogVisible(id string) bool { return id != "busybox" }
 
-func catalogCategory(id string) string {
-	categories := map[string]string{
-		"open-webui": "AI", "it-tools": "Developer Tools",
-		"ollama":        "AI",
-		"actual-budget": "Finance", "freshrss": "Reading", "home-assistant": "Home automation",
-		"mealie": "Food and recipes", "memos": "Notes", "paperless-ngx": "Documents",
-		"uptime-kuma": "Monitoring", "vaultwarden": "Security",
-		"jellyfin": "Media", "navidrome": "Music", "audiobookshelf": "Media", "sftpgo": "Files",
+func catalogLogoURL(key string) string {
+	if key == "" {
+		return ""
 	}
-	if category := categories[id]; category != "" {
-		return category
-	}
-	return "Application"
+	return "/assets/catalog/" + key + ".svg"
 }
 
 func appInitials(name string) string {
@@ -1402,10 +1445,18 @@ func (a *app) apps(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/apps")
 	if path == "" || path == "/" {
 		type item struct {
-			ID          string   `json:"id"`
-			Name        string   `json:"name"`
-			Description string   `json:"description,omitempty"`
-			Releases    []string `json:"releases"`
+			ID               string   `json:"id"`
+			Name             string   `json:"name"`
+			Description      string   `json:"description,omitempty"`
+			Category         string   `json:"category,omitempty"`
+			Kind             string   `json:"kind,omitempty"`
+			CatalogStatus    string   `json:"catalog_status,omitempty"`
+			WebsiteURL       string   `json:"website_url,omitempty"`
+			SourceURL        string   `json:"source_url,omitempty"`
+			DocumentationURL string   `json:"documentation_url,omitempty"`
+			Logo             string   `json:"logo,omitempty"`
+			Limitations      []string `json:"limitations,omitempty"`
+			Releases         []string `json:"releases"`
 		}
 		out := []item{}
 		for _, id := range catalog.IDs(a.catalog) {
@@ -1414,7 +1465,7 @@ func (a *app) apps(w http.ResponseWriter, r *http.Request) {
 			for _, rel := range m.Releases {
 				versions = append(versions, rel.Version)
 			}
-			out = append(out, item{m.ID, m.Name, m.Description, versions})
+			out = append(out, item{ID: m.ID, Name: m.Name, Description: m.Description, Category: m.Category, Kind: m.Kind, CatalogStatus: m.CatalogStatus, WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, Logo: m.Logo, Limitations: append([]string(nil), m.Limitations...), Releases: versions})
 		}
 		_ = json.NewEncoder(w).Encode(out)
 		return
@@ -1444,14 +1495,23 @@ func (a *app) apps(w http.ResponseWriter, r *http.Request) {
 	}
 	m := entry.Manifest
 	type detail struct {
-		ID            string             `json:"id"`
-		Name          string             `json:"name"`
-		Description   string             `json:"description,omitempty"`
-		SchemaVersion int                `json:"schema_version"`
-		Releases      []manifest.Release `json:"releases"`
-		Storage       []manifest.Storage `json:"storage,omitempty"`
+		ID               string                    `json:"id"`
+		Name             string                    `json:"name"`
+		Description      string                    `json:"description,omitempty"`
+		Category         string                    `json:"category,omitempty"`
+		Kind             string                    `json:"kind,omitempty"`
+		CatalogStatus    string                    `json:"catalog_status,omitempty"`
+		WebsiteURL       string                    `json:"website_url,omitempty"`
+		SourceURL        string                    `json:"source_url,omitempty"`
+		DocumentationURL string                    `json:"documentation_url,omitempty"`
+		Logo             string                    `json:"logo,omitempty"`
+		Limitations      []string                  `json:"limitations,omitempty"`
+		LifecycleNotice  *manifest.LifecycleNotice `json:"lifecycle_notice,omitempty"`
+		SchemaVersion    int                       `json:"schema_version"`
+		Releases         []manifest.Release        `json:"releases"`
+		Storage          []manifest.Storage        `json:"storage,omitempty"`
 	}
-	_ = json.NewEncoder(w).Encode(detail{m.ID, m.Name, m.Description, m.SchemaVersion, m.Releases, m.Storage})
+	_ = json.NewEncoder(w).Encode(detail{ID: m.ID, Name: m.Name, Description: m.Description, Category: m.Category, Kind: m.Kind, CatalogStatus: m.CatalogStatus, WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, Logo: m.Logo, Limitations: append([]string(nil), m.Limitations...), LifecycleNotice: m.LifecycleNotice, SchemaVersion: m.SchemaVersion, Releases: m.Releases, Storage: m.Storage})
 }
 
 func (a *app) runInstallationLifecycle(w http.ResponseWriter, r *http.Request, installationID, action string) {
