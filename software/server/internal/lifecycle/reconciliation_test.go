@@ -330,7 +330,6 @@ func TestHistoricalFailedGenerationWithMissingRuntimeIDUsesBoundedFallbackCleanu
 	}
 	labels := map[string]string{"com.kitpro.managed": "true", "com.kitpro.instance": "inst-one", "com.kitpro.resource": "application", "com.kitpro.runtime-generation": "2"}
 	plan := containers.ContainerPlan{Image: "repo/app@sha256:failed", Name: "candidate-name", Network: "historical-network", Labels: labels}
-	h.runtime.networks[plan.Network] = containers.NetworkObservation{Exists: true, ID: "historical-network-id", Name: plan.Network, Labels: labels}
 	h.runtime.containers["historical-candidate-id"] = observationFromPlan("historical-candidate-id", plan, "historical-network-id", containers.RuntimeStopped)
 	if _, err := h.db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at,verified_at) VALUES('inst-one',2,'app','candidate-name','',?,'image-id',?,'stopped','now','now')`, plan.Image, observationHash(h.runtime.containers["historical-candidate-id"])); err != nil {
 		t.Fatal(err)

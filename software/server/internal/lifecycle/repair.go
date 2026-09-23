@@ -311,7 +311,8 @@ func (r Repairer) verifyExactComponent(ctx context.Context, generation MultiGene
 	}
 	attachment, attached := observed.Networks[generation.NetworkName]
 	stoppedBeforeFirstStart := (generation.Status == "prepared" || generation.Status == "candidate" || generation.Status == "failed" || generation.Status == "cleanup_pending") && observed.State == containers.RuntimeStopped && attachment.NetworkID == "" && observed.NetworkMode == generation.NetworkName
-	if !network.Exists || (generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {
+	staleCleanupNetwork := (generation.Status == "prepared" || generation.Status == "candidate" || generation.Status == "failed" || generation.Status == "cleanup_pending") && observed.State == containers.RuntimeStopped && !network.Exists
+	if (!network.Exists && !staleCleanupNetwork) || (!staleCleanupNetwork && generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {
 		return observed, errors.New("repair refused because component network identity changed")
 	}
 	return observed, nil
