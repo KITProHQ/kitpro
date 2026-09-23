@@ -115,7 +115,7 @@ func (r Repairer) cleanupNonActive(ctx context.Context, installation, operationI
 		}
 		plan := repairPlan(generation, operationID, token)
 		for _, component := range reverseComponents(generation.Components) {
-			observed, observeErr := r.Runtime.ObserveContainer(ctx, component.ContainerID)
+			observed, observeErr := (Reconciler{Runtime: r.Runtime, Store: r.Store}).observeComponent(ctx, component)
 			if observeErr != nil {
 				return observeErr
 			}
@@ -128,6 +128,12 @@ func (r Repairer) cleanupNonActive(ctx context.Context, installation, operationI
 					return errors.New("cleanup refused because expected name is occupied by another runtime object")
 				}
 				continue
+			}
+			// A recovered ID is used only for this bounded cleanup attempt; it is
+			// not persisted as helper authority until the normal removal fence
+			// completes.
+			if component.ContainerID == "" {
+				component.ContainerID = observed.ID
 			}
 			if _, observeErr = r.verifyExactComponent(ctx, generation, component); observeErr != nil {
 				return observeErr

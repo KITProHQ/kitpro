@@ -209,21 +209,14 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 			}
 		}
 		finding := ComponentFinding{ComponentID: component.ID, Generation: generation.Generation, Role: role, ExpectedRuntime: expected, ExpectedRuntimeID: component.ContainerID}
-		observed, observeErr := r.Runtime.ObserveContainer(ctx, component.ContainerID)
+		observed, observeErr := r.observeComponent(ctx, component)
 		if observeErr != nil {
 			return nil, "unknown", observeErr
 		}
 		if !observed.Exists {
-			byName, nameErr := r.Runtime.ObserveContainer(ctx, component.ContainerName)
-			if nameErr != nil {
-				return nil, "unknown", nameErr
-			}
 			finding.ObservedRuntime = "missing"
 			states["missing"]++
-			if byName.Exists {
-				finding.ObservedRuntimeID = byName.ID
-				finding.MismatchCodes = append(finding.MismatchCodes, MismatchOwnershipAmbiguous)
-			} else if role == "active" {
+			if role == "active" {
 				if len(generation.Components) == 1 {
 					finding.MismatchCodes = append(finding.MismatchCodes, MismatchActiveContainerMissing)
 				} else {
@@ -238,7 +231,7 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		finding.ObservedRuntimeID = observed.ID
 		finding.ObservedRuntime = string(observed.State)
 		states[finding.ObservedRuntime]++
-		if observed.ID != component.ContainerID || observed.Name != component.ContainerName || observed.Labels[ownership.LabelManaged] != "true" || observed.Labels[ownership.LabelInstance] != generation.InstallationID || observed.Labels["com.kitpro.runtime-generation"] != fmt.Sprint(generation.Generation) {
+		if (component.ContainerID != "" && observed.ID != component.ContainerID) || observed.Name != component.ContainerName || observed.Labels[ownership.LabelManaged] != "true" || observed.Labels[ownership.LabelInstance] != generation.InstallationID || observed.Labels["com.kitpro.runtime-generation"] != fmt.Sprint(generation.Generation) {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchOwnershipAmbiguous)
 		}
 		if observed.ImageReference != component.Image || (component.ImageID != "" && observed.ImageID != component.ImageID) {
@@ -308,6 +301,26 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		runtimeState = "degraded"
 	}
 	return findings, runtimeState, nil
+}
+
+// observeComponent resolves a component through its stored runtime ID when
+// available. Historical alpha.12 failures can have no stored ID, so the
+// trusted container name is used only as a bounded fallback; callers still
+// validate ownership labels, generation, image, and network before acting.
+func (r Reconciler) observeComponent(ctx context.Context, component Component) (containers.ContainerObservation, error) {
+	if component.ContainerID != "" {
+		observed, err := r.Runtime.ObserveContainer(ctx, component.ContainerID)
+		if err != nil {
+			return containers.ContainerObservation{}, err
+		}
+		if observed.Exists {
+			return observed, nil
+		}
+	}
+	if component.ContainerName == "" {
+		return containers.ContainerObservation{State: containers.RuntimeMissing}, nil
+	}
+	return r.Runtime.ObserveContainer(ctx, component.ContainerName)
 }
 
 func (r Reconciler) classifyNonActive(ctx context.Context, result *ReconciliationResult, generations []MultiGeneration) error {

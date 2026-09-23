@@ -322,6 +322,58 @@ func TestCleanupDebtRemovesOnlyExactNonActiveRuntimeAndNeverStorage(t *testing.T
 	}
 }
 
+func TestHistoricalFailedGenerationWithMissingRuntimeIDUsesBoundedFallbackCleanup(t *testing.T) {
+	h := newHarness(t, true)
+	finishHarnessOperation(t, h)
+	if _, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,observed_network_id,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',2,'failed-openwebui','app','failed','failed','historical-network','historical-network-id','historical-plan','/persistent/data','internal','now','clean')`); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{"com.kitpro.managed": "true", "com.kitpro.instance": "inst-one", "com.kitpro.resource": "application", "com.kitpro.runtime-generation": "2"}
+	plan := containers.ContainerPlan{Image: "repo/app@sha256:failed", Name: "candidate-name", Network: "historical-network", Labels: labels}
+	h.runtime.networks[plan.Network] = containers.NetworkObservation{Exists: true, ID: "historical-network-id", Name: plan.Network, Labels: labels}
+	h.runtime.containers["historical-candidate-id"] = observationFromPlan("historical-candidate-id", plan, "historical-network-id", containers.RuntimeStopped)
+	if _, err := h.db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,observed_image_id,configuration_hash,state,created_at,verified_at) VALUES('inst-one',2,'app','candidate-name','',?,'image-id',?,'stopped','now','now')`, plan.Image, observationHash(h.runtime.containers["historical-candidate-id"])); err != nil {
+		t.Fatal(err)
+	}
+	foreign := h.runtime.containers["historical-candidate-id"]
+	foreign.Labels["com.kitpro.instance"] = "other-installation"
+	h.runtime.containers["historical-candidate-id"] = foreign
+	result, err := (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationActionRequired || result.RecommendedAction != RepairNone || !hasMismatch(result, MismatchOwnershipAmbiguous) {
+		t.Fatalf("foreign historical candidate was adoptable: %#v err=%v", result, err)
+	}
+	foreign.Labels["com.kitpro.instance"] = "inst-one"
+	h.runtime.containers["historical-candidate-id"] = foreign
+
+	result, err = (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationCleanupPending || result.RecommendedAction != RepairCleanupResources || !hasMismatch(result, MismatchCandidateOrphaned) {
+		t.Fatalf("historical reconciliation=%#v err=%v", result, err)
+	}
+
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RepairInstallation", OperationRevision: 1, InstanceID: "inst-one", RepairAction: RepairCleanupResources}
+	decision, err := h.coordinator.Begin(context.Background(), request, 0, request.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.coordinator.AuthorizeMutation(context.Background(), request.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	result, err = (Repairer{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Repair(context.Background(), request.InstanceID, request.OperationID, decision.FencingToken, request.RepairAction)
+	if err != nil {
+		t.Fatalf("historical cleanup repair: %v", err)
+	}
+	if result.State != ReconciliationConsistent || result.RecommendedAction != RepairNone {
+		t.Fatalf("post-cleanup reconciliation=%#v", result)
+	}
+	if observed, ok := h.runtime.containers["historical-candidate-id"]; ok && observed.Exists {
+		t.Fatal("historical candidate was not removed")
+	}
+	var status, cleanup string
+	if err = h.db.QueryRow(`SELECT status,cleanup_state FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=2`).Scan(&status, &cleanup); err != nil || status != "removed" || cleanup != "clean" {
+		t.Fatalf("historical generation status=%q cleanup=%q err=%v", status, cleanup, err)
+	}
+}
+
 func TestCleanupDebtWithoutActiveGenerationReconcilesAsRuntimeRemoved(t *testing.T) {
 	h := newHarness(t, true)
 	finishHarnessOperation(t, h)
