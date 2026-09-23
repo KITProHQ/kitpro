@@ -166,26 +166,6 @@ run_wrapper() {
         "$upgrade_script" "$package"
 }
 
-run_installed_preflight() {
-    local root=$1 target=$2 old=$3
-    KITPRO_UPGRADE_TESTING=1 \
-    KITPRO_TEST_ROOT="$root" \
-    KITPRO_TEST_SYSTEMCTL="$fake_systemctl" \
-    KITPRO_TEST_RUNUSER="$fake_runuser" \
-    KITPRO_TEST_APT_GET="$fake_apt" \
-    KITPRO_TEST_DPKG_DEB="$fake_dpkg_deb" \
-    KITPRO_TEST_DPKG_QUERY="$fake_dpkg_query" \
-    KITPRO_TEST_MV="$fake_mv" \
-    KITPRO_TEST_SYNC="$fake_sync" \
-    KITPRO_TEST_SERVICE_LOG="$root/service.log" \
-    KITPRO_TEST_APT_LOG="$root/apt.log" \
-    KITPRO_TEST_INSTALLED_VERSION_FILE="$root/installed-version" \
-    KITPRO_TEST_APPROVAL_PATH="$root/run/kitpro/debian-upgrade-approved" \
-    KITPRO_TEST_ACTIVE_UNITS="${KITPRO_TEST_ACTIVE_UNITS-kitpro-api.service kitpro-helper.service kitpro-helper.socket}" \
-    KITPRO_TEST_FAIL_START_UNITS="${KITPRO_TEST_FAIL_START_UNITS:-}" \
-        "$upgrade_script" --preflight-installed "$target" "$old"
-}
-
 assert_started_units() {
     local root=$1 expected=$2 actual
     actual=$(awk '$1 == "start" {print $2}' "$root/service.log" | sort | tr '\n' ' ' | sed 's/ $//')
@@ -386,27 +366,6 @@ grep -Fq 'recovery failed to restore previously active unit: kitpro-helper.socke
 grep -Fq 'upgrade recovery was incomplete' "$restoration_failure_root/output.log"
 assert_started_units "$restoration_failure_root" 'kitpro-api.service kitpro-helper.socket'
 
-# Once alpha.12 is installed, its permanent gate provides the same paired
-# preflight directly to future package preinst scripts.
-future_root="$work_dir/future"
-configure_root "$future_root"
-create_database "$future_root/var/lib/kitpro-api/control.db"
-create_database "$future_root/var/lib/kitpro-helper/helper.db"
-run_installed_preflight "$future_root" 0.1.0~alpha13 0.1.0~alpha12
-grep -Fxq 'package_sha256=internal' "$future_root/run/kitpro/debian-upgrade-approved"
-test "$(find "$future_root/var/lib/kitpro-api/backups" "$future_root/var/lib/kitpro-helper/backups" -type f -name 'pre-upgrade-*-set-*.db' | wc -l)" -eq 2
-assert_started_units "$future_root" ''
-
-unsupported_root="$work_dir/unsupported-alpha11"
-configure_root "$unsupported_root"
-create_database "$unsupported_root/var/lib/kitpro-api/control.db"
-create_database "$unsupported_root/var/lib/kitpro-helper/helper.db"
-if run_installed_preflight "$unsupported_root" 0.1.0~alpha12 0.1.0~alpha11 >"$unsupported_root/output.log" 2>&1; then
-    printf 'unbound permanent gate accepted the alpha.11 bootstrap transition\n' >&2
-    exit 1
-fi
-assert_no_backup_set "$unsupported_root"
-
 # The alpha.12 postinst must return before migration on every dpkg abort path.
 action_line=$(grep -n "abort-upgrade|abort-install|abort-remove|abort-deconfigure)" "$server_dir/packaging/debian/postinst.in" | cut -d: -f1)
 migration_line=$(grep -n -- '--migrate-only' "$server_dir/packaging/debian/postinst.in" | head -1 | cut -d: -f1)
@@ -416,3 +375,4 @@ for action in abort-upgrade abort-install abort-remove abort-deconfigure; do
 done
 
 printf 'Debian fail-closed upgrade gate tests: PASS\n'
+"$script_dir/debian_incoming_preinst_test.sh"

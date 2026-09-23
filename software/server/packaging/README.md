@@ -55,6 +55,16 @@ package or Docker Inc.'s `docker-ce` package across Debian and Ubuntu. Package
 pre-installation fails clearly unless Docker is active and its Unix socket is
 present.
 
+For upgrades from alpha.12 or newer, the incoming package's control-archive
+`preinst` owns the pre-unpack transaction. It records service state, stops
+writers, uses the installed version's read-only database verification
+interfaces, creates a root-only paired snapshot under helper state, verifies
+both copies, and writes a target-version/source-bound approval. It does not
+call the installed `kitpro-debian-upgrade`, invoke `--prepare-upgrade`, or
+depend on the incoming payload or AppArmor profile before dpkg unpacks them.
+`postinst` validates the approval and pair with the newly unpacked binaries,
+loads the new AppArmor policy, migrates, and activates services.
+
 The package creates the unprivileged `kitpro-api` account. The helper runs as
 root under the enforcing AppArmor profile and systemd sandbox. The API account
 is never added to the Docker group. The helper unit intentionally omits

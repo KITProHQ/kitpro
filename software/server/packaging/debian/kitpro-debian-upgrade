@@ -224,14 +224,6 @@ installed_version() {
 }
 
 case ${1:-} in
-    --preflight-installed)
-        (( $# == 3 )) || die 'invalid installed-preflight arguments.'
-        [[ "$3" != "$alpha11_version" ]] || die 'alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper.'
-        preflight \
-            "$(path_in_root /usr/bin/kitpro-api)" \
-            "$(path_in_root /usr/libexec/kitpro-helper)" \
-            "$2" "$3" internal
-        ;;
     '')
         die 'a Debian package path is required.'
         ;;

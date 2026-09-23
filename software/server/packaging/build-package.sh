@@ -72,7 +72,8 @@ installed_size=$(du -sk "$root" | awk '{print $1}')
 sed -e "s/@VERSION@/$version/g" -e "s/@INSTALLED_SIZE@/$installed_size/g" \
     "$script_dir/debian/control.in" > "$control/control"
 for name in preinst postinst prerm postrm; do
-    sed "s/@VERSION@/$version/g" "$script_dir/debian/$name.in" > "$control/$name"
+    sed -e "s/@VERSION@/$version/g" -e "s/@SOURCE_COMMIT@/$source_commit/g" \
+        "$script_dir/debian/$name.in" > "$control/$name"
     chmod 0755 "$control/$name"
 done
 

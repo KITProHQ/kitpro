@@ -1,71 +1,370 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
+set -Eeuo pipefail
 
-package_version='@VERSION@'
+readonly package_version='@VERSION@'
+readonly package_source_commit='@SOURCE_COMMIT@'
+readonly approval_format=2
+readonly alpha11_version='0.1.0~alpha11'
+
 action=${1:-}
 old_version=${2:-}
+test_mode=false
+root_prefix=
+trusted_uid=0
+trusted_gid=0
+systemctl_command=/usr/bin/systemctl
+install_command=/usr/bin/install
+mv_command=/usr/bin/mv
+sync_command=/usr/bin/sync
+dpkg_command=/usr/bin/dpkg
 
-if [ "$action" = upgrade ] && [ -n "$old_version" ] && dpkg --compare-versions "$old_version" gt "$package_version"; then
-    echo "kitpro-server: downgrade from $old_version to $package_version is unsupported" >&2
+die() {
+    printf 'KITPro upgrade aborted: %s\n' "$1" >&2
     exit 1
+}
+
+if [[ ${KITPRO_PREINST_TESTING:-} == 1 ]]; then
+    (( EUID != 0 )) || die 'test overrides are not accepted when running as root.'
+    test_mode=true
+    root_prefix=${KITPRO_TEST_ROOT:?KITPRO_TEST_ROOT is required in test mode}
+    trusted_uid=$(id -u)
+    trusted_gid=$(id -g)
+    systemctl_command=${KITPRO_TEST_SYSTEMCTL:?KITPRO_TEST_SYSTEMCTL is required in test mode}
+    install_command=${KITPRO_TEST_INSTALL:-/usr/bin/install}
+    mv_command=${KITPRO_TEST_MV:-/usr/bin/mv}
+    sync_command=${KITPRO_TEST_SYNC:-/usr/bin/sync}
+    dpkg_command=${KITPRO_TEST_DPKG:?KITPRO_TEST_DPKG is required in test mode}
+elif (( EUID != 0 )); then
+    die 'Debian maintainer preinst must run as root.'
 fi
 
-if ! systemctl is-active --quiet docker.service; then
-    echo "kitpro-server: a compatible, active Docker Engine is required" >&2
-    exit 1
-fi
-if [ ! -S /run/docker.sock ] && [ ! -S /var/run/docker.sock ]; then
-    echo "kitpro-server: Docker Engine socket is unavailable" >&2
-    exit 1
-fi
+path_in_root() {
+    printf '%s%s\n' "$root_prefix" "$1"
+}
 
-if [ "$action" = upgrade ] && [ -x /usr/bin/kitpro-api ] && [ -x /usr/libexec/kitpro-helper ]; then
-    if [ "$old_version" = '0.1.0~alpha11' ]; then
-        approval=/run/kitpro/debian-upgrade-approved
-        [ -f "$approval" ] || {
-            echo 'kitpro-server: alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper' >&2
-            exit 1
-        }
-        [ "$(stat -c '%u:%a' "$approval")" = '0:600' ] || {
-            echo 'kitpro-server: Debian upgrade approval has unsafe ownership or permissions' >&2
-            exit 1
-        }
-        approved_old=$(sed -n 's/^old_version=//p' "$approval")
-        approved_target=$(sed -n 's/^target_version=//p' "$approval")
-        approved_format=$(sed -n 's/^format=//p' "$approval")
-        approved_sha256=$(sed -n 's/^package_sha256=//p' "$approval")
-        backup_set_id=$(sed -n 's/^backup_set_id=//p' "$approval")
-        approved_at=$(sed -n 's/^created_at=//p' "$approval")
-        case $approved_sha256 in *[!0-9a-f]*|'') approved_sha256=invalid ;; esac
-        case $backup_set_id in *[!0-9TZ-]*|'') backup_set_id=invalid ;; esac
-        case $approved_at in *[!0-9]*|'') approved_at=0 ;; esac
-        approval_age=$(($(date +%s) - approved_at))
-        [ "$approved_format" = 1 ] && [ "$approved_old" = "$old_version" ] && [ "$approved_target" = "$package_version" ] \
-            && [ "${#approved_sha256}" -eq 64 ] && [ "$backup_set_id" != invalid ] \
-            && [ "$approval_age" -ge 0 ] && [ "$approval_age" -le 900 ] || {
-            echo 'kitpro-server: Debian upgrade approval does not match this transition' >&2
-            exit 1
-        }
-        if [ -r /etc/default/kitpro-server ]; then
-            # shellcheck disable=SC1091
-            . /etc/default/kitpro-server
+approval_path() {
+    path_in_root /run/kitpro/debian-upgrade-approved
+}
+
+fail_if_injected() {
+    local point=$1
+    if [[ "$test_mode" == true && ${KITPRO_TEST_FAIL_POINT:-} == "$point" ]]; then
+        die "injected incoming-preflight failure: $point"
+    fi
+}
+
+validate_root_configuration() {
+    local path=$1 mode group_digit other_digit
+    [[ -f "$path" && ! -L "$path" ]] || die "package configuration is not a regular file: $path"
+    [[ $(stat -c '%u' "$path") == "$trusted_uid" ]] || die "package configuration is not owned by the trusted administrator: $path"
+    mode=$(stat -c '%a' "$path")
+    group_digit=$((mode / 10 % 10))
+    other_digit=$((mode % 10))
+    (( (group_digit & 2) == 0 && (other_digit & 2) == 0 )) || die "package configuration is writable by an untrusted identity: $path"
+}
+
+validate_database_path() {
+    local path=$1 resolved
+    [[ "$path" == /* && "$path" != *$'\n'* ]] || die "database path is invalid: $path"
+    [[ -f "$path" && ! -L "$path" ]] || die "database is not a regular file: $path"
+    [[ $(stat -c '%h' "$path") == 1 ]] || die "database has an unsafe hard-link count: $path"
+    resolved=$(readlink -f -- "$path")
+    [[ "$resolved" == "$path" ]] || die "database path traverses a symbolic link: $path"
+}
+
+validate_database_set() {
+    local base=$1 suffix
+    validate_database_path "$base"
+    for suffix in -wal -shm; do
+        [[ ! -e "$base$suffix" && ! -L "$base$suffix" ]] || validate_database_path "$base$suffix"
+    done
+}
+
+database_set_hash() {
+    local base=$1 suffix found=false
+    {
+        for suffix in '' -wal -shm; do
+            if [[ -f "$base$suffix" && ! -L "$base$suffix" ]]; then
+                found=true
+                printf '%s  %s\n' "$(sha256sum "$base$suffix" | awk '{print $1}')" "${suffix:-database}"
+            fi
+        done
+        [[ "$found" == true ]]
+    } | sha256sum | awk '{print $1}'
+}
+
+copy_database_set() {
+    local source=$1 destination=$2 suffix
+    for suffix in '' -wal -shm; do
+        if [[ -f "$source$suffix" && ! -L "$source$suffix" ]]; then
+            "$install_command" -m 0600 -o "$trusted_uid" -g "$trusted_gid" "$source$suffix" "$destination$suffix"
         fi
-        KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}
-        KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}
-        control_backup="$KITPRO_CONTROL_BACKUP_DIR/pre-upgrade-control-set-$backup_set_id-to-$package_version.db"
-        helper_backup="$KITPRO_HELPER_BACKUP_DIR/pre-upgrade-helper-set-$backup_set_id-to-$package_version.db"
-        [ -s "$control_backup" ] && [ -s "$helper_backup" ] || {
-            echo 'kitpro-server: Debian upgrade approval has no complete backup pair' >&2
-            exit 1
-        }
-        runuser -u kitpro-api -- env KITPRO_CONTROL_DB="$control_backup" /usr/bin/kitpro-api --verify-database
-        env KITPRO_HELPER_DB="$helper_backup" /usr/libexec/kitpro-helper --verify-database
+    done
+}
+
+validate_root_directory() {
+    local path=$1 resolved mode
+    [[ -d "$path" && ! -L "$path" ]] || die "upgrade directory is not a real directory: $path"
+    resolved=$(readlink -f -- "$path")
+    [[ "$resolved" == "$path" ]] || die "upgrade directory traverses a symbolic link: $path"
+    [[ $(stat -c '%u:%g' "$path") == "$trusted_uid:$trusted_gid" ]] || die "upgrade directory is not owned by the trusted administrator: $path"
+    mode=$(stat -c '%a' "$path")
+    [[ "$mode" == 700 ]] || die "upgrade directory permissions are unsafe: $path"
+}
+
+verify_database() {
+    local component=$1 path=$2
+    case "$component" in
+        control) env KITPRO_CONTROL_DB="$path" "$api_binary" --verify-database ;;
+        helper) env KITPRO_HELPER_DB="$path" "$helper_binary" --verify-database ;;
+        *) die "unknown database component: $component" ;;
+    esac
+}
+
+# Invoked from the EXIT/signal trap through abort_preflight.
+# shellcheck disable=SC2329
+restore_preflight_services() {
+    local restoration_failed=false unit
+    for unit in kitpro-helper.socket kitpro-helper.service kitpro-api.service; do
+        case "$unit" in
+            kitpro-helper.socket) [[ ${socket_was_active:-false} == true ]] || continue ;;
+            kitpro-helper.service) [[ ${helper_was_active:-false} == true ]] || continue ;;
+            kitpro-api.service) [[ ${api_was_active:-false} == true ]] || continue ;;
+        esac
+        if ! "$systemctl_command" start "$unit"; then
+            printf 'KITPro upgrade recovery failed to restore previously active unit: %s\n' "$unit" >&2
+            restoration_failed=true
+        fi
+    done
+    [[ "$restoration_failed" == false ]]
+}
+
+# Invoked from the EXIT/signal trap through cleanup_preflight.
+# shellcheck disable=SC2329
+remove_incomplete_set() {
+    local directory=$1 expected_parent=$2
+    [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 0
+    [[ $(dirname -- "$directory") == "$expected_parent" ]] || return 1
+    rm -f -- "$directory/control.db" "$directory/control.db-wal" "$directory/control.db-shm" \
+        "$directory/helper.db" "$directory/helper.db-wal" "$directory/helper.db-shm"
+    rmdir -- "$directory" 2>/dev/null || return 1
+}
+
+# Invoked from the EXIT/signal trap through abort_preflight.
+# shellcheck disable=SC2329
+cleanup_preflight() {
+    local failed=false
+    [[ -z ${approval_temporary:-} ]] || rm -f -- "$approval_temporary" || failed=true
+    [[ -z ${stage_dir:-} ]] || remove_incomplete_set "$stage_dir" "$transition_parent" || failed=true
+    if [[ ${preflight_succeeded:-false} != true && -n ${final_dir:-} ]]; then
+        remove_incomplete_set "$final_dir" "$transition_parent" || failed=true
+    fi
+    [[ "$failed" == false ]]
+}
+
+# Invoked by the dynamically registered EXIT/signal trap.
+# shellcheck disable=SC2329
+abort_preflight() {
+    local original_status=${1:-1} cleanup_failed=false restoration_failed=false
+    trap - EXIT HUP INT TERM
+    cleanup_preflight || cleanup_failed=true
+    restore_preflight_services || restoration_failed=true
+    printf 'KITPro upgrade aborted: incoming package preflight failed; the installed package and live databases were left unchanged.\n' >&2
+    if [[ "$cleanup_failed" == true ]]; then
+        printf 'KITPro upgrade recovery was incomplete; preflight staging could not be fully removed.\n' >&2
+    fi
+    if [[ "$restoration_failed" == true ]]; then
+        printf 'KITPro upgrade recovery was incomplete; one or more previously active services could not be restored.\n' >&2
+    fi
+    (( original_status != 0 )) || original_status=1
+    exit "$original_status"
+}
+
+validate_alpha11_approval() {
+    local approval approved_old approved_target approved_format approved_sha256 backup_set_id approved_at approval_age
+    local config_path control_backup helper_backup
+    approval=$(approval_path)
+    [[ -f "$approval" && ! -L "$approval" ]] || die 'alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper'
+    [[ $(stat -c '%u:%a' "$approval") == "$trusted_uid:600" ]] || die 'Debian upgrade approval has unsafe ownership or permissions'
+    approved_old=$(sed -n 's/^old_version=//p' "$approval")
+    approved_target=$(sed -n 's/^target_version=//p' "$approval")
+    approved_format=$(sed -n 's/^format=//p' "$approval")
+    approved_sha256=$(sed -n 's/^package_sha256=//p' "$approval")
+    backup_set_id=$(sed -n 's/^backup_set_id=//p' "$approval")
+    approved_at=$(sed -n 's/^created_at=//p' "$approval")
+    [[ "$approved_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'Debian upgrade approval has an invalid package checksum'
+    [[ "$backup_set_id" =~ ^[0-9TZ-]+$ ]] || die 'Debian upgrade approval has an invalid backup identity'
+    [[ "$approved_at" =~ ^[0-9]+$ ]] || die 'Debian upgrade approval has an invalid timestamp'
+    approval_age=$(($(date +%s) - approved_at))
+    [[ "$approved_format" == 1 && "$approved_old" == "$old_version" && "$approved_target" == "$package_version" && "$approval_age" -ge 0 && "$approval_age" -le 900 ]] || die 'Debian upgrade approval does not match this transition'
+
+    config_path=$(path_in_root /etc/default/kitpro-server)
+    if [[ -r "$config_path" ]]; then
+        validate_root_configuration "$config_path"
+        # shellcheck disable=SC1090
+        source "$config_path"
+    fi
+    KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-api/backups)}
+    KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-helper/backups)}
+    control_backup="$KITPRO_CONTROL_BACKUP_DIR/pre-upgrade-control-set-$backup_set_id-to-$package_version.db"
+    helper_backup="$KITPRO_HELPER_BACKUP_DIR/pre-upgrade-helper-set-$backup_set_id-to-$package_version.db"
+    validate_database_path "$control_backup"
+    validate_database_path "$helper_backup"
+    api_binary=$(path_in_root /usr/bin/kitpro-api)
+    helper_binary=$(path_in_root /usr/libexec/kitpro-helper)
+    [[ -x "$api_binary" && -x "$helper_binary" ]] || die 'installed KITPro verification binaries are unavailable'
+    verify_database control "$control_backup"
+    verify_database helper "$helper_backup"
+}
+
+incoming_preflight() {
+    local config_path set_id source_control_before source_helper_before source_control_after source_helper_after
+    local staged_control_hash staged_helper_hash approval approval_dir approval_mode unit
+
+    [[ "$package_version" =~ ^[0-9A-Za-z.+:~_-]{1,64}$ ]] || die 'target package version is invalid.'
+    [[ "$package_source_commit" =~ ^[0-9a-f]{40,64}$ ]] || die 'incoming package source identity is invalid.'
+    [[ "$old_version" =~ ^[0-9A-Za-z.+:~_-]{1,64}$ ]] || die 'installed package version is invalid.'
+
+    config_path=$(path_in_root /etc/default/kitpro-server)
+    if [[ -r "$config_path" ]]; then
+        validate_root_configuration "$config_path"
+        # The package conffile is administrator-owned, non-writable by other
+        # identities, and contains assignment-only deployment paths.
+        # shellcheck disable=SC1090
+        source "$config_path"
+    fi
+    KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-$(path_in_root /var/lib/kitpro-api/control.db)}
+    KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-$(path_in_root /var/lib/kitpro-helper/helper.db)}
+    KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-$(path_in_root /var/lib/kitpro-helper/backups)}
+    api_binary=$(path_in_root /usr/bin/kitpro-api)
+    helper_binary=$(path_in_root /usr/libexec/kitpro-helper)
+    [[ -x "$api_binary" && -x "$helper_binary" ]] || die 'installed KITPro verification binaries are unavailable'
+    validate_database_set "$KITPRO_CONTROL_DB"
+    validate_database_set "$KITPRO_HELPER_DB"
+
+    if [[ -e "$KITPRO_HELPER_BACKUP_DIR" || -L "$KITPRO_HELPER_BACKUP_DIR" ]]; then
+        validate_root_directory "$KITPRO_HELPER_BACKUP_DIR"
     else
-        [ -x /usr/libexec/kitpro-debian-upgrade ] || {
-            echo 'kitpro-server: installed Debian upgrade gate is unavailable' >&2
-            exit 1
-        }
-        /usr/libexec/kitpro-debian-upgrade --preflight-installed "$package_version" "$old_version"
+        validate_root_directory "$(dirname -- "$KITPRO_HELPER_BACKUP_DIR")"
+        "$install_command" -d -m 0700 -o "$trusted_uid" -g "$trusted_gid" "$KITPRO_HELPER_BACKUP_DIR"
+    fi
+    transition_parent="$KITPRO_HELPER_BACKUP_DIR/package-transitions"
+    if [[ -e "$transition_parent" || -L "$transition_parent" ]]; then
+        validate_root_directory "$transition_parent"
+    else
+        "$install_command" -d -m 0700 -o "$trusted_uid" -g "$trusted_gid" "$transition_parent"
+    fi
+    validate_root_directory "$transition_parent"
+
+    approval=$(approval_path)
+    [[ ! -e "$approval" && ! -L "$approval" ]] || die 'stale Debian upgrade approval exists'
+
+    api_was_active=false
+    helper_was_active=false
+    socket_was_active=false
+    "$systemctl_command" is-active --quiet kitpro-api.service && api_was_active=true || true
+    "$systemctl_command" is-active --quiet kitpro-helper.service && helper_was_active=true || true
+    "$systemctl_command" is-active --quiet kitpro-helper.socket && socket_was_active=true || true
+
+    preflight_succeeded=false
+    stage_dir=
+    final_dir=
+    approval_temporary=
+    # failure_status is assigned inside the trap before it is read.
+    # shellcheck disable=SC2154
+    trap 'failure_status=$?; if [[ $preflight_succeeded != true ]]; then abort_preflight "$failure_status"; fi' EXIT HUP INT TERM
+
+    "$systemctl_command" stop kitpro-api.service kitpro-helper.service kitpro-helper.socket
+    for unit in kitpro-api.service kitpro-helper.service kitpro-helper.socket; do
+        if "$systemctl_command" is-active --quiet "$unit"; then
+            die "writer unit remained active after stop: $unit"
+        fi
+    done
+
+    fail_if_injected control-verification
+    verify_database control "$KITPRO_CONTROL_DB"
+    fail_if_injected helper-verification
+    verify_database helper "$KITPRO_HELPER_DB"
+
+    validate_database_set "$KITPRO_CONTROL_DB"
+    validate_database_set "$KITPRO_HELPER_DB"
+    source_control_before=$(database_set_hash "$KITPRO_CONTROL_DB")
+    source_helper_before=$(database_set_hash "$KITPRO_HELPER_DB")
+    set_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+    stage_dir=$(mktemp -d "$transition_parent/.kitpro-upgrade-$set_id.partial.XXXXXX")
+    chmod 0700 "$stage_dir"
+    final_dir="$transition_parent/set-$set_id-to-$package_version"
+    [[ ! -e "$final_dir" && ! -L "$final_dir" ]] || die "upgrade backup set already exists: $set_id"
+
+    fail_if_injected control-backup
+    copy_database_set "$KITPRO_CONTROL_DB" "$stage_dir/control.db"
+    fail_if_injected helper-backup
+    copy_database_set "$KITPRO_HELPER_DB" "$stage_dir/helper.db"
+
+    source_control_after=$(database_set_hash "$KITPRO_CONTROL_DB")
+    source_helper_after=$(database_set_hash "$KITPRO_HELPER_DB")
+    staged_control_hash=$(database_set_hash "$stage_dir/control.db")
+    staged_helper_hash=$(database_set_hash "$stage_dir/helper.db")
+    [[ "$source_control_before" == "$source_control_after" && "$source_control_after" == "$staged_control_hash" ]] || die 'control database changed during package backup'
+    [[ "$source_helper_before" == "$source_helper_after" && "$source_helper_after" == "$staged_helper_hash" ]] || die 'helper database changed during package backup'
+
+    fail_if_injected control-backup-verification
+    verify_database control "$stage_dir/control.db"
+    fail_if_injected helper-backup-verification
+    verify_database helper "$stage_dir/helper.db"
+    source_control_after=$(database_set_hash "$KITPRO_CONTROL_DB")
+    source_helper_after=$(database_set_hash "$KITPRO_HELPER_DB")
+    [[ "$source_control_before" == "$source_control_after" ]] || die 'control database changed while staged backup was verified'
+    [[ "$source_helper_before" == "$source_helper_after" ]] || die 'helper database changed while staged backup was verified'
+    staged_control_hash=$(database_set_hash "$stage_dir/control.db")
+    staged_helper_hash=$(database_set_hash "$stage_dir/helper.db")
+    find "$stage_dir" -maxdepth 1 -type f -exec "$sync_command" {} +
+    "$sync_command" -f "$stage_dir"
+
+    fail_if_injected promotion
+    "$mv_command" -T -- "$stage_dir" "$final_dir"
+    stage_dir=
+    "$sync_command" -f "$transition_parent"
+
+    approval_dir=$(dirname -- "$approval")
+    if [[ -e "$approval_dir" || -L "$approval_dir" ]]; then
+        [[ -d "$approval_dir" && ! -L "$approval_dir" && $(readlink -f -- "$approval_dir") == "$approval_dir" ]] || die 'approval directory is unsafe'
+        [[ $(stat -c '%u' "$approval_dir") == "$trusted_uid" ]] || die 'approval directory is not administrator-owned'
+        approval_mode=$(stat -c '%a' "$approval_dir")
+        [[ "$approval_mode" == 700 || "$approval_mode" == 750 ]] || die 'approval directory permissions are unsafe'
+    else
+        "$install_command" -d -m 0750 -o "$trusted_uid" -g "$trusted_gid" "$approval_dir"
+    fi
+    approval_temporary=$(mktemp "$approval.partial.XXXXXX")
+    chmod 0600 "$approval_temporary"
+    printf 'format=%s\nold_version=%s\ntarget_version=%s\nsource_commit=%s\nbackup_set_id=%s\ncreated_at=%s\napi_was_active=%s\nhelper_was_active=%s\nsocket_was_active=%s\ncontrol_set_sha256=%s\nhelper_set_sha256=%s\n' \
+        "$approval_format" "$old_version" "$package_version" "$package_source_commit" "$set_id" "$(date +%s)" \
+        "$api_was_active" "$helper_was_active" "$socket_was_active" "$staged_control_hash" "$staged_helper_hash" > "$approval_temporary"
+    "$sync_command" "$approval_temporary"
+    fail_if_injected approval
+    "$mv_command" -T -- "$approval_temporary" "$approval"
+    approval_temporary=
+    "$sync_command" -f "$approval_dir"
+
+    preflight_succeeded=true
+    trap - EXIT HUP INT TERM
+    printf 'KITPro incoming Debian preflight completed successfully. Backup set: %s\n' "$set_id"
+}
+
+if [[ "$action" == upgrade && -n "$old_version" ]] && "$dpkg_command" --compare-versions "$old_version" gt "$package_version"; then
+    die "downgrade from $old_version to $package_version is unsupported"
+fi
+
+if [[ "$test_mode" != true ]]; then
+    systemctl is-active --quiet docker.service || die 'a compatible, active Docker Engine is required'
+    [[ -S /run/docker.sock || -S /var/run/docker.sock ]] || die 'Docker Engine socket is unavailable'
+fi
+
+if [[ "$action" == upgrade && -n "$old_version" ]]; then
+    if [[ "$old_version" == "$alpha11_version" ]]; then
+        validate_alpha11_approval
+    else
+        incoming_preflight
     fi
 fi
 

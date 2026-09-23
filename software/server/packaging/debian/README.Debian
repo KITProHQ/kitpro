@@ -10,9 +10,11 @@ kitpro-debian-upgrade wrapper distributed beside the alpha.12 package. Raw
 one transition because alpha.11's abort handler cannot recover cleanly from a
 failed database preflight. Fresh alpha.12 installs use the normal package path.
 
-Alpha.12 installs a permanent Debian upgrade gate for future upgrades. It
-validates both databases and promotes a complete paired backup set before dpkg
-is allowed to unpack the replacement package.
+For upgrades from alpha.12 or newer, the incoming package's preinst owns the
+pre-unpack gate. It validates both databases with the installed release's
+read-only verification interfaces and creates a root-only paired backup set
+without depending on newly packaged payload files or policy. The incoming
+postinst verifies that approval and pair before migration.
 
 The dashboard listens on 127.0.0.1:8080 by default. For first setup, connect an
 SSH tunnel to the server and open http://127.0.0.1:8080/setup locally.

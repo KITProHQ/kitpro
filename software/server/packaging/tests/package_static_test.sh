@@ -74,14 +74,39 @@ if grep -E 'rm .*/srv/kitpro|rm -rf /var/lib/kitpro' "$unpack/control/postrm"; t
     exit 1
 fi
 
-for script in preinst postinst prerm postrm; do
+for script in postinst prerm postrm; do
     sh -n "$unpack/control/$script"
 done
-grep -q '^set -eu$' "$unpack/control/preinst"
+bash -n "$unpack/control/preinst"
+grep -q '^set -Eeuo pipefail$' "$unpack/control/preinst"
 grep -Fq 'alpha.11 upgrades require the package-bound kitpro-debian-upgrade wrapper' "$unpack/control/preinst"
-grep -Fq '/usr/libexec/kitpro-debian-upgrade --preflight-installed' "$unpack/control/preinst"
+grep -Fq 'incoming_preflight' "$unpack/control/preinst"
+grep -Fq 'package-transitions' "$unpack/control/preinst"
+# shellcheck disable=SC2016
+grep -Fq 'KITPRO_CONTROL_DB="$path" "$api_binary" --verify-database' "$unpack/control/preinst"
+# shellcheck disable=SC2016
+grep -Fq 'KITPRO_HELPER_DB="$path" "$helper_binary" --verify-database' "$unpack/control/preinst"
+grep -Fq "package_source_commit='$(git -C "$server_dir" rev-parse HEAD)'" "$unpack/control/preinst"
+if grep -Fq '/usr/libexec/kitpro-debian-upgrade --preflight-installed' "$unpack/control/preinst"; then
+    echo 'incoming preinst delegates transition authority to the installed package' >&2
+    exit 1
+fi
+if grep -Fq -- '--prepare-upgrade' "$unpack/control/preinst"; then
+    echo 'incoming preinst delegates backup creation to installed runtime binaries' >&2
+    exit 1
+fi
+if grep -Fq 'apparmor_parser' "$unpack/control/preinst"; then
+    echo 'incoming preinst depends on changing the installed AppArmor profile' >&2
+    exit 1
+fi
 grep -Fq 'abort-upgrade|abort-install|abort-remove|abort-deconfigure)' "$unpack/control/postinst"
 grep -Fq 'Never migrate with code that was' "$unpack/control/postinst"
+grep -Fq 'verify_upgrade_approval_metadata' "$unpack/control/postinst"
+grep -Fq "package_source_commit='$(git -C "$server_dir" rev-parse HEAD)'" "$unpack/control/postinst"
+if grep -Fq -- '--preflight-installed' "$unpack/data/usr/libexec/kitpro-debian-upgrade"; then
+    echo 'installed upgrade helper retained obsolete preflight authority' >&2
+    exit 1
+fi
 grep -Fq 'package SHA-256 does not match this upgrade wrapper' "$first/kitpro-debian-upgrade"
 grep -Fq "embedded_package_version='0.1.0~alpha3'" "$first/kitpro-debian-upgrade"
 grep -Fq "embedded_package_sha256='$(sha256sum "$one" | awk '{print $1}')'" "$first/kitpro-debian-upgrade"
