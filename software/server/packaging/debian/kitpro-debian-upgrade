@@ -53,9 +53,47 @@ run_api() {
 }
 
 restore_preflight_services() {
-    [[ ${helper_was_active:-false} != true ]] || "$systemctl_command" start kitpro-helper.service 2>/dev/null || true
-    [[ ${socket_was_active:-false} != true ]] || "$systemctl_command" start kitpro-helper.socket 2>/dev/null || true
-    [[ ${api_was_active:-false} != true ]] || "$systemctl_command" start kitpro-api.service 2>/dev/null || true
+    local restoration_failed=false unit
+    # The helper service Requires= its socket. Restore dependencies first, then
+    # restore only units that were active before preflight stopped writers.
+    for unit in kitpro-helper.socket kitpro-helper.service kitpro-api.service; do
+        case "$unit" in
+            kitpro-helper.socket) [[ ${socket_was_active:-false} == true ]] || continue ;;
+            kitpro-helper.service) [[ ${helper_was_active:-false} == true ]] || continue ;;
+            kitpro-api.service) [[ ${api_was_active:-false} == true ]] || continue ;;
+        esac
+        if ! "$systemctl_command" start "$unit"; then
+            printf 'KITPro upgrade recovery failed to restore previously active unit: %s\n' "$unit" >&2
+            restoration_failed=true
+        fi
+    done
+    [[ "$restoration_failed" == false ]]
+}
+
+abort_preflight() {
+    local original_status=${1:-1} restoration_failed=false
+    trap - EXIT HUP INT TERM
+    cleanup_preflight || true
+    rm -f -- "$(approval_path)"
+    restore_preflight_services || restoration_failed=true
+    printf 'KITPro upgrade aborted: existing state failed complete backup-set validation. The installed package and databases were left unchanged.\nRecovery: /usr/share/doc/kitpro-server/README.Debian\n' >&2
+    if [[ "$restoration_failed" == true ]]; then
+        printf 'KITPro upgrade recovery was incomplete; one or more previously active services could not be restored.\n' >&2
+    fi
+    (( original_status != 0 )) || original_status=1
+    exit "$original_status"
+}
+
+abort_package_transaction() {
+    local original_status=${1:-1} restoration_failed=false
+    trap - EXIT HUP INT TERM
+    rm -f -- "$(approval_path)"
+    restore_preflight_services || restoration_failed=true
+    if [[ "$restoration_failed" == true ]]; then
+        printf 'KITPro upgrade recovery was incomplete after the package transaction failed; one or more previously active services could not be restored.\n' >&2
+    fi
+    (( original_status != 0 )) || original_status=1
+    exit "$original_status"
 }
 
 cleanup_preflight() {
@@ -120,7 +158,9 @@ preflight() {
     preflight_succeeded=false
     control_promoted=false
     helper_promoted=false
-    trap 'cleanup_preflight; if [[ $preflight_succeeded != true ]]; then rm -f -- "$(approval_path)"; restore_preflight_services; printf "KITPro upgrade aborted: existing state failed complete backup-set validation. The installed package and databases were left unchanged.\nRecovery: /usr/share/doc/kitpro-server/README.Debian\n" >&2; fi' EXIT HUP INT TERM
+    # failure_status is assigned inside the trap before it is read.
+    # shellcheck disable=SC2154
+    trap 'failure_status=$?; if [[ $preflight_succeeded != true ]]; then abort_preflight "$failure_status"; fi' EXIT HUP INT TERM
 
     # Validate every source before either component is allowed to create a
     # backup. Public alpha.11 already provides these maintenance modes.
@@ -223,7 +263,7 @@ case ${1:-} in
             "$(path_in_root /usr/libexec/kitpro-helper)" \
             "$target_version" "$old_version" "$actual_package_sha256"
         wrapper_succeeded=false
-        trap 'if [[ $wrapper_succeeded != true ]]; then rm -f -- "$(approval_path)"; restore_preflight_services; fi' EXIT HUP INT TERM
+        trap 'failure_status=$?; if [[ $wrapper_succeeded != true ]]; then abort_package_transaction "$failure_status"; fi' EXIT HUP INT TERM
         "$apt_get_command" install -- "$package"
         [[ $(installed_version) == "$target_version" ]] || die 'package manager returned success without installing the expected version.'
         [[ ! -e $(approval_path) ]] || die 'package manager returned success without completing KITPro configuration.'

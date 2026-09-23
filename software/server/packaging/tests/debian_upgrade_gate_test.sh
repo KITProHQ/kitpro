@@ -22,9 +22,20 @@ cat > "$fake_systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >> "${KITPRO_TEST_SERVICE_LOG:?}"
-if [[ ${1:-} == is-active ]]; then
-    exit 0
-fi
+unit=${!#}
+case ${1:-} in
+    is-active)
+        case " ${KITPRO_TEST_ACTIVE_UNITS-kitpro-api.service kitpro-helper.service kitpro-helper.socket} " in
+            *" $unit "*) exit 0 ;;
+            *) exit 3 ;;
+        esac
+        ;;
+    start)
+        case " ${KITPRO_TEST_FAIL_START_UNITS:-} " in
+            *" $unit "*) exit 1 ;;
+        esac
+        ;;
+esac
 EOF
 chmod 0755 "$fake_systemctl"
 
@@ -74,6 +85,9 @@ cat > "$fake_mv" <<'EOF'
 set -eu
 destination=${!#}
 if [[ ${KITPRO_TEST_FAIL_HELPER_PROMOTION:-0} == 1 && "$destination" == *'/pre-upgrade-helper-set-'* ]]; then
+    exit 1
+fi
+if [[ ${KITPRO_TEST_FAIL_APPROVAL_PROMOTION:-0} == 1 && "$destination" == */debian-upgrade-approved ]]; then
     exit 1
 fi
 exec /usr/bin/mv "$@"
@@ -147,6 +161,8 @@ run_wrapper() {
     KITPRO_TEST_APPROVAL_PATH="$root/run/kitpro/debian-upgrade-approved" \
     KITPRO_TEST_EXPECTED_PACKAGE_SHA256="$(sha256sum "$package" | awk '{print $1}')" \
     KITPRO_TEST_EXPECTED_PACKAGE_VERSION=0.1.0~alpha12 \
+    KITPRO_TEST_ACTIVE_UNITS="${KITPRO_TEST_ACTIVE_UNITS-kitpro-api.service kitpro-helper.service kitpro-helper.socket}" \
+    KITPRO_TEST_FAIL_START_UNITS="${KITPRO_TEST_FAIL_START_UNITS:-}" \
         "$upgrade_script" "$package"
 }
 
@@ -165,7 +181,21 @@ run_installed_preflight() {
     KITPRO_TEST_APT_LOG="$root/apt.log" \
     KITPRO_TEST_INSTALLED_VERSION_FILE="$root/installed-version" \
     KITPRO_TEST_APPROVAL_PATH="$root/run/kitpro/debian-upgrade-approved" \
+    KITPRO_TEST_ACTIVE_UNITS="${KITPRO_TEST_ACTIVE_UNITS-kitpro-api.service kitpro-helper.service kitpro-helper.socket}" \
+    KITPRO_TEST_FAIL_START_UNITS="${KITPRO_TEST_FAIL_START_UNITS:-}" \
         "$upgrade_script" --preflight-installed "$target" "$old"
+}
+
+assert_started_units() {
+    local root=$1 expected=$2 actual
+    actual=$(awk '$1 == "start" {print $2}' "$root/service.log" | sort | tr '\n' ' ' | sed 's/ $//')
+    test "$actual" = "$expected"
+}
+
+assert_restoration_order() {
+    local root=$1 expected=$2 actual
+    actual=$(awk '$1 == "start" {print $2}' "$root/service.log" | tr '\n' ' ' | sed 's/ $//')
+    test "$actual" = "$expected"
 }
 
 assert_no_backup_set() {
@@ -261,6 +291,7 @@ assert_corrupt_rejected() {
     test "$control_before" = "$(sha256sum "$root/var/lib/kitpro-api/control.db" | awk '{print $1}')"
     test "$helper_before" = "$(sha256sum "$root/var/lib/kitpro-helper/helper.db" | awk '{print $1}')"
     assert_no_backup_set "$root"
+    assert_restoration_order "$root" 'kitpro-helper.socket kitpro-helper.service kitpro-api.service'
 }
 
 assert_corrupt_rejected helper
@@ -288,6 +319,10 @@ assert_staging_failure() {
             failure_status=0
             KITPRO_TEST_FAIL_HELPER_PROMOTION=1 run_wrapper "$root" "$fake_package" >"$root/output.log" 2>&1 || failure_status=$?
             ;;
+        approval)
+            failure_status=0
+            KITPRO_TEST_FAIL_APPROVAL_PROMOTION=1 run_wrapper "$root" "$fake_package" >"$root/output.log" 2>&1 || failure_status=$?
+            ;;
         *) return 2 ;;
     esac
     if (( failure_status == 0 )); then
@@ -295,12 +330,61 @@ assert_staging_failure() {
         exit 1
     fi
     assert_no_backup_set "$root"
+    assert_restoration_order "$root" 'kitpro-helper.socket kitpro-helper.service kitpro-api.service'
 }
 
 assert_staging_failure control-temp
 assert_staging_failure helper-temp
 assert_staging_failure backup-integrity
 assert_staging_failure promotion
+assert_staging_failure approval
+
+# Every failure after writers stop restores only the units that were active
+# before preflight. The helper socket is restored before its dependent service.
+assert_service_restoration() {
+    local label=$1 active_units=$2 expected_started=$3 root="$work_dir/restore-$1"
+    configure_root "$root"
+    create_database "$root/var/lib/kitpro-api/control.db"
+    create_database "$root/var/lib/kitpro-helper/helper.db"
+    failure_status=0
+    KITPRO_TEST_ACTIVE_UNITS="$active_units" KITPRO_TEST_FAIL_HELPER_PROMOTION=1 \
+        run_wrapper "$root" "$fake_package" >"$root/output.log" 2>&1 || failure_status=$?
+    (( failure_status != 0 )) || { printf '%s restoration case passed failed preflight\n' "$label" >&2; exit 1; }
+    assert_no_backup_set "$root"
+    assert_started_units "$root" "$expected_started"
+    grep -Fq 'helper backup promotion failed; the incomplete control backup was removed.' "$root/output.log"
+    grep -Fq 'existing state failed complete backup-set validation' "$root/output.log"
+}
+
+assert_service_restoration both-active \
+    'kitpro-api.service kitpro-helper.socket' \
+    'kitpro-api.service kitpro-helper.socket'
+assert_restoration_order "$work_dir/restore-both-active" \
+    'kitpro-helper.socket kitpro-api.service'
+assert_service_restoration api-inactive \
+    'kitpro-helper.socket' \
+    'kitpro-helper.socket'
+assert_service_restoration helper-inactive \
+    'kitpro-api.service' \
+    'kitpro-api.service'
+assert_service_restoration both-inactive '' ''
+
+# A failed restoration remains visible alongside the original preflight error.
+restoration_failure_root="$work_dir/restoration-failure"
+configure_root "$restoration_failure_root"
+create_database "$restoration_failure_root/var/lib/kitpro-api/control.db"
+create_database "$restoration_failure_root/var/lib/kitpro-helper/helper.db"
+failure_status=0
+KITPRO_TEST_ACTIVE_UNITS='kitpro-api.service kitpro-helper.socket' \
+KITPRO_TEST_FAIL_START_UNITS='kitpro-helper.socket' \
+KITPRO_TEST_FAIL_HELPER_PROMOTION=1 \
+    run_wrapper "$restoration_failure_root" "$fake_package" >"$restoration_failure_root/output.log" 2>&1 || failure_status=$?
+(( failure_status != 0 )) || { printf 'restoration failure passed failed preflight\n' >&2; exit 1; }
+assert_no_backup_set "$restoration_failure_root"
+grep -Fq 'helper backup promotion failed; the incomplete control backup was removed.' "$restoration_failure_root/output.log"
+grep -Fq 'recovery failed to restore previously active unit: kitpro-helper.socket' "$restoration_failure_root/output.log"
+grep -Fq 'upgrade recovery was incomplete' "$restoration_failure_root/output.log"
+assert_started_units "$restoration_failure_root" 'kitpro-api.service kitpro-helper.socket'
 
 # Once alpha.12 is installed, its permanent gate provides the same paired
 # preflight directly to future package preinst scripts.
@@ -311,6 +395,7 @@ create_database "$future_root/var/lib/kitpro-helper/helper.db"
 run_installed_preflight "$future_root" 0.1.0~alpha13 0.1.0~alpha12
 grep -Fxq 'package_sha256=internal' "$future_root/run/kitpro/debian-upgrade-approved"
 test "$(find "$future_root/var/lib/kitpro-api/backups" "$future_root/var/lib/kitpro-helper/backups" -type f -name 'pre-upgrade-*-set-*.db' | wc -l)" -eq 2
+assert_started_units "$future_root" ''
 
 unsupported_root="$work_dir/unsupported-alpha11"
 configure_root "$unsupported_root"

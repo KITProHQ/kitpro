@@ -24,6 +24,12 @@ if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$serv
 fi
 grep -q 'aa-enabled' "$arch_dir/kitpro-server.install"
 grep -q 'apparmor_parser -r -W -T' "$arch_dir/kitpro-server.install"
+grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$server_dir/packaging/apparmor/kitpro-helper"
+test "$(grep -Ec '^  link ' "$server_dir/packaging/apparmor/kitpro-helper")" -eq 1
+if grep -Eq '^  (/var/lib/kitpro-helper/\*\*|/var/lib/kitpro-helper/backups/\*\*) [^,]*l[^,]*,$' "$server_dir/packaging/apparmor/kitpro-helper"; then
+    printf 'helper gained broad hard-link authority\n' >&2
+    exit 1
+fi
 grep -q 'require_upgrade_approval' "$arch_dir/kitpro-server.install"
 grep -q '^When = PreTransaction$' "$upgrade_hook"
 grep -q '^AbortOnFail$' "$upgrade_hook"

@@ -32,6 +32,7 @@ test -x "$first/kitpro-debian-upgrade"
 test "$(sha256sum "$first/kitpro-debian-upgrade" | awk '{print $1}')" = "$(sha256sum "$second/kitpro-debian-upgrade" | awk '{print $1}')"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
+cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-helper "$unpack/control/conffiles"
 grep -q 'profile_source=/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper' "$unpack/control/postinst"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-helper.socket"
@@ -52,6 +53,12 @@ grep -q '^  deny network inet,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro
 grep -q '^  deny network inet6,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+test "$(grep -Ec '^  link ' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper")" -eq 1
+if grep -Eq '^  (/var/lib/kitpro-helper/\*\*|/var/lib/kitpro-helper/backups/\*\*) [^,]*l[^,]*,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"; then
+    echo "helper gained broad hard-link authority" >&2
+    exit 1
+fi
 grep -q 'apparmor_parser -r -W -T' "$unpack/control/postinst"
 grep -q '^systemctl daemon-reload$' "$unpack/control/postinst"
 if grep -R -E '__API_UID__|RestrictSUIDSGID|docker group|0\.0\.0\.0' "$unpack/data/usr/lib/systemd/system" "$unpack/data/etc/default"; then

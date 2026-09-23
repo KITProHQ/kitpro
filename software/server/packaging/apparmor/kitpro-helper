@@ -9,6 +9,10 @@
   /run/kitpro/** rw,
   /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,
+  # backup.Vacuum atomically publishes a verified helper upgrade backup by
+  # hard-linking its private temporary file to the final name in the same
+  # root-owned staging directory. No other helper path gains link authority.
+  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,
   /srv/kitpro/** rwk,
   # Directory metadata only. The helper validates registered roots but never
   # reads imported content; Docker performs the constrained bind mount.
