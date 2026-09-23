@@ -480,8 +480,14 @@ func verifyGenerationFence(ctx context.Context, tx *sql.Tx, installation, operat
 }
 
 func (s Store) MarkMultiFailed(ctx context.Context, plan MultiPlan, cleanupState string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE runtime_generations SET status='failed',cleanup_state=? WHERE installation_id=? AND runtime_generation=? AND creating_operation_id=? AND status IN ('prepared','candidate')`, cleanupState, plan.InstallationID, plan.Generation, plan.OperationID)
-	return err
+	result, err := s.DB.ExecContext(ctx, `UPDATE runtime_generations SET status='failed',cleanup_state=? WHERE installation_id=? AND runtime_generation=? AND creating_operation_id=? AND status IN ('prepared','candidate')`, cleanupState, plan.InstallationID, plan.Generation, plan.OperationID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("multi candidate failure transition lost")
+	}
+	return nil
 }
 
 func (s Store) MultiOlderRetained(ctx context.Context, installation string, keep int) ([]MultiGeneration, error) {

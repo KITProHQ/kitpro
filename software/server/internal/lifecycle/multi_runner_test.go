@@ -98,6 +98,31 @@ func TestMultiReplacementUsesDependencyOrderAndAtomicCommit(t *testing.T) {
 	}
 }
 
+func TestMultiFailedCandidatePersistsIdentityBeforeCleanup(t *testing.T) {
+	store, runtime, coordinator, plan := newMultiHarness(t, true)
+	runtime.createdUserOverride = "unexpected:override"
+	candidateID := "container-" + plan.Components[0].ContainerName
+	runtime.fail["remove:"+candidateID] = errors.New("remove failed")
+	if _, err := (MultiRunner{Runtime: runtime, Store: *store, Evidence: coordinator}).Replace(context.Background(), plan); err == nil {
+		t.Fatal("candidate verification unexpectedly succeeded")
+	}
+	var status, cleanup, storedID string
+	if err := store.DB.QueryRow(`SELECT g.status,g.cleanup_state,c.observed_container_id FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.runtime_generation=? AND c.component_id=?`, plan.InstallationID, plan.Generation, plan.Components[0].ID).Scan(&status, &cleanup, &storedID); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || cleanup != "pending" || storedID != candidateID {
+		t.Fatalf("status=%q cleanup=%q container=%q", status, cleanup, storedID)
+	}
+	result, err := (Reconciler{Runtime: runtime, Store: *store}).Reconcile(context.Background(), plan.InstallationID)
+	if err != nil || result.RecommendedAction != RepairCleanupResources {
+		t.Fatalf("reconciliation=%#v err=%v", result, err)
+	}
+	var activeGeneration int
+	if err = store.DB.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id=? AND status='active'`, plan.InstallationID).Scan(&activeGeneration); err != nil || activeGeneration != plan.ExpectedGeneration {
+		t.Fatalf("active generation=%d err=%v", activeGeneration, err)
+	}
+}
+
 func TestPrepareMultiReusesCleanRemovedGeneration(t *testing.T) {
 	store, _, _, plan := newMultiHarness(t, true)
 	_, err := store.DB.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,topology_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-multi',2,'old-attempt','multi','new','removed','old-network','old-plan','topology','/data','internal','then','clean')`)

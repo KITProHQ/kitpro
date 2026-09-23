@@ -166,6 +166,7 @@ func (r MultiRunner) Replace(ctx context.Context, plan MultiPlan) (Result, error
 
 	// Pull every unique digest before any active component is stopped.
 	pulled := map[string]bool{}
+	imageDefaultUsers := map[string]string{}
 	for _, component := range plan.Components {
 		if pulled[component.Image] {
 			continue
@@ -209,6 +210,10 @@ func (r MultiRunner) Replace(ctx context.Context, plan MultiPlan) (Result, error
 			return Result{}, UnknownOutcomeError{Phase: PhaseAfterPull, Cause: err}
 		}
 		pulled[component.Image] = true
+		imageDefaultUsers[component.Image] = image.ConfiguredUser
+	}
+	for index := range plan.Components {
+		plan.Components[index].Container.ImageDefaultUser = imageDefaultUsers[plan.Components[index].Image]
 	}
 
 	if err = r.checkpoint(ctx, plan, PhaseBeforeNetwork, "intent", nil); err != nil {
@@ -271,6 +276,11 @@ func (r MultiRunner) Replace(ctx context.Context, plan MultiPlan) (Result, error
 				return Result{}, r.failBeforeCutover(ctx, plan, createErr)
 			}
 			containerID = observed.ID
+		}
+		// Persist the runtime identity before verification so cleanup and later
+		// reconciliation can always find a successfully created component.
+		if err = r.Store.RecordMultiContainer(ctx, plan, component.ID, containerID, "", "", "created", false); err != nil {
+			return Result{}, UnknownOutcomeError{Phase: PhaseAfterContainer, Cause: err}
 		}
 		observed, observeErr := r.Runtime.ObserveContainer(ctx, containerID)
 		if observeErr != nil {
@@ -647,9 +657,12 @@ func (r MultiRunner) afterCutoverFailure(ctx context.Context, plan MultiPlan, ac
 		if cleanupErr = r.cleanupCandidate(ctx, plan); cleanupErr != nil {
 			cleanup = "pending"
 		}
-		_ = r.Store.MarkMultiFailed(ctx, plan, cleanup)
+		markErr := r.Store.MarkMultiFailed(ctx, plan, cleanup)
 		if cleanupErr != nil {
-			return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, cleanupErr)}
+			return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, cleanupErr, markErr)}
+		}
+		if markErr != nil {
+			return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, markErr)}
 		}
 		return cause
 	}
@@ -663,9 +676,12 @@ func (r MultiRunner) failBeforeCutover(ctx context.Context, plan MultiPlan, caus
 	if cleanupErr != nil {
 		cleanup = "pending"
 	}
-	_ = r.Store.MarkMultiFailed(ctx, plan, cleanup)
+	markErr := r.Store.MarkMultiFailed(ctx, plan, cleanup)
 	if cleanupErr != nil {
-		return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, cleanupErr)}
+		return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, cleanupErr, markErr)}
+	}
+	if markErr != nil {
+		return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, markErr)}
 	}
 	return cause
 }
@@ -702,6 +718,10 @@ func (r MultiRunner) cleanupCandidate(ctx context.Context, plan MultiPlan) error
 		if network.Exists {
 			if err = r.Runtime.RemoveLifecycleNetwork(ctx, generation.NetworkName); err != nil {
 				return err
+			}
+			removed, removeObserveErr := r.Runtime.ObserveNetwork(ctx, generation.NetworkName)
+			if removeObserveErr != nil || removed.Exists {
+				return errors.New("candidate network removal could not be verified")
 			}
 		}
 	}

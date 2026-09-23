@@ -29,6 +29,7 @@ import (
 type startupLifecycleRuntime struct {
 	networks   map[string]containers.NetworkObservation
 	containers map[string]containers.ContainerObservation
+	images     map[string]containers.ImageObservation
 }
 
 type configurationBootstrapRuntime struct {
@@ -123,8 +124,11 @@ func (r *configurationBootstrapRuntime) WaitContainer(context.Context, string, c
 func (r *startupLifecycleRuntime) PullImage(context.Context, string) error {
 	return errors.New("not used")
 }
-func (r *startupLifecycleRuntime) ObserveImage(context.Context, string) (containers.ImageObservation, error) {
-	return containers.ImageObservation{}, errors.New("not used")
+func (r *startupLifecycleRuntime) ObserveImage(_ context.Context, image string) (containers.ImageObservation, error) {
+	if r.images == nil {
+		return containers.ImageObservation{Exists: true}, nil
+	}
+	return r.images[image], nil
 }
 func (r *startupLifecycleRuntime) CreateLifecycleNetwork(context.Context, string, map[string]string) (containers.NetworkObservation, error) {
 	return containers.NetworkObservation{}, errors.New("not used")
@@ -368,6 +372,24 @@ func migratedBusyBoxRuntime(restart string) *startupLifecycleRuntime {
 }
 
 func TestMigratedSingleConfigurationIsTrustedBeforeHashRecording(t *testing.T) {
+	t.Run("image-default root runtime", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "image-default-single.db")
+		runtime := migratedBusyBoxRuntime("unless-stopped")
+		observed := runtime.containers["busybox-runtime"]
+		observed.User = "0:0"
+		runtime.containers["busybox-runtime"] = observed
+		runtime.images = map[string]containers.ImageObservation{
+			observed.ImageReference: {Exists: true, ConfiguredUser: "0:0"},
+		}
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err != nil {
+			t.Fatal(err)
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash == "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+	})
+
 	t.Run("exact restarting runtime", func(t *testing.T) {
 		db := openAlpha11HelperFixture(t, "exact-single.db")
 		runtime := migratedBusyBoxRuntime("unless-stopped")

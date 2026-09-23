@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/helperops"
@@ -18,23 +19,25 @@ import (
 )
 
 type fakeRuntime struct {
-	images     map[string]containers.ImageObservation
-	networks   map[string]containers.NetworkObservation
-	containers map[string]containers.ContainerObservation
-	mutations  []string
-	fail       map[string]error
-	mutateFail map[string]error
+	images              map[string]containers.ImageObservation
+	networks            map[string]containers.NetworkObservation
+	containers          map[string]containers.ContainerObservation
+	mutations           []string
+	fail                map[string]error
+	mutateFail          map[string]error
+	imageUsers          map[string]string
+	createdUserOverride string
 }
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{images: map[string]containers.ImageObservation{}, networks: map[string]containers.NetworkObservation{}, containers: map[string]containers.ContainerObservation{}, fail: map[string]error{}, mutateFail: map[string]error{}}
+	return &fakeRuntime{images: map[string]containers.ImageObservation{}, networks: map[string]containers.NetworkObservation{}, containers: map[string]containers.ContainerObservation{}, fail: map[string]error{}, mutateFail: map[string]error{}, imageUsers: map[string]string{}}
 }
 func (f *fakeRuntime) PullImage(_ context.Context, image string) error {
 	f.mutations = append(f.mutations, "pull")
 	if err := f.fail["pull"]; err != nil {
 		return err
 	}
-	f.images[image] = containers.ImageObservation{Exists: true, ID: "image-new", RepoDigests: []string{image}}
+	f.images[image] = containers.ImageObservation{Exists: true, ID: "image-new", RepoDigests: []string{image}, ConfiguredUser: f.imageUsers[image]}
 	return f.mutateFail["pull"]
 }
 func (f *fakeRuntime) ObserveImage(_ context.Context, image string) (containers.ImageObservation, error) {
@@ -58,7 +61,11 @@ func (f *fakeRuntime) CreateLifecycleContainer(_ context.Context, p containers.C
 		return "", err
 	}
 	id := "container-" + p.Name
-	f.containers[id] = observationFromPlan(id, p, f.networks[p.Network].ID, containers.RuntimeStopped)
+	observed := observationFromPlan(id, p, f.networks[p.Network].ID, containers.RuntimeStopped)
+	if f.createdUserOverride != "" {
+		observed.User = f.createdUserOverride
+	}
+	f.containers[id] = observed
 	return id, f.mutateFail["create-container"]
 }
 func (f *fakeRuntime) ObserveContainer(_ context.Context, id string) (containers.ContainerObservation, error) {
@@ -143,7 +150,11 @@ func observationFromPlan(id string, p containers.ContainerPlan, networkID string
 	for _, m := range p.Storage {
 		mounts = append(mounts, containers.MountObservation{Source: m.HostPath, Destination: m.ContainerPath, ReadOnly: m.ReadOnly})
 	}
-	return containers.ContainerObservation{Exists: true, ID: id, Name: p.Name, ImageID: "image-id", ImageReference: p.Image, State: state, Labels: p.Labels, User: p.User, Command: p.Command, Environment: p.Environment, RestartPolicy: p.RestartPolicy, Mounts: mounts, Networks: map[string]containers.NetworkAttachment{p.Network: {NetworkID: networkID}}, NetworkMode: p.Network, PortBindings: p.PortBindings, Devices: p.Devices, DeviceRequests: p.DeviceRequests}
+	user := p.User
+	if user == "" {
+		user = p.ImageDefaultUser
+	}
+	return containers.ContainerObservation{Exists: true, ID: id, Name: p.Name, ImageID: "image-id", ImageReference: p.Image, State: state, Labels: p.Labels, User: user, Command: p.Command, Environment: p.Environment, RestartPolicy: p.RestartPolicy, Mounts: mounts, Networks: map[string]containers.NetworkAttachment{p.Network: {NetworkID: networkID}}, NetworkMode: p.Network, PortBindings: p.PortBindings, Devices: p.Devices, DeviceRequests: p.DeviceRequests}
 }
 
 type harness struct {
@@ -214,6 +225,135 @@ func TestReplacementCommitsOneActiveAndRetainsPrevious(t *testing.T) {
 	if h.runtime.containers["old-id"].State != containers.RuntimeStopped {
 		t.Fatal("old generation was not retained stopped")
 	}
+}
+
+func TestRuntimeUserVerificationDistinguishesExplicitAndImageDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		plan     containers.ContainerPlan
+		observed string
+		want     bool
+	}{
+		{name: "empty image default", plan: containers.ContainerPlan{}, observed: "", want: true},
+		{name: "numeric root image default", plan: containers.ContainerPlan{ImageDefaultUser: "0:0"}, observed: "0:0", want: true},
+		{name: "root name image default", plan: containers.ContainerPlan{ImageDefaultUser: "root"}, observed: "root", want: true},
+		{name: "image default is not globally aliased", plan: containers.ContainerPlan{ImageDefaultUser: "0:0"}, observed: "root", want: false},
+		{name: "unexpected override", plan: containers.ContainerPlan{ImageDefaultUser: "0:0"}, observed: "1000:1000", want: false},
+		{name: "explicit correct uid gid", plan: containers.ContainerPlan{User: "1000:1000", ImageDefaultUser: "0:0"}, observed: "1000:1000", want: true},
+		{name: "explicit wrong uid", plan: containers.ContainerPlan{User: "1000:1000", ImageDefaultUser: "0:0"}, observed: "1001:1000", want: false},
+		{name: "explicit wrong gid", plan: containers.ContainerPlan{User: "1000:1000", ImageDefaultUser: "0:0"}, observed: "1000:1001", want: false},
+		{name: "explicit missing override", plan: containers.ContainerPlan{User: "1000:1000", ImageDefaultUser: "0:0"}, observed: "0:0", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := runtimeUserMatches(test.plan, test.observed); got != test.want {
+				t.Fatalf("runtimeUserMatches()=%v want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestOpenWebUIImageDefaultRuntimeIdentityRegression(t *testing.T) {
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := entries["open-webui"]
+	if !ok || entry.Manifest.RunAs != nil || len(entry.Manifest.Releases) == 0 {
+		t.Fatalf("unexpected Open WebUI catalog profile: %#v", entry.Manifest.RunAs)
+	}
+	release := entry.Manifest.Releases[len(entry.Manifest.Releases)-1]
+	if release.Version != "0.11.3" {
+		t.Fatalf("unexpected Open WebUI current release %q", release.Version)
+	}
+	image := release.Registry + "/" + release.Repository + "@" + release.Digest
+	h := newHarness(t, true)
+	h.plan.ApplicationID = "open-webui"
+	h.plan.ReleaseID = release.Version
+	h.plan.Image = image
+	h.plan.Container.Image = image
+	h.runtime.imageUsers[image] = "0:0"
+	if _, err = (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan); err != nil {
+		t.Fatalf("Open WebUI image-default identity was rejected: %v", err)
+	}
+	created := h.runtime.containers["container-"+h.plan.ContainerName]
+	if created.User != "0:0" || h.plan.Container.User != "" {
+		t.Fatalf("user=%q override=%q", created.User, h.plan.Container.User)
+	}
+}
+
+func TestFailedCandidateCleanupStateTracksRuntimeTruth(t *testing.T) {
+	t.Run("successful removal records clean", func(t *testing.T) {
+		h := newHarness(t, true)
+		h.runtime.createdUserOverride = "unexpected:override"
+		if _, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan); err == nil {
+			t.Fatal("candidate verification unexpectedly succeeded")
+		}
+		candidateID := "container-" + h.plan.ContainerName
+		if _, exists := h.runtime.containers[candidateID]; exists {
+			t.Fatal("failed candidate was not removed")
+		}
+		var status, cleanup, storedID string
+		if err := h.db.QueryRow(`SELECT g.status,g.cleanup_state,c.observed_container_id FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.runtime_generation=?`, h.plan.InstallationID, h.plan.Generation).Scan(&status, &cleanup, &storedID); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || cleanup != "clean" || storedID != candidateID {
+			t.Fatalf("status=%q cleanup=%q container=%q", status, cleanup, storedID)
+		}
+		if h.runtime.containers["old-id"].State != containers.RuntimeRunning {
+			t.Fatal("previous active runtime changed before cutover")
+		}
+	})
+
+	t.Run("failed removal remains visible and repairable", func(t *testing.T) {
+		h := newHarness(t, true)
+		h.runtime.createdUserOverride = "unexpected:override"
+		candidateID := "container-" + h.plan.ContainerName
+		h.runtime.fail["remove:"+candidateID] = errors.New("remove failed")
+		if _, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan); err == nil {
+			t.Fatal("candidate verification unexpectedly succeeded")
+		}
+		var status, cleanup, storedID string
+		if err := h.db.QueryRow(`SELECT g.status,g.cleanup_state,c.observed_container_id FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.runtime_generation=?`, h.plan.InstallationID, h.plan.Generation).Scan(&status, &cleanup, &storedID); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || cleanup != "pending" || storedID != candidateID {
+			t.Fatalf("status=%q cleanup=%q container=%q", status, cleanup, storedID)
+		}
+		if _, exists := h.runtime.containers[candidateID]; !exists {
+			t.Fatal("failed removal was falsely treated as absent")
+		}
+		result, err := (Reconciler{Runtime: h.runtime, Store: Store{DB: h.db}}).Reconcile(context.Background(), h.plan.InstallationID)
+		if err != nil || result.RecommendedAction != RepairCleanupResources {
+			t.Fatalf("reconciliation=%#v err=%v", result, err)
+		}
+		if _, err = h.coordinator.Complete(context.Background(), h.plan.OperationID, h.plan.FencingToken, protocol.Response{OK: false, Error: "candidate verification failed"}); err != nil {
+			t.Fatal(err)
+		}
+		delete(h.runtime.fail, "remove:"+candidateID)
+		repairRequest := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RepairInstallation", OperationRevision: 1, InstanceID: h.plan.InstallationID, RepairAction: RepairCleanupResources}
+		decision, err := h.coordinator.Begin(context.Background(), repairRequest, 0, repairRequest.InstanceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = h.coordinator.AuthorizeMutation(context.Background(), repairRequest.OperationID, decision.FencingToken); err != nil {
+			t.Fatal(err)
+		}
+		result, err = (Repairer{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Repair(context.Background(), repairRequest.InstanceID, repairRequest.OperationID, decision.FencingToken, repairRequest.RepairAction)
+		if err != nil || result.State != ReconciliationConsistent {
+			t.Fatalf("repair=%#v err=%v", result, err)
+		}
+		if _, exists := h.runtime.containers[candidateID]; exists {
+			t.Fatal("repair left the failed candidate behind")
+		}
+		var activeGeneration int
+		if err = h.db.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id=? AND status='active'`, h.plan.InstallationID).Scan(&activeGeneration); err != nil || activeGeneration != h.plan.ExpectedGeneration {
+			t.Fatalf("active generation=%d err=%v", activeGeneration, err)
+		}
+		if h.runtime.containers["old-id"].State != containers.RuntimeRunning {
+			t.Fatal("repair changed the previous active runtime")
+		}
+	})
 }
 
 func TestMultipleBindingsPersistThroughCommitAndReconciliation(t *testing.T) {

@@ -64,6 +64,9 @@ type ImageObservation struct {
 	Exists      bool
 	ID          string
 	RepoDigests []string
+	// ConfiguredUser is the image-config User value. An empty value means the
+	// runtime's image default (root), not an explicit container override.
+	ConfiguredUser string
 }
 
 type RuntimeIdentityObservation struct {
@@ -118,18 +121,21 @@ type ContainerSummary struct {
 type ContainerPlan struct {
 	Image, Name, Network string
 	User                 string
-	Labels               map[string]string
-	Command              []string
-	Environment          []string
-	DataPath             string
-	ReadOnly             bool
-	Storage              []StorageMount
-	PortBindings         map[string][]PortBinding
-	RestartPolicy        string
-	NetworkAliases       []string
-	Dependencies         []string
-	Devices              []DeviceMapping
-	DeviceRequests       []DeviceRequest
+	// ImageDefaultUser is trusted runtime observation used only to verify a
+	// container created without an explicit User override.
+	ImageDefaultUser string `json:"-"`
+	Labels           map[string]string
+	Command          []string
+	Environment      []string
+	DataPath         string
+	ReadOnly         bool
+	Storage          []StorageMount
+	PortBindings     map[string][]PortBinding
+	RestartPolicy    string
+	NetworkAliases   []string
+	Dependencies     []string
+	Devices          []DeviceMapping
+	DeviceRequests   []DeviceRequest
 }
 
 type PortBinding struct {

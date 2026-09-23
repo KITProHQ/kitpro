@@ -47,6 +47,14 @@ func prepareMigratedSingleConfiguration(ctx context.Context, db *sql.DB, runtime
 	if err != nil {
 		return err
 	}
+	image, err := runtime.ObserveImage(ctx, expected.Image)
+	if err != nil {
+		return err
+	}
+	if !image.Exists {
+		return errors.New("migrated runtime image is unavailable")
+	}
+	expected.ImageDefaultUser = image.ConfiguredUser
 	if err = lifecycle.VerifyMigratedConfiguration(expected, observed); err != nil {
 		return err
 	}

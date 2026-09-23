@@ -259,11 +259,14 @@ func (c *Client) ObserveImage(ctx context.Context, image string) (containers.Ima
 	var observed struct {
 		ID          string   `json:"Id"`
 		RepoDigests []string `json:"RepoDigests"`
+		Config      struct {
+			User string `json:"User"`
+		} `json:"Config"`
 	}
 	if err = json.NewDecoder(io.LimitReader(response.Body, 128*1024)).Decode(&observed); err != nil {
 		return containers.ImageObservation{}, err
 	}
-	return containers.ImageObservation{Exists: true, ID: observed.ID, RepoDigests: observed.RepoDigests}, nil
+	return containers.ImageObservation{Exists: true, ID: observed.ID, RepoDigests: observed.RepoDigests, ConfiguredUser: observed.Config.User}, nil
 }
 
 func (c *Client) ObserveNetwork(ctx context.Context, name string) (containers.NetworkObservation, error) {

@@ -51,6 +51,7 @@ func (r Runner) Replace(ctx context.Context, plan Plan) (Result, error) {
 	if !imageContainsDigest(image, plan.Image) {
 		return Result{}, errors.New("pulled target digest could not be verified")
 	}
+	plan.Container.ImageDefaultUser = image.ConfiguredUser
 	if err = r.checkpoint(ctx, plan, PhaseAfterPull, "confirmed", map[string]string{"image_id": image.ID}); err != nil {
 		return Result{}, err
 	}
@@ -84,6 +85,11 @@ func (r Runner) Replace(ctx context.Context, plan Plan) (Result, error) {
 			return Result{}, UnknownOutcomeError{Phase: PhaseBeforeContainer, Cause: err}
 		}
 		return Result{}, r.failBeforeCutover(ctx, plan, active, fmt.Errorf("create stopped candidate: %w", err))
+	}
+	// Persist the runtime identity before verification so cleanup and later
+	// reconciliation can never lose a successfully created candidate.
+	if err = r.Store.RecordContainer(ctx, plan, containerID, "", "", "created"); err != nil {
+		return Result{}, UnknownOutcomeError{Phase: PhaseAfterContainer, Cause: err}
 	}
 	observed, err := r.Runtime.ObserveContainer(ctx, containerID)
 	if err != nil {
@@ -321,10 +327,14 @@ func (r Runner) checkpoint(ctx context.Context, plan Plan, phase Phase, outcome 
 
 func (r Runner) failBeforeCutover(ctx context.Context, plan Plan, active Generation, cause error) error {
 	cleanupState := "clean"
-	if cleanupErr := r.cleanupCandidate(ctx, plan); cleanupErr != nil {
+	cleanupErr := r.cleanupCandidate(ctx, plan)
+	if cleanupErr != nil {
 		cleanupState = "pending"
 	}
-	_ = r.Store.MarkFailed(ctx, plan, cleanupState)
+	markErr := r.Store.MarkFailed(ctx, plan, cleanupState)
+	if cleanupErr != nil || markErr != nil {
+		return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, cleanupErr, markErr)}
+	}
 	return cause
 }
 
@@ -348,8 +358,12 @@ func (r Runner) afterCutoverFailure(ctx context.Context, plan Plan, active Gener
 		cleanupState := "clean"
 		if cleanupErr := r.cleanupCandidate(ctx, plan); cleanupErr != nil {
 			cleanupState = "pending"
+			markErr := r.Store.MarkFailed(ctx, plan, cleanupState)
+			return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, cleanupErr, markErr)}
 		}
-		_ = r.Store.MarkFailed(ctx, plan, cleanupState)
+		if markErr := r.Store.MarkFailed(ctx, plan, cleanupState); markErr != nil {
+			return UnknownOutcomeError{Phase: PhaseCleanup, Cause: errors.Join(cause, markErr)}
+		}
 		return cause
 	}
 	return UnknownOutcomeError{Phase: phase, Cause: cause}
@@ -482,7 +496,7 @@ func verifyCandidate(plan Plan, network containers.NetworkObservation, observed 
 	if !ok || (attachment.NetworkID != network.ID && !(want == containers.RuntimeStopped && attachment.NetworkID == "" && observed.NetworkMode == plan.NetworkName)) {
 		return errors.New("candidate network identity mismatch")
 	}
-	if observed.User != plan.Container.User || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.Container.RestartPolicy) || (len(plan.Container.Command) > 0 && !equalJSON(observed.Command, plan.Container.Command)) || !containsStrings(observed.Environment, plan.Container.Environment) {
+	if !runtimeUserMatches(plan.Container, observed.User) || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.Container.RestartPolicy) || (len(plan.Container.Command) > 0 && !equalJSON(observed.Command, plan.Container.Command)) || !containsStrings(observed.Environment, plan.Container.Environment) {
 		return errors.New("candidate runtime configuration mismatch")
 	}
 	if !equalJSON(normalizeMounts(observed.Mounts), normalizeExpectedMounts(plan.Container)) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.Container.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Container.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.Container.DeviceRequests)) {
@@ -496,13 +510,25 @@ func verifyCandidate(plan Plan, network containers.NetworkObservation, observed 
 // catalog. Image defaults may add environment entries, so required values are
 // matched as a subset while all helper-controlled fields remain exact.
 func VerifyMigratedConfiguration(plan containers.ContainerPlan, observed containers.ContainerObservation) error {
-	if observed.User != plan.User || observed.NetworkMode != plan.Network || !equalJSON(observed.Labels, plan.Labels) || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.RestartPolicy) || (len(plan.Command) > 0 && !equalJSON(observed.Command, plan.Command)) || !containsStrings(observed.Environment, plan.Environment) {
+	if !runtimeUserMatches(plan, observed.User) || observed.NetworkMode != plan.Network || !equalJSON(observed.Labels, plan.Labels) || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.RestartPolicy) || (len(plan.Command) > 0 && !equalJSON(observed.Command, plan.Command)) || !containsStrings(observed.Environment, plan.Environment) {
 		return errors.New("migrated runtime configuration mismatch")
 	}
 	if !equalJSON(normalizeMounts(observed.Mounts), normalizeExpectedMounts(plan)) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.DeviceRequests)) {
 		return errors.New("migrated runtime mounts, ports, or devices mismatch")
 	}
 	return nil
+}
+
+// runtimeUserMatches preserves strict explicit run_as enforcement. When no
+// override is declared, it instead proves that the container inherited the
+// exact User value observed from the trusted pinned image. No username or root
+// aliases are normalized here.
+func runtimeUserMatches(plan containers.ContainerPlan, observed string) bool {
+	expected := plan.User
+	if expected == "" {
+		expected = plan.ImageDefaultUser
+	}
+	return observed == expected
 }
 
 // ConfigurationHash records the exact post-verification runtime

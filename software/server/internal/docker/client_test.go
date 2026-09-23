@@ -38,7 +38,7 @@ func TestTypedLifecycleObservations(t *testing.T) {
 		case "/containers/missing/json":
 			status = http.StatusNotFound
 		case "/images/repo%2Fapp@sha256:digest/json":
-			body = `{"Id":"sha256:image","RepoDigests":["repo/app@sha256:digest"]}`
+			body = `{"Id":"sha256:image","RepoDigests":["repo/app@sha256:digest"],"Config":{"User":"0:0"}}`
 		case "/networks/network":
 			body = `{"Id":"network-id","Name":"network","Labels":{"managed":"true"}}`
 		case "/info":
@@ -72,7 +72,7 @@ func TestTypedLifecycleObservations(t *testing.T) {
 		t.Fatalf("paused=%#v err=%v", paused, err)
 	}
 	image, err := client.ObserveImage(context.Background(), "repo/app@sha256:digest")
-	if err != nil || !image.Exists || image.RepoDigests[0] != "repo/app@sha256:digest" {
+	if err != nil || !image.Exists || image.RepoDigests[0] != "repo/app@sha256:digest" || image.ConfiguredUser != "0:0" {
 		t.Fatalf("image=%#v err=%v", image, err)
 	}
 	network, err := client.ObserveNetwork(context.Background(), "network")
@@ -190,6 +190,22 @@ func TestCreateContainerPlanSetsTrustedUser(t *testing.T) {
 	}
 	if body["User"] != "1000:1000" {
 		t.Fatalf("trusted user missing: %#v", body)
+	}
+}
+
+func TestCreateContainerPlanLeavesImageDefaultUserUnset(t *testing.T) {
+	var body map[string]any
+	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader(`{"Id":"container"}`)), Header: make(http.Header)}, nil
+	})}}
+	if _, err := client.CreateContainerPlan(ContainerPlan{Image: "image", Name: "name", Network: "network", ImageDefaultUser: "0:0"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["User"]; ok {
+		t.Fatalf("image-default plan injected a user override: %#v", body)
 	}
 }
 

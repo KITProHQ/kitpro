@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"github.com/kitpro/kitpro/software/server/internal/docker"
 	"github.com/kitpro/kitpro/software/server/internal/helperops"
@@ -21,6 +22,123 @@ import (
 type recordingLifecycleRuntime struct {
 	containers.LifecycleRuntime
 	events []string
+}
+
+type secondObservationUserMismatchRuntime struct {
+	containers.LifecycleRuntime
+	candidateName         string
+	candidateObservations int
+	firstObservedUser     string
+}
+
+func (r *secondObservationUserMismatchRuntime) ObserveContainer(ctx context.Context, id string) (containers.ContainerObservation, error) {
+	observed, err := r.LifecycleRuntime.ObserveContainer(ctx, id)
+	if err != nil || !observed.Exists || observed.Name != r.candidateName {
+		return observed, err
+	}
+	r.candidateObservations++
+	if r.candidateObservations == 1 {
+		r.firstObservedUser = observed.User
+	}
+	if r.candidateObservations == 2 {
+		observed.User = "unexpected:override"
+	}
+	return observed, nil
+}
+
+func TestDockerOpenWebUIImageDefaultAndFailedCandidateCleanup(t *testing.T) {
+	if os.Getenv("KITPRO_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set KITPRO_DOCKER_INTEGRATION=1")
+	}
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := entries["open-webui"]
+	if !ok || entry.Manifest.RunAs != nil {
+		t.Fatal("Open WebUI must remain an image-default runtime profile")
+	}
+	var releaseImage, releaseVersion string
+	for _, release := range entry.Manifest.Releases {
+		if release.Version == "0.11.3" {
+			releaseVersion = release.Version
+			releaseImage = release.Registry + "/" + release.Repository + "@" + release.Digest
+		}
+	}
+	if releaseImage == "" {
+		t.Fatal("pinned Open WebUI release is unavailable")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(ctx, db, true); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := helperops.Coordinator{DB: db}
+	operationID := operations.NewID()
+	installation := "inst-openwebui-live"
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operationID, Operation: "InstallApplication", OperationRevision: 1, InstanceID: installation, RuntimeGeneration: 1, ApplicationID: "open-webui", ReleaseID: releaseVersion}
+	decision, err := coordinator.Begin(ctx, request, 0, installation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.AuthorizeMutation(ctx, operationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	networkName := "kitpro-openwebui-contract-" + suffix
+	containerName := networkName + "-candidate"
+	labels := map[string]string{
+		ownership.LabelManaged:          "true",
+		ownership.LabelInstance:         installation,
+		ownership.LabelResource:         "application",
+		"com.kitpro.application":        "open-webui",
+		"com.kitpro.release":            releaseVersion,
+		"com.kitpro.runtime-generation": "1",
+		"com.kitpro.operation":          operationID,
+	}
+	dataRoot := t.TempDir()
+	containerPlan := containers.ContainerPlan{Image: releaseImage, Name: containerName, Network: networkName, Labels: labels, RestartPolicy: entry.Manifest.Restart, Environment: []string{"WEBUI_SECRET_KEY=nonsecret-live-regression-fixture"}}
+	for _, storage := range entry.Manifest.Storage {
+		containerPlan.Storage = append(containerPlan.Storage, containers.StorageMount{HostPath: filepath.Join(dataRoot, storage.ID), ContainerPath: storage.ContainerPath, ReadOnly: storage.ReadOnly})
+		if err = os.MkdirAll(filepath.Join(dataRoot, storage.ID), 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dockerRuntime := docker.New()
+	runtime := &secondObservationUserMismatchRuntime{LifecycleRuntime: dockerRuntime, candidateName: containerName}
+	t.Cleanup(func() {
+		_ = dockerRuntime.StopContainer(context.Background(), containerName)
+		_ = dockerRuntime.RemoveContainer(context.Background(), containerName)
+		_ = dockerRuntime.RemoveLifecycleNetwork(context.Background(), networkName)
+	})
+	plan := Plan{OperationID: operationID, InstallationID: installation, ApplicationID: "open-webui", ReleaseID: releaseVersion, Generation: 1, ExpectedGeneration: 0, FencingToken: decision.FencingToken, Image: releaseImage, NetworkName: networkName, ContainerName: containerName, PlanHash: "open-webui-image-default-regression", DataPath: dataRoot, Container: containerPlan}
+	if _, err = (Runner{Runtime: runtime, Store: Store{DB: db}, Evidence: coordinator}).Replace(ctx, plan); err == nil {
+		t.Fatal("injected second-observation mismatch unexpectedly committed")
+	}
+	if runtime.candidateObservations < 2 || runtime.firstObservedUser != "0:0" {
+		t.Fatalf("candidate observations=%d first user=%q", runtime.candidateObservations, runtime.firstObservedUser)
+	}
+	removed, err := dockerRuntime.ObserveContainer(ctx, containerName)
+	if err != nil || removed.Exists || removed.State != containers.RuntimeMissing {
+		t.Fatalf("candidate removal=%#v err=%v", removed, err)
+	}
+	removedNetwork, err := dockerRuntime.ObserveNetwork(ctx, networkName)
+	if err != nil || removedNetwork.Exists {
+		t.Fatalf("network removal=%#v err=%v", removedNetwork, err)
+	}
+	var status, cleanup string
+	if err = db.QueryRowContext(ctx, `SELECT status,cleanup_state FROM runtime_generations WHERE installation_id=? AND runtime_generation=1`, installation).Scan(&status, &cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || cleanup != "clean" {
+		t.Fatalf("status=%q cleanup=%q", status, cleanup)
+	}
 }
 
 func (r *recordingLifecycleRuntime) StartContainer(ctx context.Context, id string) error {

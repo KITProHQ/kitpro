@@ -201,7 +201,15 @@ func (s Store) RecordNetwork(ctx context.Context, plan Plan, networkID string) e
 
 func (s Store) RecordContainer(ctx context.Context, plan Plan, containerID, imageID, configHash, state string) error {
 	now := s.now()
-	result, err := s.DB.ExecContext(ctx, `UPDATE runtime_components SET observed_container_id=?,observed_image_id=?,configuration_hash=?,state=?,created_at=?,verified_at=CASE WHEN ?='stopped' THEN ? ELSE verified_at END WHERE installation_id=? AND runtime_generation=? AND component_id='app'`, containerID, imageID, configHash, state, now, state, now, plan.InstallationID, plan.Generation)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = verifyGenerationFence(ctx, tx, plan.InstallationID, plan.OperationID, plan.FencingToken); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE runtime_components SET observed_container_id=?,observed_image_id=?,configuration_hash=?,state=?,created_at=?,verified_at=CASE WHEN ?='stopped' THEN ? ELSE verified_at END WHERE installation_id=? AND runtime_generation=? AND component_id='app' AND EXISTS (SELECT 1 FROM runtime_generations WHERE installation_id=? AND runtime_generation=? AND creating_operation_id=? AND status='candidate')`, containerID, imageID, configHash, state, now, state, now, plan.InstallationID, plan.Generation, plan.InstallationID, plan.Generation, plan.OperationID)
 	if err != nil {
 		return err
 	}
@@ -209,7 +217,7 @@ func (s Store) RecordContainer(ctx context.Context, plan Plan, containerID, imag
 	if changed != 1 {
 		return errors.New("candidate container transition lost")
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s Store) RecordState(ctx context.Context, plan Plan, state string, verified bool) error {
@@ -295,8 +303,14 @@ func (s Store) Commit(ctx context.Context, plan Plan) error {
 }
 
 func (s Store) MarkFailed(ctx context.Context, plan Plan, cleanupState string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE runtime_generations SET status='failed',cleanup_state=? WHERE installation_id=? AND runtime_generation=? AND creating_operation_id=? AND status IN ('prepared','candidate')`, cleanupState, plan.InstallationID, plan.Generation, plan.OperationID)
-	return err
+	result, err := s.DB.ExecContext(ctx, `UPDATE runtime_generations SET status='failed',cleanup_state=? WHERE installation_id=? AND runtime_generation=? AND creating_operation_id=? AND status IN ('prepared','candidate')`, cleanupState, plan.InstallationID, plan.Generation, plan.OperationID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("candidate failure transition lost")
+	}
+	return nil
 }
 
 func (s Store) OlderRetained(ctx context.Context, installation string, keepGeneration int) ([]Generation, error) {
