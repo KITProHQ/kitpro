@@ -55,6 +55,7 @@ func prepareMigratedSingleConfiguration(ctx context.Context, db *sql.DB, runtime
 		return errors.New("migrated runtime image is unavailable")
 	}
 	expected.ImageDefaultUser = image.ConfiguredUser
+	expected.ImageDefaultVolumes = append([]string(nil), image.ConfiguredVolumes...)
 	if err = lifecycle.VerifyMigratedConfiguration(expected, observed); err != nil {
 		return err
 	}
@@ -114,7 +115,7 @@ func migratedSinglePlan(ctx context.Context, db *sql.DB, generation lifecycle.Ge
 		"com.kitpro.release":            generation.ReleaseID,
 		"com.kitpro.runtime-generation": strconv.Itoa(generation.Generation),
 	}
-	plan := containers.ContainerPlan{Image: trustedImage, Name: generation.Component.ContainerName, Network: generation.NetworkName, Labels: labels, Command: append([]string(nil), entry.Manifest.Command...), RestartPolicy: entry.Manifest.Restart, PortBindings: map[string][]containers.PortBinding{}}
+	plan := containers.ContainerPlan{Image: trustedImage, Name: generation.Component.ContainerName, Network: generation.NetworkName, Labels: labels, Command: append([]string(nil), entry.Manifest.Command...), RestartPolicy: entry.Manifest.Restart, DataPath: generation.DataPath, PortBindings: map[string][]containers.PortBinding{}}
 	if entry.Manifest.RunAs != nil {
 		plan.User = strconv.Itoa(entry.Manifest.RunAs.UID) + ":" + strconv.Itoa(entry.Manifest.RunAs.GID)
 	}

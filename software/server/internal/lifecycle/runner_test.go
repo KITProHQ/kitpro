@@ -253,6 +253,30 @@ func TestRuntimeUserVerificationDistinguishesExplicitAndImageDefault(t *testing.
 	}
 }
 
+func TestMountsMatchUsesDataPathFallback(t *testing.T) {
+	plan := containers.ContainerPlan{DataPath: "/srv/kitpro/apps/it-tools/data"}
+	observed := []containers.MountObservation{{Source: plan.DataPath, Destination: "/data"}}
+	if !mountsMatch(plan, observed) {
+		t.Fatal("container data-path bind was rejected")
+	}
+	observed[0].Source = "/unexpected/path"
+	if mountsMatch(plan, observed) {
+		t.Fatal("unexpected data-path source was accepted")
+	}
+}
+
+func TestMountsMatchAllowsOnlyTrustedImageVolumes(t *testing.T) {
+	plan := containers.ContainerPlan{ImageDefaultVolumes: []string{"/transcode"}}
+	observed := []containers.MountObservation{{Source: "/var/lib/docker/volumes/anonymous/_data", Destination: "/transcode"}}
+	if !mountsMatch(plan, observed) {
+		t.Fatal("trusted image volume was rejected")
+	}
+	observed = append(observed, containers.MountObservation{Source: "/host/secrets", Destination: "/unexpected"})
+	if mountsMatch(plan, observed) {
+		t.Fatal("untrusted extra mount was accepted")
+	}
+}
+
 func TestOpenWebUIImageDefaultRuntimeIdentityRegression(t *testing.T) {
 	entries, err := catalog.Load()
 	if err != nil {

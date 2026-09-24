@@ -52,6 +52,7 @@ func (r Runner) Replace(ctx context.Context, plan Plan) (Result, error) {
 		return Result{}, errors.New("pulled target digest could not be verified")
 	}
 	plan.Container.ImageDefaultUser = image.ConfiguredUser
+	plan.Container.ImageDefaultVolumes = append([]string(nil), image.ConfiguredVolumes...)
 	if err = r.checkpoint(ctx, plan, PhaseAfterPull, "confirmed", map[string]string{"image_id": image.ID}); err != nil {
 		return Result{}, err
 	}
@@ -499,7 +500,7 @@ func verifyCandidate(plan Plan, network containers.NetworkObservation, observed 
 	if !runtimeUserMatches(plan.Container, observed.User) || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.Container.RestartPolicy) || (len(plan.Container.Command) > 0 && !equalJSON(observed.Command, plan.Container.Command)) || !containsStrings(observed.Environment, plan.Container.Environment) {
 		return errors.New("candidate runtime configuration mismatch")
 	}
-	if !equalJSON(normalizeMounts(observed.Mounts), normalizeExpectedMounts(plan.Container)) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.Container.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Container.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.Container.DeviceRequests)) {
+	if !mountsMatch(plan.Container, observed.Mounts) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.Container.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Container.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.Container.DeviceRequests)) {
 		return errors.New("candidate mounts, ports, or devices mismatch")
 	}
 	return nil
@@ -513,7 +514,7 @@ func VerifyMigratedConfiguration(plan containers.ContainerPlan, observed contain
 	if !runtimeUserMatches(plan, observed.User) || observed.NetworkMode != plan.Network || !equalJSON(observed.Labels, plan.Labels) || normalizeRestart(observed.RestartPolicy) != normalizeRestart(plan.RestartPolicy) || (len(plan.Command) > 0 && !equalJSON(observed.Command, plan.Command)) || !containsStrings(observed.Environment, plan.Environment) {
 		return errors.New("migrated runtime configuration mismatch")
 	}
-	if !equalJSON(normalizeMounts(observed.Mounts), normalizeExpectedMounts(plan)) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.DeviceRequests)) {
+	if !mountsMatch(plan, observed.Mounts) || !equalJSON(normalizePortBindings(observed.PortBindings), normalizePortBindings(plan.PortBindings)) || !equalJSON(normalizeDevices(observed.Devices), normalizeDevices(plan.Devices)) || !equalJSON(normalizeDeviceRequests(observed.DeviceRequests), normalizeDeviceRequests(plan.DeviceRequests)) {
 		return errors.New("migrated runtime mounts, ports, or devices mismatch")
 	}
 	return nil
@@ -608,11 +609,49 @@ func normalizeMounts(mounts []containers.MountObservation) []containers.MountObs
 	return out
 }
 func normalizeExpectedMounts(plan containers.ContainerPlan) []containers.MountObservation {
-	out := make([]containers.MountObservation, 0, len(plan.Storage))
-	for _, mount := range plan.Storage {
+	storage := plan.Storage
+	if len(storage) == 0 && plan.DataPath != "" {
+		storage = []containers.StorageMount{{HostPath: plan.DataPath, ContainerPath: "/data", ReadOnly: plan.ReadOnly}}
+	}
+	out := make([]containers.MountObservation, 0, len(storage))
+	for _, mount := range storage {
 		out = append(out, containers.MountObservation{Source: mount.HostPath, Destination: mount.ContainerPath, ReadOnly: mount.ReadOnly})
 	}
 	return normalizeMounts(out)
+}
+
+// mountsMatch requires every helper-declared mount exactly, permits only
+// additional destinations declared as trusted image volumes, and rejects all
+// other runtime mounts. Image volumes have runtime-selected sources (often
+// anonymous Docker volumes), so their source cannot be compared to a helper
+// path; their destination is still constrained to the pinned image metadata.
+func mountsMatch(plan containers.ContainerPlan, observed []containers.MountObservation) bool {
+	expected := normalizeExpectedMounts(plan)
+	actual := normalizeMounts(observed)
+	byDestination := make(map[string]containers.MountObservation, len(actual))
+	for _, mount := range actual {
+		if _, duplicate := byDestination[mount.Destination]; duplicate {
+			return false
+		}
+		byDestination[mount.Destination] = mount
+	}
+	for _, mount := range expected {
+		got, ok := byDestination[mount.Destination]
+		if !ok || got != mount {
+			return false
+		}
+		delete(byDestination, mount.Destination)
+	}
+	trustedVolumes := make(map[string]bool, len(plan.ImageDefaultVolumes))
+	for _, destination := range plan.ImageDefaultVolumes {
+		trustedVolumes[destination] = true
+	}
+	for destination := range byDestination {
+		if !trustedVolumes[destination] {
+			return false
+		}
+	}
+	return true
 }
 func normalizeRestart(value string) string {
 	if value == "" {

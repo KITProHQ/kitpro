@@ -167,6 +167,7 @@ func (r MultiRunner) Replace(ctx context.Context, plan MultiPlan) (Result, error
 	// Pull every unique digest before any active component is stopped.
 	pulled := map[string]bool{}
 	imageDefaultUsers := map[string]string{}
+	imageDefaultVolumes := map[string][]string{}
 	for _, component := range plan.Components {
 		if pulled[component.Image] {
 			continue
@@ -211,9 +212,11 @@ func (r MultiRunner) Replace(ctx context.Context, plan MultiPlan) (Result, error
 		}
 		pulled[component.Image] = true
 		imageDefaultUsers[component.Image] = image.ConfiguredUser
+		imageDefaultVolumes[component.Image] = append([]string(nil), image.ConfiguredVolumes...)
 	}
 	for index := range plan.Components {
 		plan.Components[index].Container.ImageDefaultUser = imageDefaultUsers[plan.Components[index].Image]
+		plan.Components[index].Container.ImageDefaultVolumes = append([]string(nil), imageDefaultVolumes[plan.Components[index].Image]...)
 	}
 
 	if err = r.checkpoint(ctx, plan, PhaseBeforeNetwork, "intent", nil); err != nil {

@@ -67,6 +67,10 @@ type ImageObservation struct {
 	// ConfiguredUser is the image-config User value. An empty value means the
 	// runtime's image default (root), not an explicit container override.
 	ConfiguredUser string
+	// ConfiguredVolumes are volume destinations declared by the trusted image.
+	// The runtime may materialize these as anonymous volumes when no helper
+	// mount overrides the destination.
+	ConfiguredVolumes []string
 }
 
 type RuntimeIdentityObservation struct {
@@ -123,19 +127,20 @@ type ContainerPlan struct {
 	User                 string
 	// ImageDefaultUser is trusted runtime observation used only to verify a
 	// container created without an explicit User override.
-	ImageDefaultUser string `json:"-"`
-	Labels           map[string]string
-	Command          []string
-	Environment      []string
-	DataPath         string
-	ReadOnly         bool
-	Storage          []StorageMount
-	PortBindings     map[string][]PortBinding
-	RestartPolicy    string
-	NetworkAliases   []string
-	Dependencies     []string
-	Devices          []DeviceMapping
-	DeviceRequests   []DeviceRequest
+	ImageDefaultUser    string   `json:"-"`
+	ImageDefaultVolumes []string `json:"-"`
+	Labels              map[string]string
+	Command             []string
+	Environment         []string
+	DataPath            string
+	ReadOnly            bool
+	Storage             []StorageMount
+	PortBindings        map[string][]PortBinding
+	RestartPolicy       string
+	NetworkAliases      []string
+	Dependencies        []string
+	Devices             []DeviceMapping
+	DeviceRequests      []DeviceRequest
 }
 
 type PortBinding struct {

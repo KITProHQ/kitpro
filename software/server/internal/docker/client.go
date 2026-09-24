@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -260,13 +261,19 @@ func (c *Client) ObserveImage(ctx context.Context, image string) (containers.Ima
 		ID          string   `json:"Id"`
 		RepoDigests []string `json:"RepoDigests"`
 		Config      struct {
-			User string `json:"User"`
+			User    string         `json:"User"`
+			Volumes map[string]any `json:"Volumes"`
 		} `json:"Config"`
 	}
 	if err = json.NewDecoder(io.LimitReader(response.Body, 128*1024)).Decode(&observed); err != nil {
 		return containers.ImageObservation{}, err
 	}
-	return containers.ImageObservation{Exists: true, ID: observed.ID, RepoDigests: observed.RepoDigests, ConfiguredUser: observed.Config.User}, nil
+	volumes := make([]string, 0, len(observed.Config.Volumes))
+	for destination := range observed.Config.Volumes {
+		volumes = append(volumes, destination)
+	}
+	sort.Strings(volumes)
+	return containers.ImageObservation{Exists: true, ID: observed.ID, RepoDigests: observed.RepoDigests, ConfiguredUser: observed.Config.User, ConfiguredVolumes: volumes}, nil
 }
 
 func (c *Client) ObserveNetwork(ctx context.Context, name string) (containers.NetworkObservation, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestTypedLifecycleObservations(t *testing.T) {
 		case "/containers/missing/json":
 			status = http.StatusNotFound
 		case "/images/repo%2Fapp@sha256:digest/json":
-			body = `{"Id":"sha256:image","RepoDigests":["repo/app@sha256:digest"],"Config":{"User":"0:0"}}`
+			body = `{"Id":"sha256:image","RepoDigests":["repo/app@sha256:digest"],"Config":{"User":"0:0","Volumes":{"/config":{},"/transcode":{}}}}`
 		case "/networks/network":
 			body = `{"Id":"network-id","Name":"network","Labels":{"managed":"true"}}`
 		case "/info":
@@ -72,7 +73,7 @@ func TestTypedLifecycleObservations(t *testing.T) {
 		t.Fatalf("paused=%#v err=%v", paused, err)
 	}
 	image, err := client.ObserveImage(context.Background(), "repo/app@sha256:digest")
-	if err != nil || !image.Exists || image.RepoDigests[0] != "repo/app@sha256:digest" || image.ConfiguredUser != "0:0" {
+	if err != nil || !image.Exists || image.RepoDigests[0] != "repo/app@sha256:digest" || image.ConfiguredUser != "0:0" || !reflect.DeepEqual(image.ConfiguredVolumes, []string{"/config", "/transcode"}) {
 		t.Fatalf("image=%#v err=%v", image, err)
 	}
 	network, err := client.ObserveNetwork(context.Background(), "network")
