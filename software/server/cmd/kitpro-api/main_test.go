@@ -361,6 +361,41 @@ func TestCatalogUIHidesInternalValidationWorkload(t *testing.T) {
 	}
 }
 
+func TestCatalogOffersRecoveryForExistingRemovedInstallation(t *testing.T) {
+	a, _, csrf := newTestApp(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, "inst-recover01", "uptime-kuma", "1.23.17", "runtime_removed", 0, now, now); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(csrf)
+	a.home(recorder, request)
+	body := recorder.Body.String()
+	want := `/api/v1/installations/inst-recover01/recreate`
+	if recorder.Code != http.StatusOK || !strings.Contains(body, want) || !strings.Contains(body, "Recover existing installation") || !strings.Contains(body, "Reusing the existing installation, stored data, and generated credentials.") {
+		t.Fatalf("recovery affordance missing: status=%d body=%s", recorder.Code, body)
+	}
+}
+
+func TestCatalogDoesNotGuessRecoveryWhenInstallationsAreAmbiguous(t *testing.T) {
+	a, _, csrf := newTestApp(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, id := range []string{"inst-recover01", "inst-recover02"} {
+		if _, err := a.db.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, id, "uptime-kuma", "1.23.17", "runtime_removed", 0, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(csrf)
+	a.home(recorder, request)
+	body := recorder.Body.String()
+	if strings.Contains(body, "Recover existing installation") || strings.Contains(body, "Reusing the existing installation, stored data, and generated credentials.") {
+		t.Fatalf("catalog guessed an ambiguous recovery target: %s", body)
+	}
+}
+
 func TestPiHoleInstalledUIShowsInfrastructureImpactAndEndpointTypes(t *testing.T) {
 	a, _, csrf := newTestApp(t)
 	const lanAddress = "192.0.2.10"

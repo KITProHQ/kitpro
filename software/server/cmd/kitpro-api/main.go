@@ -597,6 +597,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	type appView struct {
 		ID, Name, Description, Release, Category, Initials, Hardware string
 		WebsiteURL, SourceURL, DocumentationURL, LogoURL             string
+		RecoverInstallationID                                        string
 		InstalledCount                                               int
 		HardwareUnavailable, Experimental, NetworkService            bool
 		StorageSlots                                                 []storageSlotView
@@ -625,6 +626,8 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	storageRoots := a.trustedStorageRoots()
 	installations := []installationView{}
 	installedCountByApp := map[string]int{}
+	recoverableInstallationByApp := map[string]string{}
+	recoverableInstallationCount := map[string]int{}
 	runningCount, privateCount, attentionCount, updateCount := 0, 0, 0, 0
 	installedRows, _ := a.db.QueryContext(r.Context(), "SELECT installation_id,application_id,desired_state,runtime_generation FROM installations ORDER BY created_at")
 	if installedRows != nil {
@@ -636,6 +639,10 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			installedCountByApp[appID]++
+			if desired == "runtime_removed" {
+				recoverableInstallationCount[appID]++
+				recoverableInstallationByApp[appID] = id
+			}
 			view := installationView{ID: id, Name: appID, AppID: appID, State: desired, Generation: generation, AccessLabel: "Private"}
 			services, _ := a.serviceStatuses(r.Context(), id)
 			view.Services = services
@@ -721,7 +728,11 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: m.Category, Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID], WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, LogoURL: catalogLogoURL(m.Logo), Limitations: append([]string(nil), m.Limitations...), Experimental: m.CatalogStatus == "experimental", NetworkService: m.Kind == "network-service"}
+		recoverID := ""
+		if recoverableInstallationCount[m.ID] == 1 {
+			recoverID = recoverableInstallationByApp[m.ID]
+		}
+		app := appView{ID: m.ID, Name: m.Name, Description: m.Description, Release: release, Category: m.Category, Initials: appInitials(m.Name), Hardware: hardwareLabel, HardwareUnavailable: hardwareUnavailable, InstalledCount: installedCountByApp[m.ID], RecoverInstallationID: recoverID, WebsiteURL: m.WebsiteURL, SourceURL: m.SourceURL, DocumentationURL: m.DocumentationURL, LogoURL: catalogLogoURL(m.Logo), Limitations: append([]string(nil), m.Limitations...), Experimental: m.CatalogStatus == "experimental", NetworkService: m.Kind == "network-service"}
 		if m.LifecycleNotice != nil {
 			app.InstallNotice = m.LifecycleNotice.Install
 		}
