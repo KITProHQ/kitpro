@@ -1284,7 +1284,10 @@ func prepareStructuredConfiguration(ctx context.Context, runtime containers.Runt
 			return errors.New("Syncthing identity bootstrap is incomplete")
 		}
 	}
-	if err = appconfig.Apply(request.Configuration.Type, storage.HostPath); err != nil {
+	if request.RunAs == nil {
+		return errors.New("structured configuration requires an application runtime identity")
+	}
+	if err = appconfig.Apply(request.Configuration.Type, storage.HostPath, appconfig.RuntimeOwner{UID: request.RunAs.UID, GID: request.RunAs.GID}); err != nil {
 		return err
 	}
 	return appconfig.Verify(request.Configuration.Type, storage.HostPath)

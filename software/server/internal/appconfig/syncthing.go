@@ -16,6 +16,19 @@ import (
 
 const SyncthingTCPOnlyV1 = "syncthing-tcp-only-v1"
 
+const (
+	syncthingConfigDirectoryMode os.FileMode = 0700
+	syncthingConfigFileMode      os.FileMode = 0600
+)
+
+// RuntimeOwner identifies the trusted application identity that must own the
+// generated configuration after policy application. The helper obtains this
+// only from the validated manifest runtime identity.
+type RuntimeOwner struct {
+	UID int
+	GID int
+}
+
 var syncthingTCPOnlyValues = map[string]string{
 	"listenAddress":         "tcp://0.0.0.0:22000",
 	"globalAnnounceEnabled": "false",
@@ -29,14 +42,17 @@ var syncthingTCPOnlyValues = map[string]string{
 }
 
 // Apply enforces a known policy on an existing application-generated config.
-func Apply(policy, managedRoot string) error {
+// It temporarily hands ownership of the policy's exact configuration
+// directory to the helper so atomic replacement works under an application
+// owned 0700 directory, then restores the trusted runtime owner.
+func Apply(policy, managedRoot string, owner RuntimeOwner) error {
 	if policy != SyncthingTCPOnlyV1 {
 		return errors.New("unsupported structured configuration policy")
 	}
 	if err := validateManagedConfigurationDirectories(managedRoot); err != nil {
 		return err
 	}
-	return applySyncthingTCPOnly(filepath.Join(managedRoot, "config", "config.xml"))
+	return applySyncthingTCPOnly(filepath.Join(managedRoot, "config", "config.xml"), owner)
 }
 
 // Verify confirms that the persisted configuration still expresses the
@@ -78,11 +94,62 @@ func validateManagedConfigurationDirectories(managedRoot string) error {
 	return nil
 }
 
-func applySyncthingTCPOnly(path string) error {
+func applySyncthingTCPOnly(path string, owner RuntimeOwner) (err error) {
+	if owner.UID < 0 || owner.GID < 0 {
+		return errors.New("invalid application configuration owner")
+	}
+	parent := filepath.Dir(path)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		return err
+	}
+	if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Syncthing configuration path is not a managed directory")
+	}
+	targetInfo, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !targetInfo.Mode().IsRegular() || targetInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Syncthing configuration is not a regular file")
+	}
+	stat, ok := targetInfo.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return errors.New("Syncthing configuration has an unexpected hard-link count")
+	}
+	if int(stat.Uid) != owner.UID || int(stat.Gid) != owner.GID {
+		return errors.New("Syncthing configuration has an unexpected owner")
+	}
+	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok || int(parentStat.Uid) != owner.UID || int(parentStat.Gid) != owner.GID {
+		return errors.New("Syncthing configuration directory has an unexpected owner")
+	}
+	if targetInfo.Mode().Perm() != syncthingConfigFileMode || parentInfo.Mode().Perm() != syncthingConfigDirectoryMode {
+		return errors.New("Syncthing configuration has unexpected permissions")
+	}
 	data, err := readRegularBounded(path)
 	if err != nil {
 		return err
 	}
+	original := append([]byte(nil), data...)
+	handoff := int(parentStat.Uid) != os.Geteuid() || int(parentStat.Gid) != os.Getegid()
+	if handoff {
+		if err = os.Chown(parent, 0, 0); err != nil {
+			return fmt.Errorf("prepare configuration ownership handoff: %w", err)
+		}
+	}
+	defer func() {
+		if !handoff {
+			return
+		}
+		if restoreErr := os.Chown(parent, owner.UID, owner.GID); restoreErr != nil {
+			if err == nil {
+				err = fmt.Errorf("restore configuration ownership: %w", restoreErr)
+			} else {
+				err = fmt.Errorf("%w; restore configuration ownership: %v", err, restoreErr)
+			}
+		}
+	}()
 	var output bytes.Buffer
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	encoder := xml.NewEncoder(&output)
@@ -153,7 +220,11 @@ func applySyncthingTCPOnly(path string) error {
 	if err = writeAtomicLike(path, output.Bytes()); err != nil {
 		return err
 	}
-	return Verify(SyncthingTCPOnlyV1, filepath.Dir(filepath.Dir(path)))
+	if err = Verify(SyncthingTCPOnlyV1, filepath.Dir(filepath.Dir(path))); err != nil {
+		_ = writeAtomicLike(path, original)
+		return err
+	}
+	return nil
 }
 
 func discardElement(decoder *xml.Decoder, start xml.StartElement) error {

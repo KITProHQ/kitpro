@@ -70,7 +70,7 @@ func TestDockerSyncthingTCPOnlyManualPeerSync(t *testing.T) {
 		if err = runtime.RemoveContainer(ctx, bootstrap); err != nil {
 			t.Fatal(err)
 		}
-		if err = Apply(SyncthingTCPOnlyV1, item.root); err != nil {
+		if err = Apply(SyncthingTCPOnlyV1, item.root, RuntimeOwner{UID: 1000, GID: 1000}); err != nil {
 			t.Fatal(err)
 		}
 		item.apiKey = readSyncthingAPIKey(t, item.root)

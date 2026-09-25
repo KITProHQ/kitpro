@@ -98,7 +98,7 @@ func (r *configurationBootstrapRuntime) ObserveContainer(context.Context, string
 func (r *configurationBootstrapRuntime) StartContainer(context.Context, string) error {
 	r.started = true
 	directory := filepath.Join(r.configRoot, "config")
-	if err := os.MkdirAll(directory, 0750); err != nil {
+	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
 	configuration := `<?xml version="1.0"?><configuration version="52"><device id="GENERATED-DEVICE-ID"></device><gui><apikey>GENERATED-API-KEY</apikey></gui><options><listenAddress>default</listenAddress><listenAddress>quic://0.0.0.0:22000</listenAddress><globalAnnounceEnabled>true</globalAnnounceEnabled><localAnnounceEnabled>true</localAnnounceEnabled><relaysEnabled>true</relaysEnabled><natEnabled>true</natEnabled><startBrowser>true</startBrowser><urAccepted>0</urAccepted><autoUpgradeIntervalH>12</autoUpgradeIntervalH><crashReportingEnabled>true</crashReportingEnabled></options></configuration>`
