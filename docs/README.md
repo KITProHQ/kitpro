@@ -14,6 +14,7 @@ operation and recovery.
 - [Public alpha quickstart](release/quickstart.md)
 - [Install on Debian 13](install-debian-package.md)
 - [Install on Arch Linux](install-arch-package.md)
+- [Configure the Supported-host Docker address pool](docker-address-pool-prerequisite.md)
 - [Upgrade or remove the Debian package](upgrade-uninstall-debian-package.md)
 - [Rocky Linux 10 experimental notes](install-rocky-linux.md)
 

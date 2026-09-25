@@ -16,12 +16,16 @@ Use the filename and checksum from the [current public release](https://github.c
 - Debian 13 on amd64, with systemd and AppArmor enabled
 - a compatible rootful Docker Engine that is running and exposes its local Unix
   socket
+- an explicit, operator-selected Docker default address pool that passes the
+  [KITPro address-pool prerequisite](docker-address-pool-prerequisite.md)
 - root or sudo access for package installation
 
 The package deliberately does not depend on a distribution-specific Docker
 package. Debian's `docker.io` and Docker Inc.'s `docker-ce` can both provide a
-compatible engine. KITPro verifies that Docker is active before installation;
-it never installs Docker or adds `kitpro-api` to the `docker` group.
+compatible engine. KITPro verifies that Docker is active and that its network
+allocator has sufficient non-overlapping capacity before package activation.
+It never installs Docker, rewrites `/etc/docker/daemon.json`, or adds
+`kitpro-api` to the `docker` group.
 
 ## Install
 
@@ -81,7 +85,13 @@ and Unix socket before retrying:
 ```sh
 systemctl status docker.service
 test -S /run/docker.sock
+sudo /usr/libexec/kitpro-helper --verify-host-prerequisites
 ```
+
+An address-pool failure is actionable host configuration, not permission to
+remove KITPro generation networks or merge application networks. Select a pool
+for this environment, preserve unrelated Docker settings, validate the JSON,
+and restart Docker. The new pool applies only to networks created afterward.
 
 If package configuration fails, inspect `journalctl -u kitpro-api -u
 kitpro-helper` and AppArmor denials. Do not place the API user in the Docker

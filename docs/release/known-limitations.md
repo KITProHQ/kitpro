@@ -4,6 +4,12 @@ Status date: 2026-09-21. These limits apply to `v0.1.0-alpha.12`.
 
 ## Platform and runtime
 
+- Supported Docker hosts require an explicit, operator-selected RFC 1918
+  default address pool with at least 64 available child networks of `/24` or
+  larger. KITPro detects obvious current route and Docker-network conflicts but
+  cannot predict future routes. It does not edit Docker daemon configuration.
+  Docker must be restarted after an administrator changes that configuration,
+  and the change applies only to newly created networks.
 - The current public baseline is Debian 13 amd64 and fully updated Arch Linux x86_64 with `linux-lts`, rootful Docker, and enforcing AppArmor.
 - Ubuntu 26.04 LTS has development validation evidence but is not in the current public support baseline.
 - Rocky Linux 10 amd64 and Podman remain Experimental. Development acceptance evidence does not establish public support or a published RPM.

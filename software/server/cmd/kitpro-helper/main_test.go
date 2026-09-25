@@ -189,6 +189,19 @@ func TestSelectRuntimeUsesExplicitOrInstallablePlatform(t *testing.T) {
 	}
 }
 
+func TestOnlyNetworkCreatingMutationsRequireHostPreflight(t *testing.T) {
+	for _, operation := range []string{"InstallApplication", "ConfigureServiceExposure", "UpdateApplication"} {
+		if !createsApplicationNetwork(operation) {
+			t.Fatalf("%s must require host preflight", operation)
+		}
+	}
+	for _, operation := range []string{"StopApplication", "StartApplication", "RestartApplication", "RemoveApplication", "ReconcileInstallation", "CreateApplicationBackup", "RestoreApplicationBackup"} {
+		if createsApplicationNetwork(operation) {
+			t.Fatalf("%s must remain available for recovery without network allocation", operation)
+		}
+	}
+}
+
 func TestExpectedAPIUIDFromConfiguredNumericValue(t *testing.T) {
 	t.Setenv("KITPRO_API_UID", "1234")
 	uid, err := expectedAPIUID()

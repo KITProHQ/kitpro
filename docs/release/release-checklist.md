@@ -5,6 +5,7 @@
 - [ ] Control and helper migrations are ordered, backed up, and validated.
 - [ ] The Debian/Ubuntu `.deb` and Arch package build paths produce checksums, SBOMs, and build metadata.
 - [ ] Debian 13, Ubuntu 26.04 LTS, and Arch Linux platform acceptance evidence is current.
+- [ ] Every Supported Docker host records a locally selected non-overlapping address pool, passes the positive preflight, and preserves negative failure-message evidence.
 - [ ] Rocky Linux 10 and Podman are labeled Experimental.
 - [ ] FreshRSS and Paperless lifecycle, exposure, persistence, and reconciliation evidence is current.
 - [ ] Native package upgrade, remove, reinstall, and failure handling are documented.

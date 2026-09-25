@@ -24,6 +24,8 @@ if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$serv
 fi
 grep -q 'aa-enabled' "$arch_dir/kitpro-server.install"
 grep -q 'apparmor_parser -r -W -T' "$arch_dir/kitpro-server.install"
+grep -q '/usr/libexec/kitpro-helper --verify-host-prerequisites' "$arch_dir/kitpro-server.install"
+grep -q 'restore_previous_services' "$arch_dir/kitpro-server.install"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$server_dir/packaging/apparmor/kitpro-helper"
 test "$(grep -Ec '^  link ' "$server_dir/packaging/apparmor/kitpro-helper")" -eq 1
 if grep -Eq '^  (/var/lib/kitpro-helper/\*\*|/var/lib/kitpro-helper/backups/\*\*) [^,]*l[^,]*,$' "$server_dir/packaging/apparmor/kitpro-helper"; then

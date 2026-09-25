@@ -23,6 +23,10 @@ supported.
 4. Install Docker with `sudo ./tools/install-docker.sh --yes`. The installer
    uses only Arch official repository packages and does not grant the invoking
    user Docker group membership.
+5. Configure an explicit, operator-selected Docker default address pool that
+   passes the [KITPro address-pool prerequisite](docker-address-pool-prerequisite.md).
+   Preserve unrelated daemon settings, validate the complete JSON, and restart
+   Docker before installing KITPro.
 
 ## Install
 
@@ -38,7 +42,11 @@ sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
 sudo pacman -U ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
 ```
 
-The transaction fails closed unless Docker is active and AppArmor is enabled.
+The transaction fails closed unless Docker is active, its address-pool
+configuration has sufficient non-overlapping capacity, and AppArmor is
+enabled. KITPro does not rewrite Docker daemon configuration. Verify the host
+at any time with `sudo /usr/libexec/kitpro-helper
+--verify-host-prerequisites`.
 The API listens on `127.0.0.1:8080` by default. Use an SSH tunnel and open
 `http://127.0.0.1:8080/setup` to create the first local administrator.
 

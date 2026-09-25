@@ -2,13 +2,18 @@
 
 | Platform | Status | Boundary |
 | --- | --- | --- |
-| Debian 13 amd64 | Supported | Rootful Docker, enforcing AppArmor |
-| Ubuntu 26.04 LTS amd64 | Supported | `.deb`, rootful Docker, enforcing AppArmor; must pass the supported-host release checks |
-| Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor; no partial upgrades |
+| Debian 13 amd64 | Supported | Rootful Docker with an operator-selected non-overlapping address pool, enforcing AppArmor |
+| Ubuntu 26.04 LTS amd64 | Supported | `.deb`, rootful Docker with an operator-selected non-overlapping address pool, enforcing AppArmor; must pass the supported-host release checks |
+| Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker with an operator-selected non-overlapping address pool, enforcing AppArmor; no partial upgrades |
 | Rocky Linux 10 amd64 | Experimental | Rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; development acceptance does not promote this path into the public baseline |
 
 Podman is Experimental in alpha.12 and is used only by the experimental Rocky
 Linux path. It is not a supported runtime on Debian, Arch Linux, or Ubuntu.
+
+Every Supported Docker host must satisfy the
+[Docker address-pool prerequisite](docker-address-pool-prerequisite.md). KITPro
+does not modify Docker daemon configuration. Rocky Linux uses the separate
+Experimental Podman/Quadlet path and is not covered by this Docker prerequisite.
 
 ## Capability matrix
 

@@ -52,8 +52,10 @@ that script and the SBOM receives its own adjacent checksum.
 Docker Engine is a pre-existing runtime prerequisite rather than a Debian
 package dependency. This avoids binding KITPro to either Debian's `docker.io`
 package or Docker Inc.'s `docker-ce` package across Debian and Ubuntu. Package
-pre-installation fails clearly unless Docker is active and its Unix socket is
-present.
+configuration fails clearly unless Docker is active, its Unix socket is
+present, and an operator-selected default address pool provides the required
+non-overlapping network capacity. KITPro validates that setting but never
+rewrites `/etc/docker/daemon.json`.
 
 For upgrades from alpha.12 or newer, the incoming package's control-archive
 `preinst` owns the pre-unpack transaction. It records service state, stops

@@ -50,6 +50,17 @@ var newContainerRuntime = func() containers.Runtime {
 	return docker.New()
 }
 
+var verifyHostPrerequisites = func(ctx context.Context) error {
+	runtimeName, err := configuredRuntimeName()
+	if err != nil {
+		return err
+	}
+	if runtimeName != "docker" {
+		return nil
+	}
+	return docker.New().VerifyNetworkPrerequisites(ctx)
+}
+
 func main() {
 	if handleMaintenance(os.Args[1:]) {
 		return
@@ -192,6 +203,15 @@ func handleMaintenance(args []string) bool {
 		}
 		slog.Info("database migration completed", "component", "helper", "event", "migration_completed", "result", "success")
 		return true
+	case "--verify-host-prerequisites":
+		if len(args) != 1 {
+			fatal("--verify-host-prerequisites accepts no arguments")
+		}
+		if err := verifyHostPrerequisites(context.Background()); err != nil {
+			fatal(err.Error())
+		}
+		fmt.Println("KITPro host prerequisites verified")
+		return true
 	case "--prepare-upgrade":
 		if len(args) != 2 {
 			fatal("--prepare-upgrade requires target version")
@@ -300,6 +320,12 @@ func serve(c net.Conn, api uint32, db *sql.DB, coordinator helperops.Coordinator
 				reconciliation, reconcileErr := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), r.InstanceID)
 				if r.RepairAction != lifecycle.RepairRecreateGeneration || reconcileErr != nil || reconciliation.CheckedGeneration != r.RuntimeGeneration-1 || reconciliation.RecommendedAction != lifecycle.RepairRecreateGeneration {
 					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "InvalidRepair", Error: "controlled recreation requires current helper reconciliation evidence"})
+					continue
+				}
+			}
+			if createsApplicationNetwork(r.Operation) {
+				if err := verifyHostPrerequisites(context.Background()); err != nil {
+					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "HostPrerequisiteFailed", Error: err.Error()})
 					continue
 				}
 			}
@@ -439,6 +465,15 @@ func revealApplicationCredential(db *sql.DB, request protocol.Request) (protocol
 func isDurableMutation(operation string) bool {
 	switch operation {
 	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup":
+		return true
+	default:
+		return false
+	}
+}
+
+func createsApplicationNetwork(operation string) bool {
+	switch operation {
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication":
 		return true
 	default:
 		return false

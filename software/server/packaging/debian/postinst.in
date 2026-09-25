@@ -25,6 +25,7 @@ approval_value() {
 }
 
 restore_previous_services() {
+    preserve_approval=${1:-false}
     [ -f "$approval" ] || return 0
     api_was_active=$(approval_value api_was_active || true)
     helper_was_active=$(approval_value helper_was_active || true)
@@ -43,7 +44,7 @@ restore_previous_services() {
         restoration_failed=true
     fi
     if [ "$restoration_failed" = false ]; then
-        rm -f -- "$approval"
+        [ "$preserve_approval" = true ] || rm -f -- "$approval"
         return 0
     fi
     return 1
@@ -196,6 +197,13 @@ apparmor_parser -Q -T "$profile"
 apparmor_parser -r -W -T "$profile"
 if ! aa-status --enabled; then
     echo "kitpro-server: AppArmor is not enabled" >&2
+    exit 1
+fi
+
+if ! /usr/libexec/kitpro-helper --verify-host-prerequisites; then
+    if ! restore_previous_services true; then
+        echo 'kitpro-server: address-pool preflight failed and prior service state could not be fully restored' >&2
+    fi
     exit 1
 fi
 

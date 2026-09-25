@@ -48,6 +48,22 @@ require_upgrade_approval() {
     fi
 }
 
+restore_previous_services() {
+    local approval=/run/kitpro/upgrade-approved
+    local key value api_was_active=false helper_was_active=false socket_was_active=false
+    [[ -f "$approval" && ! -L "$approval" ]] || return 0
+    while IFS='=' read -r key value; do
+        case "$key" in
+            api_was_active) api_was_active=$value ;;
+            helper_was_active) helper_was_active=$value ;;
+            socket_was_active) socket_was_active=$value ;;
+        esac
+    done < "$approval"
+    [[ "$socket_was_active" != true ]] || systemctl start kitpro-helper.socket
+    [[ "$helper_was_active" != true ]] || systemctl start kitpro-helper.service
+    [[ "$api_was_active" != true ]] || systemctl start kitpro-api.service
+}
+
 configure_package() {
     if [[ ! -e /etc/conf.d/kitpro-server ]]; then
         if [[ -f /etc/conf.d/kitpro-server.pacsave ]]; then
@@ -65,6 +81,7 @@ configure_package() {
         printf 'kitpro-server: AppArmor is not enabled\n' >&2
         return 1
     fi
+    /usr/libexec/kitpro-helper --verify-host-prerequisites
     if [[ -r /etc/conf.d/kitpro-server ]]; then
         # shellcheck disable=SC1091
         source /etc/conf.d/kitpro-server
@@ -105,7 +122,10 @@ pre_upgrade() {
 post_upgrade() {
     local new_version=$1 old_version=$2
     require_upgrade_approval "$old_version" "$new_version"
-    configure_package
+    if ! configure_package; then
+        restore_previous_services || printf 'kitpro-server: address-pool preflight failed and prior service state could not be fully restored\n' >&2
+        return 1
+    fi
     rm -f /run/kitpro/upgrade-approved
 }
 

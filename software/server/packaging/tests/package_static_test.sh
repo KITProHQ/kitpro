@@ -60,6 +60,8 @@ if grep -Eq '^  (/var/lib/kitpro-helper/\*\*|/var/lib/kitpro-helper/backups/\*\*
     exit 1
 fi
 grep -q 'apparmor_parser -r -W -T' "$unpack/control/postinst"
+grep -q '/usr/libexec/kitpro-helper --verify-host-prerequisites' "$unpack/control/postinst"
+grep -q 'restore_previous_services true' "$unpack/control/postinst"
 grep -q '^systemctl daemon-reload$' "$unpack/control/postinst"
 if grep -R -E '__API_UID__|RestrictSUIDSGID|docker group|0\.0\.0\.0' "$unpack/data/usr/lib/systemd/system" "$unpack/data/etc/default"; then
     echo "unsafe or unresolved package configuration found" >&2

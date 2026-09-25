@@ -48,6 +48,8 @@ Provision Docker with [`tools/install-docker.sh`](../../tools/install-docker.sh)
 The test Docker setup must meet these conditions:
 
 - rootful Docker Engine uses its local Unix socket;
+- Docker has an operator-selected, non-overlapping RFC 1918 default address
+  pool with at least 64 available child networks of `/24` or larger;
 - no unauthenticated or TLS Docker TCP listener is enabled;
 - the API test identity is not in the `docker` group and cannot open the socket;
 - the helper test identity is the only KITPro component that can open the socket;
@@ -56,6 +58,11 @@ The test Docker setup must meet these conditions:
 - the tests do not change the daemon configuration to make KITPro pass.
 
 The first accepted Docker version range must pass the loopback-port, IPv6, firewall, label, health, log, restart, and API-version tests in this plan.
+The qualification record must also include the non-secret effective default
+address-pool shape, current host-route and Docker-network collision check,
+successful `kitpro-helper --verify-host-prerequisites` output, and a negative
+missing/undersized-pool test. The selected CIDR belongs only to that disposable
+test environment and is not a KITPro default.
 
 The first 2026-09-12 Debian attempt stopped before Docker installation because `/` had only 7.0 GiB free. That evidence remains in the [immutable blocked result](results/2026-09-12-debian13-validation.md). The disposable host was then corrected to a 40 GiB ext4 root with 36.6 GiB free and checkpointed as `storage-corrected-clean-os`. Docker installation and the real-host fixture subsequently completed; see the [storage-remediation record](results/2026-09-12-debian13-storage-remediation.md) and [completed validation record](results/2026-09-12-debian13-completed-validation.md).
 

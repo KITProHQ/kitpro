@@ -44,6 +44,12 @@ Copy this template for every new Debian run and leave unexecuted rows as `NOT RU
 | Ordinary user denied Docker socket | NOT RUN | |
 | API-test identity denied Docker socket | NOT RUN | |
 | Docker group grant authority documented or disposable test performed | NOT RUN | |
+| Explicit Docker default address pools recorded | NOT RUN | |
+| Pool is RFC 1918, non-overlapping with observed host routes, and has at least 64 available `/24`-or-larger child networks | NOT RUN | |
+| `kitpro-helper --verify-host-prerequisites` succeeds | NOT RUN | |
+| Missing, undersized, and obvious route-conflicting pool fixtures fail with actionable redacted messages | NOT RUN | |
+| Existing daemon configuration keys remain unchanged | NOT RUN | |
+| Docker restart completed and only newly created networks use the selected pool | NOT RUN | |
 
 ## Privilege and protocol boundary
 

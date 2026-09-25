@@ -1628,6 +1628,9 @@ func operationErrorCategory(err error) string {
 	if strings.Contains(message, "storage unavailable") || strings.Contains(message, "storage identity changed") {
 		return "storage_unavailable"
 	}
+	if strings.Contains(message, "docker address-pool prerequisite failed") {
+		return "host_prerequisite_failed"
+	}
 	if strings.Contains(message, "address already in use") || strings.Contains(message, "port is already allocated") || strings.Contains(message, "port collision") || strings.HasPrefix(message, "binding conflict:") || strings.HasPrefix(message, "binding is reserved by another kitpro installation:") || strings.HasPrefix(message, "host listener ") {
 		return "port_collision"
 	}
@@ -1659,6 +1662,8 @@ func safeOperationSummary(category string) string {
 		return "host port unavailable"
 	case "policy_rejected":
 		return "operation rejected by helper policy"
+	case "host_prerequisite_failed":
+		return "Docker address-pool prerequisite is not satisfied; configure a non-overlapping default address pool, restart Docker, and retry"
 	default:
 		return "privileged operation failed"
 	}

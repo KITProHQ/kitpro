@@ -1368,6 +1368,17 @@ func TestOperationFailureSummaryIsSafe(t *testing.T) {
 	}
 }
 
+func TestDockerAddressPoolFailureHasActionableSafeSummary(t *testing.T) {
+	err := errors.New("helper: docker address-pool prerequisite failed: private host route detail")
+	category := operationErrorCategory(err)
+	if category != "host_prerequisite_failed" {
+		t.Fatalf("unexpected category %q", category)
+	}
+	if got := safeOperationSummary(category); got != "Docker address-pool prerequisite is not satisfied; configure a non-overlapping default address pool, restart Docker, and retry" {
+		t.Fatalf("unexpected summary %q", got)
+	}
+}
+
 func TestServiceStatusAndUIAreSafe(t *testing.T) {
 	a, _, csrf := newTestApp(t)
 	seedFreshRSSInstallation(t, a, "inst-12345678")
