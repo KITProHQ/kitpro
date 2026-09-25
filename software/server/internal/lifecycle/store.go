@@ -143,9 +143,9 @@ func (s Store) Prepare(ctx context.Context, plan Plan) error {
 	defer tx.Rollback()
 	var existingStatus, existingCleanup string
 	existingErr := tx.QueryRowContext(ctx, `SELECT status,cleanup_state FROM runtime_generations WHERE installation_id=? AND runtime_generation=?`, plan.InstallationID, plan.Generation).Scan(&existingStatus, &existingCleanup)
-	reusingRemoved := existingErr == nil
-	if reusingRemoved {
-		if existingStatus != "removed" || existingCleanup != "clean" {
+	reusingCleanGeneration := existingErr == nil
+	if reusingCleanGeneration {
+		if (existingStatus != "failed" && existingStatus != "removed") || existingCleanup != "clean" {
 			return errors.New("target generation already has unresolved lifecycle evidence")
 		}
 		var componentID string
@@ -153,14 +153,14 @@ func (s Store) Prepare(ctx context.Context, plan Plan) error {
 			return err
 		}
 		if componentID != "app" {
-			return errors.New("removed target generation topology cannot be safely reused")
+			return errors.New("clean target generation topology cannot be safely reused")
 		}
-		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET creating_operation_id=?,application_id=?,release_id=?,status='prepared',network_name=?,observed_network_id='',plan_hash=?,topology_hash='',data_path=?,exposure_mode='internal',service_id='',host_address='',host_port=0,container_port=0,service_protocol='',created_at=?,verified_at=NULL,committed_at=NULL,retired_at=NULL,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status='removed' AND cleanup_state='clean'`, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.DataPath, now, plan.InstallationID, plan.Generation)
+		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET creating_operation_id=?,application_id=?,release_id=?,status='prepared',network_name=?,observed_network_id='',plan_hash=?,topology_hash='',data_path=?,exposure_mode='internal',service_id='',host_address='',host_port=0,container_port=0,service_protocol='',created_at=?,verified_at=NULL,committed_at=NULL,retired_at=NULL,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status IN ('failed','removed') AND cleanup_state='clean'`, plan.OperationID, plan.ApplicationID, plan.ReleaseID, plan.NetworkName, plan.PlanHash, plan.DataPath, now, plan.InstallationID, plan.Generation)
 		if updateErr != nil {
 			return updateErr
 		}
 		if changed, _ := result.RowsAffected(); changed != 1 {
-			return errors.New("removed target generation reuse lost")
+			return errors.New("clean target generation reuse lost")
 		}
 		result, updateErr = tx.ExecContext(ctx, `UPDATE runtime_components SET container_name=?,observed_container_id='',image_digest=?,observed_image_id='',configuration_hash='',state='unknown',dependencies_json='[]',start_ordinal=0,created_at=?,started_at=NULL,verified_at=NULL WHERE installation_id=? AND runtime_generation=? AND component_id='app'`, plan.ContainerName, plan.Image, now, plan.InstallationID, plan.Generation)
 		if updateErr != nil {

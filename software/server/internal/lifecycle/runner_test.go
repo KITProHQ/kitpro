@@ -451,6 +451,45 @@ func TestReplacementRetriesCleanRemovedCandidateWithoutActiveGeneration(t *testi
 	}
 }
 
+func TestReplacementRetriesCleanFailedCandidateAtSameGeneration(t *testing.T) {
+	h := newHarness(t, true)
+	h.runtime.fail["create-network"] = errors.New("address pools exhausted")
+	_, firstErr := (Runner{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Replace(context.Background(), h.plan)
+	if firstErr == nil {
+		t.Fatal("expected first attempt to fail")
+	}
+	if _, err := h.coordinator.Complete(context.Background(), h.plan.OperationID, h.plan.FencingToken, protocol.Response{Error: firstErr.Error()}); err != nil {
+		t.Fatal(err)
+	}
+	var status, cleanup string
+	if err := h.db.QueryRow(`SELECT status,cleanup_state FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=2`).Scan(&status, &cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || cleanup != "clean" {
+		t.Fatalf("status=%q cleanup=%q", status, cleanup)
+	}
+
+	delete(h.runtime.fail, "create-network")
+	retryRequest := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "InstallApplication", OperationRevision: 1, InstanceID: h.plan.InstallationID, RuntimeGeneration: h.plan.Generation, ApplicationID: h.plan.ApplicationID, ReleaseID: h.plan.ReleaseID}
+	decision, err := h.coordinator.Begin(context.Background(), retryRequest, 0, h.plan.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.coordinator.AuthorizeMutation(context.Background(), retryRequest.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	h.plan.OperationID, h.plan.FencingToken = retryRequest.OperationID, decision.FencingToken
+	h.plan.Container.Labels["com.kitpro.operation"] = retryRequest.OperationID
+	result, err := (Runner{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Replace(context.Background(), h.plan)
+	if err != nil || result.Generation != 2 || result.RuntimeState != "running" {
+		t.Fatalf("retry result=%#v err=%v", result, err)
+	}
+	var generation int
+	if err = h.db.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id='inst-one' AND status='active'`).Scan(&generation); err != nil || generation != 2 {
+		t.Fatalf("generation=%d err=%v", generation, err)
+	}
+}
+
 func TestPrepareRejectsUnresolvedGeneration(t *testing.T) {
 	h := newHarness(t, true)
 	_, err := h.db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES('inst-one',2,'old-attempt','app','new','failed','old-network','old-plan','/data','internal','then','pending')`)
