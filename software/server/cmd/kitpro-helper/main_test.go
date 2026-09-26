@@ -882,6 +882,40 @@ func TestTrustedRecreationRequiresGenerationAndStablePort(t *testing.T) {
 	}
 }
 
+func TestTrustedRecreationAllowsRecoveryAfterRuntimeRemoval(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	base := validFreshRSSRequest()
+	base.Version = 2
+	base.Bindings = []protocol.ServiceBinding{{ServiceID: "web", Transport: "tcp", ContainerPort: 80, Mode: "internal"}}
+	_, err = db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES(?,1,'removed-runtime',?,?, 'removed',?,'removed-plan',?,'loopback','now','clean')`, base.InstanceID, base.ApplicationID, base.ReleaseID, base.NetworkName, base.DataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,image_digest,state,created_at) VALUES(? ,1,'app','removed-container',?,'removed','now')`, base.InstanceID, base.Image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO runtime_generation_bindings(installation_id,runtime_generation,service_id,transport,container_port,mode,host_address,host_port) VALUES(?,1,'web','tcp',80,'internal','',0)`, base.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.RuntimeGeneration = 2
+	if err = validateTrustedRecreation(db, base); err != nil {
+		t.Fatalf("same-installation recovery after runtime removal rejected: %v", err)
+	}
+	base.RuntimeGeneration = 3
+	if err = validateTrustedRecreation(db, base); err == nil {
+		t.Fatal("runtime-removal recovery generation skip accepted")
+	}
+}
+
 func TestLegacyMultiOwnershipBackfillsOnlyExactTrustedTopology(t *testing.T) {
 	entries, err := catalog.Load()
 	if err != nil {

@@ -1062,7 +1062,7 @@ func validateTrustedRecreation(db *sql.DB, r protocol.Request) error {
 	var legacyPort int
 	legacyOwnership := false
 	var applicationID, releaseID, image, dataPath string
-	err := db.QueryRow(`SELECT g.runtime_generation,g.application_id,g.release_id,c.image_digest,g.data_path FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.status IN ('active','verification_required') AND c.component_id='app' ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath)
+	err := db.QueryRow(`SELECT g.runtime_generation,g.application_id,g.release_id,c.image_digest,g.data_path FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.status IN ('active','verification_required','removed') AND c.component_id='app' ORDER BY CASE g.status WHEN 'active' THEN 0 WHEN 'verification_required' THEN 1 ELSE 2 END,g.runtime_generation DESC LIMIT 1`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath)
 	if err == sql.ErrNoRows {
 		err = db.QueryRow(`SELECT runtime_generation,application_id,release_id,image_digest,data_path,host_port FROM ownership WHERE instance_id=?`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath, &legacyPort)
 		legacyOwnership = err == nil
