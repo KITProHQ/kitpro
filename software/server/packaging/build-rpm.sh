@@ -16,7 +16,11 @@ source_epoch=${SOURCE_DATE_EPOCH:-$(git -C "$repo_dir" show -s --format=%ct "$so
 [[ "$source_epoch" =~ ^[1-9][0-9]*$ ]] || { printf 'invalid source epoch: %s\n' "$source_epoch" >&2; exit 2; }
 build_date=$(date -u -d "@$source_epoch" +%Y-%m-%dT%H:%M:%SZ)
 
-work_dir=$(mktemp -d)
+work_dir=/var/tmp/kitpro-rpm-build-$source_commit
+if ! mkdir -m 0700 -- "$work_dir"; then
+    printf 'RPM build workspace is already in use: %s\n' "$work_dir" >&2
+    exit 1
+fi
 trap 'rm -rf -- "$work_dir"' EXIT
 topdir=$work_dir/rpmbuild
 stage=$work_dir/stage
@@ -39,6 +43,7 @@ export SOURCE_DATE_EPOCH=$source_epoch
 rpmbuild -ba \
     --define "_topdir $topdir" \
     --define "source_date_epoch_from_changelog 0" \
+    --define "clamp_mtime_to_source_date_epoch 1" \
     --define "use_source_date_epoch_as_buildtime 1" \
     "$topdir/SPECS/kitpro-server.spec"
 
