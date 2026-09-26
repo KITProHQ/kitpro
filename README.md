@@ -48,13 +48,15 @@ the [application catalog](docs/application-catalog.md).
 ## Alpha limitations
 
 KITPro Server is active alpha software. Breaking changes and incomplete
-workflows may occur. Alpha.13 does not provide application-aware readiness,
-imported-storage backup, host-to-host restore, bare-host recovery, automatic
-rollback of irreversible upstream schema changes, destructive application-data
-deletion, clustering, automatic failover, a reverse proxy, Certbot or ACME
-management, Cloudflare Tunnel integration, or public TLS and domain automation.
-Some repair and recovery actions require the API or root-local tooling rather
-than a complete browser workflow.
+workflows may occur. The alpha.14 development branch adds opt-in managed nginx
+ingress, application-aware readiness, ACME HTTP-01 certificates, and
+Cloudflare Tunnel. Alpha.14 does not provide imported-storage backup, general
+host-to-host restore, automatic rollback of irreversible upstream schema
+changes, destructive application-data deletion, clustering, automatic
+failover, router or firewall automation, domain registration, or a
+general-purpose reverse proxy. Some repair and recovery actions require the API
+or root-local tooling rather than a complete browser workflow. Alpha.14 is not
+released until its platform and final-artifact gates pass.
 
 Read the [current-state reference](docs/product/kitpro-server-current-state.md)
 and [known limitations](docs/release/known-limitations.md) before using KITPro

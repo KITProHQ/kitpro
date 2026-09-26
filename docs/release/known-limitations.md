@@ -1,7 +1,8 @@
-# Known alpha.13 limitations
+# Known alpha.14 limitations
 
-Status date: 2026-09-26. These limits apply to the `v0.1.0-alpha.13`
-release candidate.
+Status date: 2026-09-26. These limits apply to the local alpha.14 development
+state. Alpha.14 is not a release candidate until its live platform and final
+artifact gates pass.
 
 ## Platform and runtime
 
@@ -21,10 +22,17 @@ release candidate.
   Podman/Quadlet adapter. The failed request creates no runtime, network, or
   committed generation.
 - The catalog is intentionally limited. Arbitrary Compose, shell commands, capabilities, privileged mode, host networking, devices, bind mounts, and user-supplied manifests are not accepted.
-- LAN exposure binds one configured host address. Wildcard or direct
-  public-Internet exposure is outside the current scope. KITPro does not
-  provide a reverse proxy, Certbot or ACME certificate management, domain
-  automation, or Cloudflare Tunnel integration.
+- Managed ingress supports authorized HTTP services through a dedicated nginx
+  instance. It does not configure a router, open a host firewall, buy or
+  register a domain, or provide a general reverse proxy.
+- Managed ACME uses HTTP-01 with allowlisted Let's Encrypt directories. DNS-01,
+  wildcard certificates, arbitrary ACME directories, and other public CAs are
+  not supported.
+- Cloudflare Tunnel requires an existing account, zone, tunnel, and scoped API
+  token. KITPro does not create a Cloudflare account or zone. Local backups do
+  not copy remote Cloudflare resources.
+- Certificate private keys, ACME account material, and Cloudflare credentials
+  use root-owned restrictive local storage. They are not encrypted at rest.
 
 ## Hardware acceleration
 
@@ -55,7 +63,10 @@ release candidate.
   Symlink identity is not preserved. Other symlinks and special files fail the
   backup.
 - Imported external data is reference-only. KITPro records the trusted binding but does not copy NAS, media, music, audiobook, or SFTPGo external file content.
-- Backup destinations are local and archives are not encrypted by KITPro. Scheduling, retention, object storage, bare-host recovery, and host-to-host restore are not implemented.
+- Backup destinations are local and archives are not encrypted by KITPro.
+  Host-state archives contain certificate private keys, ACME account material,
+  and Cloudflare credentials. Scheduling, retention, object storage, bare-host
+  recovery, and general host-to-host restore are not implemented.
 - Generated application secrets are stored as root-bound plaintext in the
   helper database and in restrictive local application backups. KITPro does
   not claim encryption at rest. Directory and file permissions, helper
@@ -64,7 +75,9 @@ release candidate.
 - PostgreSQL and MariaDB backup strategies are not implemented. No current visible catalog application deploys either database engine.
 - Rollback of irreversible upstream schema migrations is not promised.
 - Mixed restore state or ambiguous ownership can require a reviewed recovery decision. KITPro does not guess which tree or runtime owns the installation.
-- A running container is runtime evidence, not application readiness. The current catalog does not provide manifest-defined readiness probes.
+- A running container is runtime evidence, not application readiness. Only a
+  catalog release with a defined readiness check can satisfy readiness-gated
+  ingress restore.
 - Same-port replacement requires a bounded cutover interruption because the old and replacement runtimes cannot own the same host binding concurrently.
 - Failed restore trees can be retained under an operation-specific name for investigation. Automated long-term retention and deletion policy is not implemented.
 
@@ -88,7 +101,9 @@ release candidate.
 - The archived original File Browser is not supported. SFTPGo is the maintained, first-run-authenticated read-write catalog choice.
 - LocalAI is excluded because its official image can fetch an unsigned mutable backend during model installation; pinning only the outer image does not provide end-to-end provenance.
 - Clustering, high availability, and automatic failover are not implemented.
-- Not every reconciliation, repair, backup, restore, or recovery workflow has a complete browser interface.
+- Certificate, Cloudflare, host-backup, and advanced ingress recovery remain
+  authenticated API or command-line workflows. The first-run page reports
+  their state but does not expose every mutation.
 - Destructive application-data deletion is not a completed lifecycle.
 
 ## Update boundary

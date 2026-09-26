@@ -2,7 +2,7 @@
 
 ## Contract status
 
-The alpha.13 API is an authenticated local control-plane interface for the
+The alpha.14 API is an authenticated local control-plane interface for the
 shipped dashboard and operator diagnostics. It is public source, but it is an
 alpha contract. Endpoint shapes and state names may change before a stable
 release. Internal helper socket operations are not public HTTP APIs.
@@ -10,6 +10,12 @@ release. Internal helper socket operations are not public HTTP APIs.
 All endpoints require an authenticated local administrator session. Mutating
 endpoints also require a valid CSRF token and the expected Origin and Host
 headers. The API does not promise a remote or machine-to-machine contract.
+
+Alpha.14 ingress, certificate, setup, provider, host-backup, readiness, and
+diagnostics endpoints follow the same authentication, Origin, Host, and CSRF
+rules. Secret inputs are write-only. The API never returns a certificate
+private key, ACME account key, Cloudflare token, password, session value, or
+application secret through those endpoints.
 
 ## Hardware inventory
 
@@ -27,9 +33,68 @@ headers. The API does not promise a remote or machine-to-machine contract.
 | GET | `/api/v1/operations` | Operation history and status |
 | GET | `/api/v1/operations/{id}` | One control operation, refreshed from helper authority when pending |
 | GET | `/api/v1/storage-roots` | Trusted roots, access ceilings, filesystem type, and availability |
+| GET | `/api/v1/ingress` | Managed route state without backend secrets |
+| GET | `/api/v1/certificates` | Typed certificate, expiry, and renewal state |
+| GET | `/api/v1/exposure-providers` | Provider identity and health without credentials |
+| GET | `/api/v1/system/readiness` | Separate host and optional-service readiness dimensions |
+| GET | `/api/v1/setup` | Durable first-run step state and safe evidence |
+| GET | `/api/v1/diagnostics` | Support bundle history and inclusion policy |
 
 Image digests and installation identifiers are available for administration and
 support, but clients must not turn them into arbitrary Docker requests.
+
+## Managed ingress and certificates
+
+`POST /api/v1/ingress` creates an authorized hostname route. The request names
+an installation, catalog service, normalized hostname, exposure mode, upstream
+protocol, TLS policy, and optional certificate or provider ID. The server
+derives the loopback backend. A client cannot supply an upstream address or
+port.
+
+`DELETE /api/v1/ingress/{route_id}` removes the managed route.
+`POST /api/v1/ingress/reconcile` retries held routes after a restore and
+activates only a validated candidate whose application is ready.
+
+`POST /api/v1/certificates` accepts either a provided certificate and private
+key or an ACME request. ACME requests also name the authorized installation and
+service, contact email, allowlisted directory, and explicit terms acceptance.
+`POST /api/v1/certificates/{certificate_id}/renew` requests a renewal. `GET
+/api/v1/certificates` returns metadata and typed state only.
+
+## Cloudflare Tunnel provider
+
+`POST /api/v1/exposure-providers` configures a provider or replaces its token.
+Replacement must retain the account, zone, and tunnel identity. The response
+does not echo the token.
+
+The provider actions are:
+
+| Method | Path suffix | Effect |
+| --- | --- | --- |
+| GET | `/{provider_id}/health` | Inspect tunnel runtime and record bounded health state |
+| POST | `/{provider_id}/enable` | Enable and start local tunnel use |
+| POST | `/{provider_id}/disable` | Disable local tunnel use without deleting remote resources |
+| DELETE | `/{provider_id}/unlink` | Remove local integration without remote deletion |
+| DELETE | `/{provider_id}/routes/{hostname}?confirm_remote=true` | Remove one remote route explicitly |
+| DELETE | `/{provider_id}/remote-tunnel?confirm_remote=true` | Delete the remote tunnel explicitly |
+
+## Setup, readiness, backup, and diagnostics
+
+`GET /api/v1/setup` refreshes critical steps from current system state and
+returns the durable ten-step workflow. `POST /api/v1/setup` can record only the
+local or LAN access choice and an explicit deferral of optional HTTPS or
+Cloudflare. It cannot mark a critical prerequisite complete.
+
+`GET /api/v1/system/readiness` returns typed dimensions. Clients must not
+collapse `disabled`, `unknown`, `degraded`, and `ready` into one Boolean.
+
+`POST /api/v1/backup` creates both the control database backup and the protected
+helper-state archive. Its response states `contains_secrets: true` and
+`remote_cloudflare_resources_included: false`.
+
+`POST /api/v1/diagnostics` creates a redacted support bundle. `GET
+/api/v1/diagnostics` lists bundle metadata and states the inclusion and
+exclusion policy.
 
 ## Lifecycle operations
 

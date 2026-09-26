@@ -46,5 +46,23 @@ These rules apply to every implementation and supported application. A change th
 42. The previous working generation remains retained and stopped when recovery may need it. Cleanup debt is recorded separately from replacement success and never deletes persistent application storage.
 43. Restore records exact path identity and each filesystem-swap phase before mutation. An unresolved restore blocks other lifecycle mutation for that installation; ambiguous mixed trees require explicit recovery rather than path guessing.
 44. Runtime `running`, desired state, reconciliation classification, and application readiness are distinct facts. KITPro never labels an application healthy solely because its container process is running.
+45. Managed ingress routes one normalized hostname to one catalog-authorized
+    HTTP service and its exact loopback binding. An API caller cannot select an
+    arbitrary backend, and an unknown Host header never falls through to an
+    application.
+46. An ingress generation becomes active only after complete candidate
+    validation. Failure retains or restores the prior known-good generation.
+47. A certificate becomes active only after hostname, validity, lifetime, PEM,
+    and key-match validation. A failed issuance or renewal cannot replace a
+    working certificate.
+48. Certificate private keys, ACME account material, and provider credentials
+    remain root-owned and absent from ordinary API, UI, log, audit, and support
+    bundle output. KITPro does not claim encryption at rest.
+49. Cloudflare is optional. Provider failure cannot disable local ingress.
+    Local disablement, unlink, or package removal cannot delete remote resources
+    without a separate explicit remote-deletion confirmation.
+50. Restored ingress remains held until the same installation restores and
+    passes readiness, and a validated ingress candidate activates. Restore
+    never retargets a hostname to a different installation.
 
 The detailed rationale, actors, threats, and tests are in the [threat model](threat-model.md), [ADR-0016](../decisions/0016-durable-state-and-reconciliation.md), and [ADR-0018](../decisions/0018-security-boundaries.md).
