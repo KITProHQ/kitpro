@@ -160,6 +160,71 @@ func TestCopyTreeRejectsSymlinkAndSpecialFile(t *testing.T) {
 	}
 }
 
+func TestCopyTreeNormalizesInternalRelativeFileSymlink(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(source, "links"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(source, "payload")
+	if err := os.WriteFile(target, []byte("preserved"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(source, "links", "payload-link")
+	if err := os.Symlink("../payload", link); err != nil {
+		t.Fatal(err)
+	}
+	size, err := TreeSize(source)
+	if err != nil || size != int64(2*len("preserved")) {
+		t.Fatalf("tree size = %d, %v", size, err)
+	}
+	destination := filepath.Join(root, "copy")
+	if err = CopyTree(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(destination, "links", "payload-link")
+	info, err := os.Lstat(copyPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("normalized link = %#v, %v", info, err)
+	}
+	contents, err := os.ReadFile(copyPath)
+	if err != nil || string(contents) != "preserved" {
+		t.Fatalf("normalized contents = %q, %v", contents, err)
+	}
+}
+
+func TestCopyTreeRejectsEscapingRelativeSymlink(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../outside", filepath.Join(source, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyTree(source, filepath.Join(root, "copy")); err == nil || !strings.Contains(err.Error(), "escapes source") {
+		t.Fatalf("escaping symlink error = %v", err)
+	}
+}
+
+func TestCopyTreeRejectsInternalDirectorySymlink(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(source, "directory"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("directory", filepath.Join(source, "directory-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyTree(source, filepath.Join(root, "copy")); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("directory symlink error = %v", err)
+	}
+}
+
 func TestCopyTreePopulatesReadOnlyDirectoryBeforeApplyingMetadata(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

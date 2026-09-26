@@ -569,8 +569,10 @@ carry an arbitrary source path or command.
    overhead, creates a `0700` workspace, and reserves a non-existing final name.
 5. Helper records which components were running, stops them in reverse
    dependency order, and verifies they are stopped.
-6. Helper copies included managed roots without following symlinks or crossing
-   into imported storage.
+6. Helper copies included managed roots without crossing into imported
+   storage. A relative symlink may be normalized to an ordinary staged file
+   only when its resolved target is a regular file inside the same managed
+   root; all other symlinks fail closed.
 7. Helper discovers and verifies SQLite files in the cold copy.
 8. Helper captures generated secrets and trusted storage binding metadata from
    its own store, and installation/release/exposure intent supplied by the API.

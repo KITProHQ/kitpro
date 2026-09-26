@@ -38,6 +38,10 @@ Status date: 2026-09-21. These limits apply to `v0.1.0-alpha.12`.
   extension-independent walk accounts for every database and freelist page
   and the foreign-key check succeeds. Other SQLite verification errors fail
   closed.
+- Application backups normalize safe relative symlinks to ordinary files only
+  when they resolve to regular files inside the same managed storage root.
+  Symlink identity is not preserved. Other symlinks and special files fail the
+  backup.
 - Imported external data is reference-only. KITPro records the trusted binding but does not copy NAS, media, music, audiobook, or SFTPGo external file content.
 - Backup destinations are local and archives are not encrypted by KITPro. Scheduling, retention, object storage, bare-host recovery, and host-to-host restore are not implemented.
 - PostgreSQL and MariaDB backup strategies are not implemented. No current visible catalog application deploys either database engine.

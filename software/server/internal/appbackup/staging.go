@@ -33,7 +33,18 @@ func TreeSize(root string) (int64, error) {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.Mode().IsDir() && !info.Mode().IsRegular()) {
+		if info.Mode()&os.ModeSymlink != 0 {
+			_, targetInfo, err := resolveInternalRegularSymlink(root, name)
+			if err != nil {
+				return err
+			}
+			if size > (1<<63-1)-targetInfo.Size() {
+				return fmt.Errorf("managed storage size overflow")
+			}
+			size += targetInfo.Size()
+			return nil
+		}
+		if !info.Mode().IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("managed storage contains unsupported file type")
 		}
 		if info.Mode().IsRegular() {
@@ -95,7 +106,14 @@ func CopyTree(source, destination string) error {
 			return err
 		}
 		mode := entryInfo.Mode()
-		if mode&os.ModeSymlink != 0 || (!mode.IsDir() && !mode.IsRegular()) {
+		if mode&os.ModeSymlink != 0 {
+			resolved, targetInfo, err := resolveInternalRegularSymlink(source, name)
+			if err != nil {
+				return err
+			}
+			return copyRegular(resolved, target, targetInfo)
+		}
+		if !mode.IsDir() && !mode.IsRegular() {
 			return fmt.Errorf("managed storage contains unsupported file type")
 		}
 		if mode.IsDir() {
@@ -122,6 +140,36 @@ func CopyTree(source, destination string) error {
 		}
 	}
 	return nil
+}
+
+func resolveInternalRegularSymlink(root, name string) (string, fs.FileInfo, error) {
+	linkTarget, err := os.Readlink(name)
+	if err != nil {
+		return "", nil, fmt.Errorf("read managed storage symlink: %w", err)
+	}
+	if filepath.IsAbs(linkTarget) {
+		return "", nil, fmt.Errorf("managed storage symlink target must be relative")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve managed storage root: %w", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve managed storage symlink: %w", err)
+	}
+	relative, err := filepath.Rel(resolvedRoot, resolvedTarget)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || filepath.IsAbs(relative) {
+		return "", nil, fmt.Errorf("managed storage symlink escapes source")
+	}
+	info, err := os.Lstat(resolvedTarget)
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect managed storage symlink target: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", nil, fmt.Errorf("managed storage symlink target is not a regular file")
+	}
+	return resolvedTarget, info, nil
 }
 
 func copyRegular(source, destination string, info fs.FileInfo) error {

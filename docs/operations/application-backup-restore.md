@@ -44,6 +44,12 @@ the components in dependency order. A metadata-only application remains
 running. KITPro reports failure if it cannot restart a component that was
 running before backup.
 
+Application-created relative symlinks are accepted only when they resolve to
+regular files inside the same managed storage root. KITPro stages their content
+as ordinary files, so the archive and restored tree do not preserve symlink
+identity. Absolute, escaping, broken, directory, socket, device, and FIFO links
+fail closed.
+
 Confirm that the archive is root-owned and has mode `0600`:
 
 ```sh

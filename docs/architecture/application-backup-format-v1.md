@@ -117,6 +117,12 @@ regular files and directories only. It rejects these archive forms:
 - unsupported format versions;
 - invalid manifests or checksum indexes.
 
+The source-side staging copier may encounter an application-created relative
+symlink. It accepts the link only when the fully resolved target is a regular
+file inside the same managed storage root, then copies that target as an
+ordinary file. The archive therefore remains symlink-free. Absolute, escaping,
+broken, directory, socket, device, and FIFO targets fail the backup.
+
 Extraction occurs in a new `0700` directory. A failed extraction removes that
 directory. KITPro copies validated content into new managed directories rather
 than unpacking over a running installation.
