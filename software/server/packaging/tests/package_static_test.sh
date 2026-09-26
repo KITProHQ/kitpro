@@ -102,8 +102,11 @@ grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libex
 grep -Fqx '  /run/kitpro/helper-state.lock rwk,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 for profile in usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare; do
     grep -Fqx '  /proc/*/cgroup r,' "$unpack/data/etc/apparmor.d/$profile"
+    grep -Fqx '  /proc/*/mountinfo r,' "$unpack/data/etc/apparmor.d/$profile"
     grep -Fqx '  /proc/sys/net/core/somaxconn r,' "$unpack/data/etc/apparmor.d/$profile"
 done
+grep -Fqx '  /sys/fs/cgroup/system.slice/kitpro-acme.service/cpu.max r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-acme"
+grep -Fqx '  /sys/fs/cgroup/system.slice/kitpro-cloudflare.service/cpu.max r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.host-backup-*/helper.db -> /var/lib/kitpro-helper/backups/.host-backup-*/.helper.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
