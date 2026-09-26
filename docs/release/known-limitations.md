@@ -32,6 +32,12 @@ Status date: 2026-09-21. These limits apply to `v0.1.0-alpha.12`.
 - Read-write trusted roots are exclusive. KITPro does not merge concurrent writers or provide file-level locking.
 - KITPro registers existing local or host-mounted NFS/CIFS storage; it does not mount network shares or manage NAS credentials.
 - Application backup format version 1 protects catalog-declared managed files, detected SQLite databases, and generated secrets for exact existing-installation restore. Restore records swaps and recovery in a durable helper journal.
+- SQLite databases that depend on application-provided collations, tokenizers,
+  functions, or virtual-table modules cannot receive KITPro's full generic
+  `integrity_check`. KITPro records `structural-pages-passed` only after an
+  extension-independent walk accounts for every database and freelist page
+  and the foreign-key check succeeds. Other SQLite verification errors fail
+  closed.
 - Imported external data is reference-only. KITPro records the trusted binding but does not copy NAS, media, music, audiobook, or SFTPGo external file content.
 - Backup destinations are local and archives are not encrypted by KITPro. Scheduling, retention, object storage, bare-host recovery, and host-to-host restore are not implemented.
 - PostgreSQL and MariaDB backup strategies are not implemented. No current visible catalog application deploys either database engine.

@@ -46,7 +46,7 @@ and unsupported versions are invalid.
 | `components` | array | Component IDs, digest-pinned images, and dependencies |
 | `storage` | array | Managed storage IDs, dispositions, archive paths, and numeric owners |
 | `imported_storage` | array | External binding identity with `content_included: false` |
-| `databases` | array | Detected SQLite files and their verification result |
+| `databases` | array | Detected SQLite files and their verification result (`passed` or `structural-pages-passed`) |
 | `secrets` | array | Secret names and inclusion status, never secret values |
 | `checksum` | object | `sha256` and `checksums/sha256.json` |
 
@@ -66,7 +66,7 @@ path, credentials, or content.
 | --- | --- |
 | `metadata-only` | Records installation identity and runtime state. It has no managed data payload and does not stop the application during backup. |
 | `cold-filesystem` | Stops running components, copies included managed storage, and restarts the prior running set. |
-| `cold-sqlite-filesystem` | Performs a cold filesystem backup, detects SQLite files by header, and runs integrity and foreign-key checks on the staged copy. |
+| `cold-sqlite-filesystem` | Performs a cold filesystem backup and detects SQLite files by header. It runs full integrity and foreign-key checks when the generic SQLite engine can load the schema. If an application database requires an unavailable vendor collation, tokenizer, function, or virtual-table module, it instead requires complete structural page accounting plus a successful foreign-key check and records `structural-pages-passed`. Other integrity errors still fail the backup. |
 
 Format version 1 has no PostgreSQL or MariaDB strategy. A future format must
 add trusted typed dump and import implementations before the catalog can deploy

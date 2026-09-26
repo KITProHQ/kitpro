@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -42,6 +43,9 @@ func TestCopyTreeAndSQLiteDiscovery(t *testing.T) {
 	databases, err := DiscoverAndVerifySQLite(context.Background(), []ManagedSource{{Component: "app", StorageID: "data", Path: destination}})
 	if err != nil || len(databases) != 1 || databases[0].RelativePath != "state.db" {
 		t.Fatalf("SQLite discovery: %#v %v", databases, err)
+	}
+	if databases[0].IntegrityCheck != "passed" {
+		t.Fatalf("integrity check = %q", databases[0].IntegrityCheck)
 	}
 }
 
@@ -86,6 +90,53 @@ func TestSQLiteDiscoveryRecoversWALInPrivateWritableSnapshot(t *testing.T) {
 	databases, err := DiscoverAndVerifySQLite(context.Background(), []ManagedSource{{Component: "app", StorageID: "data", Path: destination}})
 	if err != nil || len(databases) != 1 || databases[0].RelativePath != "state.db" {
 		t.Fatalf("WAL snapshot verification: %#v %v", databases, err)
+	}
+	if databases[0].IntegrityCheck != "passed" {
+		t.Fatalf("integrity check = %q", databases[0].IntegrityCheck)
+	}
+}
+
+func TestSQLiteDiscoveryUsesStructuralCheckForUnavailableApplicationExtension(t *testing.T) {
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "vendor.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`
+		CREATE TABLE records(value TEXT COLLATE BINARY);
+		CREATE INDEX records_value ON records(value);
+		INSERT INTO records VALUES ('alpha'), ('beta');
+		PRAGMA writable_schema=ON;
+		UPDATE sqlite_schema
+		SET sql=replace(sql, 'COLLATE BINARY', 'COLLATE icu_root')
+		WHERE name='records';
+		PRAGMA writable_schema=OFF;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	databases, err := DiscoverAndVerifySQLite(context.Background(), []ManagedSource{{Component: "app", StorageID: "config", Path: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(databases) != 1 || databases[0].IntegrityCheck != "structural-pages-passed" {
+		t.Fatalf("SQLite extension fallback: %#v", databases)
+	}
+}
+
+func TestSQLiteDiscoveryStillRejectsCorruptDatabase(t *testing.T) {
+	root := t.TempDir()
+	contents := append([]byte("SQLite format 3\x00"), make([]byte, 4096-16)...)
+	if err := os.WriteFile(filepath.Join(root, "corrupt.db"), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := DiscoverAndVerifySQLite(context.Background(), []ManagedSource{{Component: "app", StorageID: "data", Path: root}})
+	if err == nil || !strings.Contains(err.Error(), "SQLite verification failed") {
+		t.Fatalf("corrupt database error = %v", err)
 	}
 }
 

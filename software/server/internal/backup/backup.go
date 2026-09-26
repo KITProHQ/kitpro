@@ -6,8 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
+)
+
+const (
+	VerificationFull            = "passed"
+	VerificationStructuralPages = "structural-pages-passed"
 )
 
 func Vacuum(ctx context.Context, db *sql.DB, dir, name string) (string, error) {
@@ -106,6 +112,34 @@ func VerifyWritableSnapshot(ctx context.Context, path string) error {
 	return VerifyDatabase(ctx, db)
 }
 
+// VerifyApplicationSnapshot verifies a private, disposable copy of an
+// application SQLite database. Full SQLite integrity and foreign-key checks
+// remain the primary gate. Some applications use collations, tokenizers, or
+// virtual-table modules that are available only in the application's SQLite
+// build. When that exact limitation prevents the full check, KITPro still
+// requires extension-independent page accounting and a successful foreign-key
+// check, and reports the narrower result to the backup manifest.
+func VerifyApplicationSnapshot(ctx context.Context, path string) (string, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=rw&_pragma=foreign_keys(1)&_pragma=busy_timeout(250)")
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+
+	if err = VerifyDatabase(ctx, db); err == nil {
+		return VerificationFull, nil
+	} else if !isUnavailableApplicationExtension(err) {
+		return "", err
+	}
+	if err = verifyPageAccounting(ctx, db); err != nil {
+		return "", fmt.Errorf("database structural page check failed: %w", err)
+	}
+	if err = verifyForeignKeys(ctx, db); err != nil {
+		return "", fmt.Errorf("database foreign-key check failed: %w", err)
+	}
+	return VerificationStructuralPages, nil
+}
+
 func VerifyDatabase(ctx context.Context, db *sql.DB) error {
 	var check string
 	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check); err != nil {
@@ -114,6 +148,10 @@ func VerifyDatabase(ctx context.Context, db *sql.DB) error {
 	if check != "ok" {
 		return fmt.Errorf("backup integrity check failed: %s", check)
 	}
+	return verifyForeignKeys(ctx, db)
+}
+
+func verifyForeignKeys(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check")
 	if err != nil {
 		return err
@@ -123,4 +161,47 @@ func VerifyDatabase(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("backup foreign-key check failed")
 	}
 	return rows.Err()
+}
+
+func isUnavailableApplicationExtension(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"no such collation sequence",
+		"unknown tokenizer",
+		"no such module",
+		"no such function",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyPageAccounting(ctx context.Context, db *sql.DB) error {
+	var pageCount, freelistCount int64
+	if err := db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+		return fmt.Errorf("read page count: %w", err)
+	}
+	if err := db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freelistCount); err != nil {
+		return fmt.Errorf("read freelist count: %w", err)
+	}
+	var rows, distinctPages, minimumPage, maximumPage int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(DISTINCT pageno),
+		       COALESCE(MIN(pageno), 0), COALESCE(MAX(pageno), 0)
+		FROM dbstat
+	`).Scan(&rows, &distinctPages, &minimumPage, &maximumPage); err != nil {
+		return fmt.Errorf("walk database pages: %w", err)
+	}
+	if pageCount < 1 || freelistCount < 0 || freelistCount > pageCount {
+		return fmt.Errorf("invalid page counts")
+	}
+	if rows != distinctPages || minimumPage != 1 || maximumPage > pageCount {
+		return fmt.Errorf("database page map is inconsistent")
+	}
+	if distinctPages+freelistCount != pageCount {
+		return fmt.Errorf("database has unaccounted pages")
+	}
+	return nil
 }

@@ -541,10 +541,16 @@ storage never appears in this list because it is always reference-only in
 format version 1.
 
 SQLite files are discovered inside included managed roots after quiescence by
-file signature, recorded in the archive manifest, and checked read-only for
-integrity and foreign-key violations. Discovery avoids brittle application
-path globs while still validating the databases actually present. A catalog can
-add a future explicit database declaration when a non-SQLite engine is deployed.
+file signature and recorded in the archive manifest. KITPro first runs full
+SQLite integrity and foreign-key checks on a private writable copy so copied
+WAL state can recover safely. If the database schema requires an unavailable
+application-provided collation, tokenizer, function, or virtual-table module,
+KITPro requires extension-independent structural page accounting plus a
+successful foreign-key check and records `structural-pages-passed` instead of
+`passed`. Other integrity errors still fail closed. Discovery avoids brittle
+application path globs while validating the databases actually present. A
+catalog can add a future explicit database declaration when a non-SQLite
+engine is deployed.
 
 ## Backup lifecycle
 

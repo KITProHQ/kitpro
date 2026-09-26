@@ -197,14 +197,15 @@ func DiscoverAndVerifySQLite(ctx context.Context, sources []ManagedSource) ([]Da
 			if !isSQLite {
 				return nil
 			}
-			if err := verifySQLiteSnapshot(ctx, source.Path, name); err != nil {
+			integrityCheck, err := verifySQLiteSnapshot(ctx, source.Path, name)
+			if err != nil {
 				return fmt.Errorf("SQLite verification failed for %s/%s: %w", source.Component, source.StorageID, err)
 			}
 			relative, err := filepath.Rel(source.Path, name)
 			if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 				return fmt.Errorf("SQLite path escapes managed storage")
 			}
-			databases = append(databases, Database{Engine: "sqlite", Component: source.Component, StorageID: source.StorageID, RelativePath: filepath.ToSlash(relative), IntegrityCheck: "passed"})
+			databases = append(databases, Database{Engine: "sqlite", Component: source.Component, StorageID: source.StorageID, RelativePath: filepath.ToSlash(relative), IntegrityCheck: integrityCheck})
 			return nil
 		})
 		if err != nil {
@@ -219,10 +220,10 @@ func DiscoverAndVerifySQLite(ctx context.Context, sources []ManagedSource) ([]Da
 	return databases, nil
 }
 
-func verifySQLiteSnapshot(ctx context.Context, storageRoot, databasePath string) error {
+func verifySQLiteSnapshot(ctx context.Context, storageRoot, databasePath string) (string, error) {
 	workspace, err := os.MkdirTemp(filepath.Dir(storageRoot), ".sqlite-verify-")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.RemoveAll(workspace)
 
@@ -234,23 +235,23 @@ func verifySQLiteSnapshot(ctx context.Context, storageRoot, databasePath string)
 			continue
 		}
 		if statErr != nil {
-			return statErr
+			return "", statErr
 		}
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("SQLite snapshot companion is not a regular file")
+			return "", fmt.Errorf("SQLite snapshot companion is not a regular file")
 		}
 		destination := verifiedPath + suffix
 		if err = copyRegular(source, destination, info); err != nil {
-			return err
+			return "", err
 		}
 		if err = os.Chown(destination, os.Geteuid(), os.Getegid()); err != nil {
-			return err
+			return "", err
 		}
 		if err = os.Chmod(destination, 0600); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return controlbackup.VerifyWritableSnapshot(ctx, verifiedPath)
+	return controlbackup.VerifyApplicationSnapshot(ctx, verifiedPath)
 }
 
 func hasSQLiteHeader(name string) (bool, error) {

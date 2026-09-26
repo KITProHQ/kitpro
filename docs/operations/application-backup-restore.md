@@ -81,7 +81,14 @@ KITPro completes these checks before it stops the application:
 3. The archive uses a supported format and stays within extraction limits.
 4. The destination has space for extraction and a new managed tree.
 5. The manifest matches the current trusted installation.
-6. Every file checksum and SQLite integrity check passes.
+6. Every file checksum passes, and every SQLite database has an accepted
+   recorded verification result.
+
+`passed` means the generic SQLite engine completed full integrity and
+foreign-key checks. `structural-pages-passed` means the application database
+requires a vendor SQLite extension that KITPro does not load; KITPro instead
+accounted for every database and freelist page and completed the foreign-key
+check. Any other SQLite integrity error fails the backup or restore.
 
 KITPro copies the restored tree beside the current managed tree. It then stops
 the application, moves the current tree to a rollback name, installs the new
@@ -175,6 +182,6 @@ for the per-application strategy.
 | `backup archive hash mismatch` | The archive differs from the file that KITPro recorded. | Do not restore it. Recover an untampered copy. |
 | `backup is incompatible with target installation` | Identity, release, generation, or strategy changed. | Restore the matching installation state. Format version 1 does not migrate releases. |
 | `backup topology does not match target installation` | Components, managed storage, or imported bindings differ. | Restore or reassociate the original topology before retrying. |
-| `SQLite verification failed` | A staged database failed integrity or foreign-key checks. | Preserve the archive and application logs. Do not overwrite the current application. |
+| `SQLite verification failed` | A staged database failed full verification and was not eligible for the vendor-extension fallback, or failed structural page accounting or foreign-key checks. | Preserve the archive and application logs. Do not overwrite the current application. |
 | `application runtime did not become healthy` | The current error string means a component did not return to the running runtime state; it does not prove application readiness. | Inspect the helper journal and runtime logs. Verify application data before another restore. |
 | `RestoreRecoveryRequired` | A prior restore journal has not reached a safe terminal state. | Stop issuing lifecycle mutations. Inspect helper logs and follow the [lifecycle recovery runbook](lifecycle-recovery.md). |
