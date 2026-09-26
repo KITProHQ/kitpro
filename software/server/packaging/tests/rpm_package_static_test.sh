@@ -45,10 +45,13 @@ if grep -q '^AmbientCapabilities=' "$cloudflare_unit"; then
     exit 1
 fi
 grep -q 'kitpro_acme_exec_t' "$packaging_dir/selinux/kitpro.fc"
+grep -q '^files_type(kitpro_acme_runtime_t)$' "$packaging_dir/selinux/kitpro.te"
 grep -q 'corenet_tcp_connect_http_port(kitpro_acme_t)' "$packaging_dir/selinux/kitpro.te"
 grep -q 'kitpro_cloudflare_exec_t' "$packaging_dir/selinux/kitpro.fc"
 grep -q 'kitpro_cloudflare_state_t' "$packaging_dir/selinux/kitpro.fc"
-grep -q 'corenet_udp_connect_all_unreserved_ports(kitpro_cloudflare_t)' "$packaging_dir/selinux/kitpro.te"
+grep -q '^files_type(kitpro_cloudflare_runtime_t)$' "$packaging_dir/selinux/kitpro.te"
+grep -q 'attribute unreserved_port_type;' "$packaging_dir/selinux/kitpro.te"
+grep -q 'allow kitpro_cloudflare_t unreserved_port_type:udp_socket { recv_msg send_msg };' "$packaging_dir/selinux/kitpro.te"
 grep -q 'allow kitpro_cloudflare_t self:capability { setgid setuid };' "$packaging_dir/selinux/kitpro.te"
 grep -q 'kitpro-cloudflared' "$packaging_dir/rpm/kitpro-server.sysusers"
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$packaging_dir/tmpfiles/kitpro.conf"
@@ -64,6 +67,11 @@ fi
 grep -q -- '/usr/bin/podman "\$@"' "$podman_command"
 grep -q 'container_file_t' "$packaging_dir/selinux/kitpro.fc"
 grep -q -- '--acknowledge-destroy-data' "$uninstaller"
+
+if grep -q 'files_runtime_file' "$packaging_dir/selinux/kitpro.te"; then
+    printf 'SELinux policy uses a runtime-file interface unavailable on Rocky Linux 10\n' >&2
+    exit 1
+fi
 
 if grep -R -E 'setenforce[[:space:]]+0|SELINUX=disabled|systemctl (disable|stop).*firewalld|--privileged|docker-ce|download\.docker\.com' \
     "$packaging_dir/rpm" "$packaging_dir/selinux" "$rocky_unit"; then
