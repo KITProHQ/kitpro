@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 9,
   "id": "sftpgo",
   "name": "SFTPGo",
   "description": "Manage files inside one explicitly approved read-write storage location.",
@@ -20,7 +20,7 @@
     {"id": "files", "container_path": "/srv/sftpgo/data", "mode": "read-write", "required": true, "purpose": "Managed files"}
   ],
   "services": [
-    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8080},
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8080, "ingress": {"exposure_modes": ["lan", "managed-https"]}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}},
     {"id": "sftp", "name": "SFTP Service", "protocol": "tcp", "container_port": 2022}
   ],
   "restart": "unless-stopped",

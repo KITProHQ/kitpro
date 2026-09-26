@@ -160,6 +160,56 @@ func TestV13BindingMigrationPreservesLegacyTCPAndAllowsTransportPairs(t *testing
 	}
 }
 
+func TestAlpha14SchemaDefaultsToNoIngressOrProviderExposure(t *testing.T) {
+	ctx := context.Background()
+	for _, helper := range []bool{false, true} {
+		name := "control"
+		if helper {
+			name = "helper"
+		}
+		t.Run(name, func(t *testing.T) {
+			db, err := Open(filepath.Join(t.TempDir(), name+".db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err = Migrate(ctx, db, helper); err != nil {
+				t.Fatal(err)
+			}
+			var version int
+			if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 15 {
+				t.Fatalf("version=%d err=%v", version, err)
+			}
+			tables := []string{"ingress_generations"}
+			if helper {
+				tables = append(tables, "ingress_generation_routes", "certificate_material", "exposure_provider_credentials", "support_bundle_files")
+			} else {
+				tables = append(tables, "ingress_routes", "certificates", "exposure_providers", "setup_steps", "readiness_observations", "audit_events", "support_bundles")
+			}
+			for _, table := range tables {
+				var found string
+				if err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&found); err != nil || found != table {
+					t.Fatalf("missing alpha.14 table %s: %v", table, err)
+				}
+			}
+			for _, table := range []string{"ingress_generations"} {
+				var count int
+				if err = db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
+					t.Fatalf("migration created active state in %s: count=%d err=%v", table, count, err)
+				}
+			}
+			if !helper {
+				for _, table := range []string{"ingress_routes", "certificates", "exposure_providers"} {
+					var count int
+					if err = db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
+						t.Fatalf("migration created external exposure in %s: count=%d err=%v", table, count, err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestHelperV13AddsLifecycleReconciliationAndRestoreEvidence(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "helper.db"))
 	if err != nil {
@@ -170,7 +220,7 @@ func TestHelperV13AddsLifecycleReconciliationAndRestoreEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
+	if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 15 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	for _, column := range []string{"topology_hash", "dependencies_json", "start_ordinal"} {
@@ -232,7 +282,7 @@ func TestHelperV10UpgradesInPlaceToMultiComponentEvidence(t *testing.T) {
 	if err = db.QueryRow(`SELECT dependencies_json,start_ordinal FROM runtime_components WHERE installation_id='inst-old'`).Scan(&dependencies, &ordinal); err != nil {
 		t.Fatal(err)
 	}
-	if version != 14 || topology != "" || dependencies != "[]" || ordinal != 0 {
+	if version != 15 || topology != "" || dependencies != "[]" || ordinal != 0 {
 		t.Fatalf("version=%d topology=%q dependencies=%q ordinal=%d", version, topology, dependencies, ordinal)
 	}
 }
@@ -271,7 +321,7 @@ func TestExactPublicAlpha11Schema7FixturesUpgradeWithoutDataLoss(t *testing.T) {
 	}
 	var version, generation int
 	var desired, exposureMode, username, rootID string
-	if err := control.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
+	if err := control.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 15 {
 		t.Fatalf("control version=%d err=%v", version, err)
 	}
 	if err := control.QueryRow(`SELECT desired_state,runtime_generation FROM installations WHERE installation_id='inst-paperless1'`).Scan(&desired, &generation); err != nil || desired != "running" || generation != 1 {
@@ -292,7 +342,7 @@ func TestExactPublicAlpha11Schema7FixturesUpgradeWithoutDataLoss(t *testing.T) {
 	if err := Migrate(context.Background(), helper, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := helper.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
+	if err := helper.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 15 {
 		t.Fatalf("helper version=%d err=%v", version, err)
 	}
 	var receiptHash, secret, binding, status string

@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 9,
   "id": "forgejo",
   "name": "Forgejo",
   "description": "A self-hosted Git service for repositories, collaboration, and project management.",
@@ -12,7 +12,7 @@
   "limitations": [
     "Git-over-SSH is not exposed in this initial KITPro profile; use Git over HTTP.",
     "This initial profile uses SQLite and has no external database component.",
-    "Public Internet publishing and HTTPS are outside this application integration."
+    "Ingress remains disabled until an administrator creates a route; Git-over-SSH is not added by ingress."
   ],
   "releases": [{
     "version": "16.0.5",
@@ -33,7 +33,7 @@
     {"name": "USER_UID", "value": "1000"},
     {"name": "USER_GID", "value": "1000"}
   ],
-  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 3000}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 3000, "ingress": {"exposure_modes": ["lan", "managed-https", "cloudflare-tunnel"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}],
   "restart": "unless-stopped",
   "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
 }

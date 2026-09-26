@@ -48,7 +48,7 @@ func TestTrustedRegistryPolicyIncludesExactCodebergHost(t *testing.T) {
 	}
 }
 
-func TestSchemaVersionsOneThroughSevenRemainParseable(t *testing.T) {
+func TestSchemaVersionsOneThroughNineRemainParseable(t *testing.T) {
 	versions := map[string]string{
 		"v1": valid,
 		"v2": `{"schema_version":2,"id":"multi-app","name":"Multi app","releases":[{"version":"1","registry":"docker.io","repository":"example/app","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","platform":"linux/amd64"}],"components":[{"id":"broker","release":"1"},{"id":"web","release":"1","depends_on":["broker"]}]}`,
@@ -57,6 +57,8 @@ func TestSchemaVersionsOneThroughSevenRemainParseable(t *testing.T) {
 		"v5": strings.Replace(strings.Replace(valid, `"schema_version":1`, `"schema_version":5`, 1), `"restart":"unless-stopped"`, `"run_as":{"uid":1000,"gid":1000},"restart":"unless-stopped"`, 1),
 		"v6": strings.Replace(strings.Replace(valid, `"schema_version":1`, `"schema_version":6`, 1), `"restart":"unless-stopped"`, `"restart":"unless-stopped","backup":{"strategy":"cold-filesystem","storage":[{"component":"app","id":"data","disposition":"include"}]}`, 1),
 		"v7": validV7Manifest(),
+		"v8": strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":8`, 1),
+		"v9": strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":9`, 1),
 	}
 	for name, data := range versions {
 		t.Run(name, func(t *testing.T) {
@@ -64,6 +66,37 @@ func TestSchemaVersionsOneThroughSevenRemainParseable(t *testing.T) {
 				t.Fatalf("schema %s no longer parses: %v", name, err)
 			}
 		})
+	}
+}
+
+func TestSchemaNineIngressAndReadinessAreExplicitAndBounded(t *testing.T) {
+	base := strings.Replace(validV7Manifest(), `"schema_version":7`, `"schema_version":9`, 1)
+	base = strings.Replace(base, `"restart":"unless-stopped"`, `"services":[{"id":"web","name":"Web","protocol":"http","container_port":8080,"ingress":{"exposure_modes":["lan","managed-https","cloudflare-tunnel"],"external_access":true},"readiness":{"type":"http","path":"/health","expected_status":[200,204],"timeout_seconds":5}}],"restart":"unless-stopped"`, 1)
+	m, err := Parse([]byte(base))
+	if err != nil || m.Services[0].Ingress == nil || m.Services[0].Readiness == nil {
+		t.Fatalf("valid ingress/readiness rejected: %v %#v", err, m.Services)
+	}
+	invalid := map[string]string{
+		"older schema":           strings.Replace(base, `"schema_version":9`, `"schema_version":8`, 1),
+		"tcp ingress":            strings.Replace(base, `"protocol":"http"`, `"protocol":"tcp"`, 1),
+		"unknown exposure":       strings.Replace(base, `"managed-https"`, `"public"`, 1),
+		"external without optin": strings.Replace(base, `,"external_access":true`, ``, 1),
+		"readiness traversal":    strings.Replace(base, `"path":"/health"`, `"path":"/../admin"`, 1),
+		"readiness query":        strings.Replace(base, `"path":"/health"`, `"path":"/health?token=x"`, 1),
+		"readiness method":       strings.Replace(base, `"type":"http"`, `"type":"shell"`, 1),
+		"bad timeout":            strings.Replace(base, `"timeout_seconds":5`, `"timeout_seconds":31`, 1),
+		"bad status":             strings.Replace(base, `"expected_status":[200,204]`, `"expected_status":[99]`, 1),
+	}
+	for name, data := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if _, parseErr := Parse([]byte(data)); parseErr == nil {
+				t.Fatal("invalid ingress/readiness accepted")
+			}
+		})
+	}
+	internal := strings.Replace(base, `,"ingress":{"exposure_modes":["lan","managed-https","cloudflare-tunnel"],"external_access":true}`, ``, 1)
+	if _, err := Parse([]byte(internal)); err != nil {
+		t.Fatalf("readiness-only service rejected: %v", err)
 	}
 }
 

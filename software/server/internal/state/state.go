@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 14
+	target := 15
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -441,6 +441,161 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=14"); err != nil {
+			return err
+		}
+	}
+	if n < 15 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ingress_generations (
+				generation INTEGER PRIMARY KEY,
+				operation_id TEXT NOT NULL UNIQUE,
+				configuration_sha256 TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('prepared','validated','activating','active','failed','rollback_pending','rolled_back','cleanup_pending')),
+				previous_generation INTEGER,
+				generation_path TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				validated_at TEXT,
+				activated_at TEXT,
+				failure_code TEXT NOT NULL DEFAULT '',
+				evidence_json TEXT NOT NULL DEFAULT '{}'
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS ingress_generations_one_active ON ingress_generations(status) WHERE status='active';
+			CREATE TABLE IF NOT EXISTS ingress_generation_routes (
+				generation INTEGER NOT NULL,
+				route_id TEXT NOT NULL,
+				installation_id TEXT NOT NULL,
+				service_id TEXT NOT NULL,
+				hostname TEXT NOT NULL,
+				backend_address TEXT NOT NULL,
+				exposure_mode TEXT NOT NULL CHECK(exposure_mode IN ('lan','managed-https','cloudflare-tunnel')),
+				tls_policy TEXT NOT NULL CHECK(tls_policy IN ('none','provided','acme','cloudflare')),
+				certificate_id TEXT NOT NULL DEFAULT '',
+				provider_id TEXT NOT NULL DEFAULT '',
+				PRIMARY KEY(generation,route_id),
+				UNIQUE(generation,hostname),
+				FOREIGN KEY(generation) REFERENCES ingress_generations(generation) ON DELETE RESTRICT
+			);
+			CREATE TABLE IF NOT EXISTS certificate_material (
+				certificate_id TEXT PRIMARY KEY,
+				hostname TEXT NOT NULL,
+				method TEXT NOT NULL CHECK(method IN ('provided','acme')),
+				certificate_sha256 TEXT NOT NULL,
+				public_key_sha256 TEXT NOT NULL,
+				state TEXT NOT NULL CHECK(state IN ('requested','issued','active','expiring','renewal-pending','renewal-failed','invalid','revoked')),
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS exposure_provider_credentials (
+				provider_id TEXT PRIMARY KEY,
+				provider_type TEXT NOT NULL CHECK(provider_type='cloudflare-tunnel'),
+				credential_sha256 TEXT NOT NULL,
+				credential_path TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				replaced_at TEXT
+			);
+			CREATE TABLE IF NOT EXISTS support_bundle_files (
+				bundle_id TEXT PRIMARY KEY,
+				archive_path TEXT NOT NULL UNIQUE,
+				archive_sha256 TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('complete','redaction_failed'))
+			);`)
+		} else {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ingress_routes (
+				route_id TEXT PRIMARY KEY,
+				installation_id TEXT NOT NULL,
+				service_id TEXT NOT NULL,
+				hostname TEXT NOT NULL UNIQUE,
+				exposure_mode TEXT NOT NULL CHECK(exposure_mode IN ('lan','managed-https','cloudflare-tunnel')),
+				upstream_protocol TEXT NOT NULL CHECK(upstream_protocol IN ('http','https')),
+				tls_policy TEXT NOT NULL CHECK(tls_policy IN ('none','provided','acme','cloudflare')),
+				certificate_id TEXT NOT NULL DEFAULT '',
+				provider_id TEXT NOT NULL DEFAULT '',
+				desired_state TEXT NOT NULL CHECK(desired_state IN ('disabled','enabled')),
+				applied_generation INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				FOREIGN KEY(installation_id) REFERENCES installations(installation_id) ON DELETE RESTRICT
+			);
+			CREATE INDEX IF NOT EXISTS ingress_routes_installation ON ingress_routes(installation_id,service_id);
+			CREATE TABLE IF NOT EXISTS ingress_generations (
+				generation INTEGER PRIMARY KEY,
+				operation_id TEXT NOT NULL UNIQUE,
+				configuration_sha256 TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('prepared','validated','activating','active','failed','rollback_pending','rolled_back','cleanup_pending')),
+				previous_generation INTEGER,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				failure_code TEXT NOT NULL DEFAULT ''
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS control_ingress_generations_one_active ON ingress_generations(status) WHERE status='active';
+			CREATE TABLE IF NOT EXISTS certificates (
+				certificate_id TEXT PRIMARY KEY,
+				hostname TEXT NOT NULL UNIQUE,
+				method TEXT NOT NULL CHECK(method IN ('provided','acme')),
+				state TEXT NOT NULL CHECK(state IN ('requested','issued','active','expiring','renewal-pending','renewal-failed','invalid','revoked')),
+				leaf_sha256 TEXT NOT NULL DEFAULT '',
+				issuer TEXT NOT NULL DEFAULT '',
+				not_before TEXT NOT NULL DEFAULT '',
+				not_after TEXT NOT NULL DEFAULT '',
+				last_renewal_at TEXT NOT NULL DEFAULT '',
+				last_error_code TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS exposure_providers (
+				provider_id TEXT PRIMARY KEY,
+				provider_type TEXT NOT NULL CHECK(provider_type='cloudflare-tunnel'),
+				account_id TEXT NOT NULL,
+				zone_id TEXT NOT NULL,
+				tunnel_id TEXT NOT NULL,
+				credential_sha256 TEXT NOT NULL,
+				desired_state TEXT NOT NULL CHECK(desired_state IN ('disabled','enabled','unlinked')),
+				runtime_state TEXT NOT NULL CHECK(runtime_state IN ('not-configured','offline','connecting','ready','degraded','failed','revoked')),
+				last_error_code TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS setup_steps (
+				step_id TEXT PRIMARY KEY,
+				state TEXT NOT NULL CHECK(state IN ('pending','in-progress','complete','attention','skipped')),
+				input_sha256 TEXT NOT NULL DEFAULT '',
+				evidence_json TEXT NOT NULL DEFAULT '{}',
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS readiness_observations (
+				entity_type TEXT NOT NULL CHECK(entity_type IN ('host','installation','route','certificate','provider')),
+				entity_id TEXT NOT NULL,
+				dimension TEXT NOT NULL CHECK(dimension IN ('desired','runtime','application','ingress','tls','provider','storage','network','firewall','helper')),
+				state TEXT NOT NULL CHECK(state IN ('not-configured','unknown','checking','ready','attention','degraded','failed','disabled')),
+				reason_code TEXT NOT NULL,
+				summary TEXT NOT NULL,
+				checked_at TEXT NOT NULL,
+				PRIMARY KEY(entity_type,entity_id,dimension)
+			);
+			CREATE TABLE IF NOT EXISTS audit_events (
+				event_id TEXT PRIMARY KEY,
+				event_type TEXT NOT NULL,
+				actor TEXT NOT NULL,
+				target_id TEXT NOT NULL,
+				outcome TEXT NOT NULL,
+				detail_json TEXT NOT NULL DEFAULT '{}',
+				created_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS support_bundles (
+				bundle_id TEXT PRIMARY KEY,
+				status TEXT NOT NULL CHECK(status IN ('requested','collecting','complete','redaction-failed','failed')),
+				filename TEXT NOT NULL DEFAULT '',
+				archive_sha256 TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				completed_at TEXT,
+				error_code TEXT NOT NULL DEFAULT ''
+			);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=15"); err != nil {
 			return err
 		}
 	}

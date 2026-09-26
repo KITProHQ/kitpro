@@ -125,6 +125,8 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 		wantSchema := manifest.CatalogMetadataSchemaVersion
 		if id == "pihole" || id == "syncthing" {
 			wantSchema = manifest.NetworkBindingSchemaVersion
+		} else if id != "it-tools" && id != "ollama" {
+			wantSchema = manifest.IngressReadinessSchemaVersion
 		}
 		if m.SchemaVersion != wantSchema || m.Category != category || m.Kind != wantKind || m.CatalogStatus != wantStatus {
 			t.Fatalf("incomplete metadata for %s: %#v", id, m)
@@ -138,6 +140,46 @@ func TestVisibleCatalogMetadataIsManifestBacked(t *testing.T) {
 	}
 	if c["busybox"].Manifest.SchemaVersion != manifest.BackupSchemaVersion {
 		t.Fatal("busybox must remain a schema-v6 compatibility fixture")
+	}
+}
+
+func TestAlpha14IngressEligibilityIsExplicitAndCatalogBounded(t *testing.T) {
+	catalog, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eligible := map[string]string{
+		"actual-budget": "web", "audiobookshelf": "web", "forgejo": "web",
+		"freshrss": "web", "home-assistant": "web", "jellyfin": "web",
+		"mealie": "web", "memos": "web", "navidrome": "web",
+		"nextcloud": "web", "open-webui": "web", "paperless-ngx": "web",
+		"plex": "web", "sftpgo": "web", "uptime-kuma": "web",
+		"vaultwarden": "web",
+	}
+	for id, entry := range catalog {
+		found := 0
+		for _, service := range entry.Manifest.Services {
+			if service.Ingress != nil {
+				found++
+				if service.ID != eligible[id] || service.Readiness == nil {
+					t.Fatalf("unexpected ingress policy for %s/%s", id, service.ID)
+				}
+			}
+		}
+		want := 0
+		if eligible[id] != "" {
+			want = 1
+		}
+		if found != want {
+			t.Fatalf("%s ingress grants=%d want=%d", id, found, want)
+		}
+	}
+	for _, id := range []string{"busybox", "it-tools", "ollama", "pihole", "syncthing"} {
+		for _, service := range catalog[id].Manifest.Services {
+			if service.Ingress != nil {
+				t.Fatalf("excluded application %s became ingress eligible", id)
+			}
+		}
 	}
 }
 
@@ -230,13 +272,13 @@ func TestNextcloudProfileIsConstrained(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := c["nextcloud"].Manifest
-	if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.ID != "nextcloud" || m.Name != "Nextcloud" || m.Category != "Productivity" || m.Kind != "application" || m.CatalogStatus != "experimental" {
+	if m.SchemaVersion != manifest.IngressReadinessSchemaVersion || m.ID != "nextcloud" || m.Name != "Nextcloud" || m.Category != "Productivity" || m.Kind != "application" || m.CatalogStatus != "experimental" {
 		t.Fatalf("unexpected Nextcloud identity or metadata: %#v", m)
 	}
 	if m.WebsiteURL != "https://nextcloud.com/" || m.SourceURL != "https://github.com/nextcloud/docker" || m.DocumentationURL == "" || m.Logo != "" || len(m.Limitations) != 5 {
 		t.Fatalf("unexpected Nextcloud presentation metadata: %#v", m)
 	}
-	for _, required := range []string{"SQLite", "sync-client", "external database", "Redis", "public HTTPS", "one-major-version-at-a-time"} {
+	for _, required := range []string{"SQLite", "sync-client", "external database", "Redis", "Ingress", "trusted-proxy", "one-major-version-at-a-time"} {
 		found := false
 		for _, limitation := range m.Limitations {
 			found = found || strings.Contains(limitation, required)
@@ -268,7 +310,7 @@ func TestPlexProfileIsConstrained(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := c["plex"].Manifest
-	if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.ID != "plex" || m.Name != "Plex" || m.Category != "Media" || m.Kind != "application" || m.CatalogStatus != "standard" {
+	if m.SchemaVersion != manifest.IngressReadinessSchemaVersion || m.ID != "plex" || m.Name != "Plex" || m.Category != "Media" || m.Kind != "application" || m.CatalogStatus != "standard" {
 		t.Fatalf("unexpected Plex identity or metadata: %#v", m)
 	}
 	if m.WebsiteURL != "https://www.plex.tv/" || m.SourceURL != "https://github.com/plexinc/pms-docker" || m.DocumentationURL != "https://support.plex.tv/articles/200288586-installation/" || m.Logo != "" || len(m.Limitations) != 4 {
@@ -309,13 +351,13 @@ func TestForgejoProfileIsConstrained(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := c["forgejo"].Manifest
-	if m.SchemaVersion != manifest.CatalogMetadataSchemaVersion || m.ID != "forgejo" || m.Name != "Forgejo" || m.Category != "Developer Tools" || m.Kind != "application" || m.CatalogStatus != "standard" {
+	if m.SchemaVersion != manifest.IngressReadinessSchemaVersion || m.ID != "forgejo" || m.Name != "Forgejo" || m.Category != "Developer Tools" || m.Kind != "application" || m.CatalogStatus != "standard" {
 		t.Fatalf("unexpected Forgejo identity or metadata: %#v", m)
 	}
 	if m.WebsiteURL != "https://forgejo.org/" || m.SourceURL != "https://codeberg.org/forgejo/forgejo" || m.DocumentationURL != "https://forgejo.org/docs/latest/" || m.Logo != "" || len(m.Limitations) != 3 {
 		t.Fatalf("unexpected Forgejo presentation metadata: %#v", m)
 	}
-	for _, required := range []string{"Git-over-SSH", "SQLite", "HTTPS"} {
+	for _, required := range []string{"Git-over-SSH", "SQLite", "Ingress"} {
 		found := false
 		for _, limitation := range m.Limitations {
 			found = found || strings.Contains(limitation, required)

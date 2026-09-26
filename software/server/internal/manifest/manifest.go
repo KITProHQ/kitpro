@@ -21,6 +21,7 @@ const RuntimeIdentitySchemaVersion = 5
 const BackupSchemaVersion = 6
 const CatalogMetadataSchemaVersion = 7
 const NetworkBindingSchemaVersion = 8
+const IngressReadinessSchemaVersion = 9
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -162,6 +163,24 @@ type Service struct {
 	// FixedHostPort authorizes KITPro to bind this exact host port. It is a
 	// trusted catalog policy, never a user-selected value.
 	FixedHostPort int `json:"fixed_host_port,omitempty"`
+	// Ingress is an explicit catalog grant. A declared HTTP service remains
+	// ineligible unless this policy is present.
+	Ingress *IngressEligibility `json:"ingress,omitempty"`
+	// Readiness is a typed observation. It cannot contain commands, host paths,
+	// headers, or arbitrary request methods.
+	Readiness *ReadinessCheck `json:"readiness,omitempty"`
+}
+
+type IngressEligibility struct {
+	ExposureModes []string `json:"exposure_modes"`
+	External      bool     `json:"external_access,omitempty"`
+}
+
+type ReadinessCheck struct {
+	Type           string `json:"type"`
+	Path           string `json:"path,omitempty"`
+	ExpectedStatus []int  `json:"expected_status,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 type Component struct {
 	ID              string            `json:"id"`
@@ -234,7 +253,7 @@ func Parse(data []byte) (Manifest, error) {
 	return m, nil
 }
 func Validate(m Manifest) error {
-	if m.SchemaVersion < SchemaVersion || m.SchemaVersion > NetworkBindingSchemaVersion {
+	if m.SchemaVersion < SchemaVersion || m.SchemaVersion > IngressReadinessSchemaVersion {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
@@ -348,6 +367,9 @@ func Validate(m Manifest) error {
 			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
 		}
 		if err := validateDefaultExposure(s, m.SchemaVersion); err != nil {
+			return err
+		}
+		if err := validateIngressReadiness(s, m.SchemaVersion); err != nil {
 			return err
 		}
 		seen[s.ID] = true
@@ -743,7 +765,70 @@ func validateComponentFields(c Component, schemaVersion int) error {
 		if err := validateDefaultExposure(s, schemaVersion); err != nil {
 			return err
 		}
+		if err := validateIngressReadiness(s, schemaVersion); err != nil {
+			return err
+		}
 		seen[s.ID], ports[key] = true, true
+	}
+	return nil
+}
+
+func validateIngressReadiness(service Service, schemaVersion int) error {
+	if service.Ingress == nil && service.Readiness == nil {
+		return nil
+	}
+	if schemaVersion < IngressReadinessSchemaVersion {
+		return fmt.Errorf("ingress and readiness require schema version 9")
+	}
+	if policy := service.Ingress; policy != nil {
+		if service.Protocol != "http" && service.Protocol != "https" {
+			return fmt.Errorf("ingress requires an HTTP service")
+		}
+		if len(policy.ExposureModes) == 0 || len(policy.ExposureModes) > 3 {
+			return fmt.Errorf("invalid ingress exposure policy")
+		}
+		seen := map[string]bool{}
+		for _, mode := range policy.ExposureModes {
+			if seen[mode] || (mode != "lan" && mode != "managed-https" && mode != "cloudflare-tunnel") {
+				return fmt.Errorf("invalid ingress exposure policy")
+			}
+			if mode == "cloudflare-tunnel" && !policy.External {
+				return fmt.Errorf("Cloudflare exposure requires external access opt-in")
+			}
+			seen[mode] = true
+		}
+	}
+	check := service.Readiness
+	if check == nil {
+		return nil
+	}
+	if check.TimeoutSeconds < 1 || check.TimeoutSeconds > 30 {
+		return fmt.Errorf("invalid readiness timeout")
+	}
+	switch check.Type {
+	case "runtime", "docker-health", "tcp":
+		if check.Path != "" || len(check.ExpectedStatus) != 0 {
+			return fmt.Errorf("non-HTTP readiness cannot declare HTTP policy")
+		}
+	case "http":
+		if service.Protocol != "http" && service.Protocol != "https" {
+			return fmt.Errorf("HTTP readiness requires an HTTP service")
+		}
+		if check.Path == "" || len(check.Path) > 256 || !strings.HasPrefix(check.Path, "/") || strings.HasPrefix(check.Path, "//") || strings.ContainsAny(check.Path, "\\\r\n\t?#") || strings.Contains(check.Path, "..") {
+			return fmt.Errorf("invalid readiness path")
+		}
+		if len(check.ExpectedStatus) == 0 || len(check.ExpectedStatus) > 8 {
+			return fmt.Errorf("invalid readiness status policy")
+		}
+		seen := map[int]bool{}
+		for _, status := range check.ExpectedStatus {
+			if status < 100 || status > 599 || seen[status] {
+				return fmt.Errorf("invalid readiness status policy")
+			}
+			seen[status] = true
+		}
+	default:
+		return fmt.Errorf("unsupported readiness type")
 	}
 	return nil
 }
