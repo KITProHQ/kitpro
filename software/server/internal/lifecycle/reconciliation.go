@@ -241,7 +241,7 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		attachment, attached := observed.Networks[generation.NetworkName]
 		stoppedBeforeFirstStart := (role == "candidate" || role == "cleanup") && observed.State == containers.RuntimeStopped && attachment.NetworkID == "" && observed.NetworkMode == generation.NetworkName
 		staleCleanupNetwork := (role == "candidate" || role == "cleanup") && observed.State == containers.RuntimeStopped && !network.Exists
-		detachedAfterFailedStart := role == "active" && expected == "running" && network.Exists && (generation.NetworkID == "" || network.ID == generation.NetworkID) && detachedStoppedConfigurationMatches(observed, component.ConfigurationHash, generation.NetworkName, network.ID)
+		detachedAfterFailedStart := role == "active" && network.Exists && (generation.NetworkID == "" || network.ID == generation.NetworkID) && detachedStoppedConfigurationMatches(observed, component.ConfigurationHash, generation.NetworkName, network.ID)
 		if detachedAfterFailedStart {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchActiveContainerDetached)
 		} else if (!network.Exists && !staleCleanupNetwork) || (!staleCleanupNetwork && generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {

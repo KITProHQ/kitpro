@@ -59,6 +59,9 @@ func TestReconciliationDistinguishesExactStoppedMissingDriftAndRuntimeUnavailabl
 	detached := old
 	detached.Networks = map[string]containers.NetworkAttachment{}
 	h.runtime.containers["old-id"] = detached
+	if _, err = h.db.Exec(`UPDATE runtime_components SET state='stopped' WHERE installation_id='inst-one' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
 	result, err = reconciler.Reconcile(context.Background(), "inst-one")
 	if err != nil || result.State != ReconciliationRepairable || result.RecommendedAction != RepairRecreateGeneration || !hasMismatch(result, MismatchActiveContainerDetached) || hasMismatch(result, MismatchConfiguration) || hasMismatch(result, MismatchNetwork) {
 		t.Fatalf("failed-start detach result=%#v err=%v", result, err)
