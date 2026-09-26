@@ -94,6 +94,18 @@ func Verify(ctx context.Context, path string) error {
 	return VerifyDatabase(ctx, db)
 }
 
+// VerifyWritableSnapshot verifies a private SQLite snapshot with write access
+// so SQLite can recover copied WAL state without mutating the archived staging
+// tree. The caller must provide an existing, disposable database copy.
+func VerifyWritableSnapshot(ctx context.Context, path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=rw&_pragma=foreign_keys(1)&_pragma=busy_timeout(250)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return VerifyDatabase(ctx, db)
+}
+
 func VerifyDatabase(ctx context.Context, db *sql.DB) error {
 	var check string
 	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check); err != nil {

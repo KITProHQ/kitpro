@@ -45,6 +45,50 @@ func TestCopyTreeAndSQLiteDiscovery(t *testing.T) {
 	}
 }
 
+func TestSQLiteDiscoveryRecoversWALInPrivateWritableSnapshot(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0750); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(source, "state.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO records(value) VALUES('preserved')`); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "staged")
+	if err = CopyTree(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if err = filepath.Walk(destination, func(name string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return os.Chmod(name, 0555)
+		}
+		return os.Chmod(name, 0444)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = filepath.Walk(destination, func(name string, info os.FileInfo, walkErr error) error {
+			if walkErr == nil && info.IsDir() {
+				_ = os.Chmod(name, 0755)
+			}
+			return nil
+		})
+	})
+	databases, err := DiscoverAndVerifySQLite(context.Background(), []ManagedSource{{Component: "app", StorageID: "data", Path: destination}})
+	if err != nil || len(databases) != 1 || databases[0].RelativePath != "state.db" {
+		t.Fatalf("WAL snapshot verification: %#v %v", databases, err)
+	}
+}
+
 func TestRequireAvailableSpaceRejectsImpossibleRequest(t *testing.T) {
 	if err := RequireAvailableSpace(t.TempDir(), math.MaxInt64); err == nil {
 		t.Fatal("accepted impossible backup capacity request")
