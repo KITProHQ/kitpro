@@ -36,6 +36,16 @@ exec "$@"
 EOF
 chmod 0755 "$fake_runuser"
 
+fake_apparmor_parser="$work_dir/apparmor_parser"
+cat > "$fake_apparmor_parser" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "${KITPRO_TEST_APPARMOR_LOG:?}"
+profile=${!#}
+test -f "$profile"
+EOF
+chmod 0755 "$fake_apparmor_parser"
+
 create_schema_seven_database() {
     local path=$1
     install -d "$(dirname -- "$path")"
@@ -158,6 +168,10 @@ done
 test -n "$destination"
 install -D -m 0755 "$KITPRO_FAKE_BINARY_ROOT/usr/bin/kitpro-api" "$destination/usr/bin/kitpro-api"
 install -D -m 0755 "$KITPRO_FAKE_BINARY_ROOT/usr/libexec/kitpro-helper" "$destination/usr/libexec/kitpro-helper"
+if [[ -n ${KITPRO_FAKE_PROFILE:-} ]]; then
+    install -D -m 0644 "$KITPRO_FAKE_PROFILE" \
+        "$destination/etc/apparmor.d/usr.libexec.kitpro-helper"
+fi
 EOF
 chmod 0755 "$fake_bsdtar"
 fake_pacman="$work_dir/pacman"
@@ -182,6 +196,15 @@ case ${1:-} in
         read -r -a preflight_command <<< "$exec_line"
         "${preflight_command[@]}"
         printf '0.1.0_alpha12-1\n' > "$KITPRO_FAKE_PACKAGE_VERSION"
+        ;;
+    -U)
+        [[ ${KITPRO_FAKE_INSTALLED_HOOK:-0} == 1 ]] || {
+            printf 'unexpected direct package transaction\n' >&2
+            exit 2
+        }
+        [[ ${KITPRO_FAKE_PACMAN_FAIL:-0} != 1 ]] || exit 42
+        "${KITPRO_FAKE_UPGRADE_SCRIPT:?}" --preflight-installed
+        printf '%s\n' "${KITPRO_FAKE_TARGET_VERSION:?}" > "$KITPRO_FAKE_PACKAGE_VERSION"
         ;;
     *)
         printf 'unexpected fake pacman arguments: %s\n' "$*" >&2
@@ -306,5 +329,99 @@ test ! -d "$transaction_root/var/lib/kitpro-api/backups"
 grep -Fq 'KITPro upgrade aborted: existing state failed integrity/backup validation.' "$transaction_root/output.log"
 grep -Fq -- '--hookdir' "$pacman_log"
 grep -Fq -- '-xOf' "$bsdtar_log"
+
+# Alpha.12 and later use their installed pre-transaction hook. The
+# package-bound wrapper must load the verified incoming AppArmor profile first,
+# run exactly that one hook, and avoid the bootstrap hook used for alpha.11.
+installed_transition_root="$work_dir/installed-transition"
+configure_root "$installed_transition_root"
+create_schema_seven_database "$installed_transition_root/var/lib/kitpro-api/control.db"
+create_schema_seven_database "$installed_transition_root/var/lib/kitpro-helper/helper.db"
+install -D -m 0755 "$binary_root/usr/bin/kitpro-api" \
+    "$installed_transition_root/usr/bin/kitpro-api"
+install -D -m 0755 "$binary_root/usr/libexec/kitpro-helper" \
+    "$installed_transition_root/usr/libexec/kitpro-helper"
+install -D -m 0644 "$server_dir/packaging/apparmor/kitpro-helper" \
+    "$installed_transition_root/etc/apparmor.d/usr.libexec.kitpro-helper"
+install -D -m 0644 "$server_dir/packaging/arch/kitpro-server-upgrade.hook" \
+    "$installed_transition_root/usr/share/libalpm/hooks/90-kitpro-server-upgrade.hook"
+printf '0.1.0_alpha12-1\n' > "$installed_transition_root/package-version"
+alpha13_pkginfo="$work_dir/alpha13.PKGINFO"
+printf 'pkgname = kitpro-server\npkgver = 0.1.0_alpha13-1\narch = x86_64\n' > "$alpha13_pkginfo"
+apparmor_log="$installed_transition_root/apparmor.log"
+: > "$apparmor_log"
+: > "$pacman_log"
+: > "$bsdtar_log"
+KITPRO_UPGRADE_TESTING=1 \
+KITPRO_TEST_ROOT="$installed_transition_root" \
+KITPRO_TEST_SYSTEMCTL="$fake_systemctl" \
+KITPRO_TEST_RUNUSER="$fake_runuser" \
+KITPRO_TEST_PACMAN="$fake_pacman" \
+KITPRO_TEST_BSDTAR="$fake_bsdtar" \
+KITPRO_TEST_APPARMOR_PARSER="$fake_apparmor_parser" \
+KITPRO_TEST_APPARMOR_LOG="$apparmor_log" \
+KITPRO_TEST_EXPECTED_PACKAGE_SHA256="$(sha256sum "$fake_package" | awk '{print $1}')" \
+KITPRO_TEST_EXPECTED_PACKAGE_VERSION=0.1.0_alpha13-1 \
+KITPRO_TEST_SERVICE_LOG="$installed_transition_root/service.log" \
+KITPRO_FAKE_BINARY_ROOT="$binary_root" \
+KITPRO_FAKE_PROFILE="$server_dir/packaging/apparmor/kitpro-helper" \
+KITPRO_FAKE_PACKAGE_VERSION="$installed_transition_root/package-version" \
+KITPRO_FAKE_TARGET_VERSION=0.1.0_alpha13-1 \
+KITPRO_FAKE_PKGINFO="$alpha13_pkginfo" \
+KITPRO_FAKE_BSDTAR_LOG="$bsdtar_log" \
+KITPRO_FAKE_PACMAN_LOG="$pacman_log" \
+KITPRO_FAKE_INSTALLED_HOOK=1 \
+KITPRO_FAKE_UPGRADE_SCRIPT="$upgrade_script" \
+    "$upgrade_script" "$fake_package"
+test "$(cat "$installed_transition_root/package-version")" = 0.1.0_alpha13-1
+grep -Eq '^-Q -T .*/root/etc/apparmor.d/usr.libexec.kitpro-helper$' "$apparmor_log"
+grep -Eq '^-r -W -T .*/root/etc/apparmor.d/usr.libexec.kitpro-helper$' "$apparmor_log"
+test "$(grep -c '^-U -- ' "$pacman_log")" -eq 1
+if grep -Fq -- '--hookdir' "$pacman_log"; then
+    printf 'installed-hook transition also invoked the bootstrap hook\n' >&2
+    exit 1
+fi
+test "$(find "$installed_transition_root/var/lib/kitpro-api/backups" -type f -name 'pre-upgrade-*.db' | wc -l)" -eq 1
+test "$(find "$installed_transition_root/var/lib/kitpro-helper/backups" -type f -name 'pre-upgrade-*.db' | wc -l)" -eq 1
+
+# If pacman rejects the transaction after the incoming profile is loaded, the
+# wrapper restores the installed profile and leaves the package version alone.
+profile_failure_root="$work_dir/profile-failure"
+configure_root "$profile_failure_root"
+install -D -m 0644 "$server_dir/packaging/apparmor/kitpro-helper" \
+    "$profile_failure_root/etc/apparmor.d/usr.libexec.kitpro-helper"
+install -D -m 0644 "$server_dir/packaging/arch/kitpro-server-upgrade.hook" \
+    "$profile_failure_root/usr/share/libalpm/hooks/90-kitpro-server-upgrade.hook"
+printf '0.1.0_alpha12-1\n' > "$profile_failure_root/package-version"
+profile_failure_log="$profile_failure_root/apparmor.log"
+: > "$profile_failure_log"
+if KITPRO_UPGRADE_TESTING=1 \
+    KITPRO_TEST_ROOT="$profile_failure_root" \
+    KITPRO_TEST_SYSTEMCTL="$fake_systemctl" \
+    KITPRO_TEST_RUNUSER="$fake_runuser" \
+    KITPRO_TEST_PACMAN="$fake_pacman" \
+    KITPRO_TEST_BSDTAR="$fake_bsdtar" \
+    KITPRO_TEST_APPARMOR_PARSER="$fake_apparmor_parser" \
+    KITPRO_TEST_APPARMOR_LOG="$profile_failure_log" \
+    KITPRO_TEST_EXPECTED_PACKAGE_SHA256="$(sha256sum "$fake_package" | awk '{print $1}')" \
+    KITPRO_TEST_EXPECTED_PACKAGE_VERSION=0.1.0_alpha13-1 \
+    KITPRO_TEST_SERVICE_LOG="$profile_failure_root/service.log" \
+    KITPRO_FAKE_BINARY_ROOT="$binary_root" \
+    KITPRO_FAKE_PROFILE="$server_dir/packaging/apparmor/kitpro-helper" \
+    KITPRO_FAKE_PACKAGE_VERSION="$profile_failure_root/package-version" \
+    KITPRO_FAKE_TARGET_VERSION=0.1.0_alpha13-1 \
+    KITPRO_FAKE_PKGINFO="$alpha13_pkginfo" \
+    KITPRO_FAKE_BSDTAR_LOG="$bsdtar_log" \
+    KITPRO_FAKE_PACMAN_LOG="$pacman_log" \
+    KITPRO_FAKE_INSTALLED_HOOK=1 \
+    KITPRO_FAKE_PACMAN_FAIL=1 \
+    KITPRO_FAKE_UPGRADE_SCRIPT="$upgrade_script" \
+        "$upgrade_script" "$fake_package" >"$profile_failure_root/output.log" 2>&1; then
+    printf 'failed package transaction passed AppArmor transition wrapper\n' >&2
+    exit 1
+fi
+test "$(cat "$profile_failure_root/package-version")" = 0.1.0_alpha12-1
+tail -1 "$profile_failure_log" | grep -Fxq -- \
+    "-r -W -T $profile_failure_root/etc/apparmor.d/usr.libexec.kitpro-helper"
 
 printf 'Arch fail-closed upgrade gate tests: PASS\n'

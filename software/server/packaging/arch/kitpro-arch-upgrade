@@ -17,6 +17,7 @@ systemctl_command=/usr/bin/systemctl
 runuser_command=/usr/bin/runuser
 pacman_command=/usr/bin/pacman
 bsdtar_command=/usr/bin/bsdtar
+apparmor_parser_command=/usr/bin/apparmor_parser
 
 if [[ ${KITPRO_UPGRADE_TESTING:-} == 1 ]]; then
     (( EUID != 0 )) || die 'test overrides are not accepted when running as root.'
@@ -26,6 +27,7 @@ if [[ ${KITPRO_UPGRADE_TESTING:-} == 1 ]]; then
     runuser_command=${KITPRO_TEST_RUNUSER:?KITPRO_TEST_RUNUSER is required in test mode}
     pacman_command=${KITPRO_TEST_PACMAN:?KITPRO_TEST_PACMAN is required in test mode}
     bsdtar_command=${KITPRO_TEST_BSDTAR:?KITPRO_TEST_BSDTAR is required in test mode}
+    apparmor_parser_command=${KITPRO_TEST_APPARMOR_PARSER:-/bin/false}
 elif (( EUID != 0 )); then
     die 'run this upgrade command with sudo.'
 fi
@@ -265,11 +267,46 @@ case ${1:-} in
         transaction_dir=$(mktemp -d "$(path_in_root /run/kitpro)/upgrade-transaction.XXXXXX")
         transaction_root="$transaction_dir/root"
         hook_dir="$transaction_dir/hooks"
+        installed_hook=$(path_in_root /usr/share/libalpm/hooks/90-kitpro-server-upgrade.hook)
+        installed_profile=$(path_in_root /etc/apparmor.d/usr.libexec.kitpro-helper)
         chmod 0755 "$transaction_dir"
         install -d -m 0755 "$transaction_root"
         install -d -m 0700 "$hook_dir"
         wrapper_succeeded=false
-        trap 'if [[ $wrapper_succeeded != true ]]; then restart_previously_active_services; fi; rm -f -- "$(approval_path)"; rm -rf -- "$transaction_dir"' EXIT HUP INT TERM
+        incoming_profile_loaded=false
+        restore_installed_profile() {
+            [[ "$incoming_profile_loaded" == true ]] || return 0
+            if [[ ! -f "$installed_profile" || -L "$installed_profile" ]] || \
+                ! "$apparmor_parser_command" -r -W -T "$installed_profile"; then
+                printf 'KITPro upgrade recovery could not restore the installed AppArmor profile: %s\n' \
+                    "$installed_profile" >&2
+                return 1
+            fi
+        }
+        trap 'if [[ $wrapper_succeeded != true ]]; then restore_installed_profile || true; restart_previously_active_services; fi; rm -f -- "$(approval_path)"; rm -rf -- "$transaction_dir"' EXIT HUP INT TERM
+
+        # Alpha.12 and later already own the permanent pre-transaction hook.
+        # Load the verified incoming profile before that installed hook runs so
+        # the old helper can exercise only the new authority required to create
+        # its paired backup. A failed transaction restores the installed
+        # profile; a successful transaction installs and reloads the same
+        # incoming profile through the package lifecycle.
+        if [[ -f "$installed_hook" && ! -L "$installed_hook" ]]; then
+            "$bsdtar_command" -xf "$package" -C "$transaction_root" \
+                etc/apparmor.d/usr.libexec.kitpro-helper
+            incoming_profile="$transaction_root/etc/apparmor.d/usr.libexec.kitpro-helper"
+            [[ -f "$incoming_profile" && ! -L "$incoming_profile" ]] || \
+                die 'incoming AppArmor profile is missing or unsafe.'
+            "$apparmor_parser_command" -Q -T "$incoming_profile" || \
+                die 'incoming AppArmor profile failed validation.'
+            "$apparmor_parser_command" -r -W -T "$incoming_profile" || \
+                die 'incoming AppArmor profile could not be loaded.'
+            incoming_profile_loaded=true
+            "$pacman_command" -U -- "$package"
+            wrapper_succeeded=true
+            exit 0
+        fi
+
         "$bsdtar_command" -xf "$package" -C "$transaction_root" usr/bin/kitpro-api usr/libexec/kitpro-helper
         install -m 0755 "$0" "$transaction_dir/preflight"
         cat > "$hook_dir/90-kitpro-server-bootstrap-upgrade.hook" <<EOF

@@ -46,6 +46,11 @@ grep -Fq 's/@KITPRO_PACKAGE_VERSION@/$package_version/' "$server_dir/packaging/b
 grep -q 'package SHA-256 does not match this upgrade wrapper' "$upgrade_script"
 grep -q 'package metadata .PKGINFO is missing or unreadable' "$upgrade_script"
 grep -Fq '"$bsdtar_command" -xOf "$package" .PKGINFO' "$upgrade_script"
+grep -Fq 'installed_hook=$(path_in_root /usr/share/libalpm/hooks/90-kitpro-server-upgrade.hook)' "$upgrade_script"
+grep -Fq 'etc/apparmor.d/usr.libexec.kitpro-helper' "$upgrade_script"
+grep -Fq '"$apparmor_parser_command" -Q -T "$incoming_profile"' "$upgrade_script"
+grep -Fq '"$apparmor_parser_command" -r -W -T "$incoming_profile"' "$upgrade_script"
+grep -Fq 'restore_installed_profile || true' "$upgrade_script"
 forbidden_option='--print-''format'
 if grep -R -F -- "$forbidden_option" "$upgrade_script" "$server_dir/packaging/tests"; then
     printf 'Arch wrapper still relies on the unsupported pacman formatting option\n' >&2
