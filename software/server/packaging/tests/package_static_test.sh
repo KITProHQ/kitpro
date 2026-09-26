@@ -109,6 +109,8 @@ fi
 grep -q 'apparmor_parser -r -W -T' "$unpack/control/postinst"
 grep -q '/usr/libexec/kitpro-helper --verify-host-prerequisites' "$unpack/control/postinst"
 grep -q 'restore_previous_services true' "$unpack/control/postinst"
+grep -Fq "systemctl is-active --quiet nginx.service && die 'an active host nginx service conflicts with KITPro managed ingress'" "$unpack/control/preinst"
+grep -q '^systemctl disable --now nginx.service$' "$unpack/control/postinst"
 grep -q '^systemctl daemon-reload$' "$unpack/control/postinst"
 if grep -R -E '__API_UID__|RestrictSUIDSGID|docker group|0\.0\.0\.0' "$unpack/data/usr/lib/systemd/system" "$unpack/data/etc/default"; then
     echo "unsafe or unresolved package configuration found" >&2

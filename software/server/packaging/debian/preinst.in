@@ -356,6 +356,7 @@ if [[ "$action" == upgrade && -n "$old_version" ]] && "$dpkg_command" --compare-
 fi
 
 if [[ "$test_mode" != true ]]; then
+    systemctl is-active --quiet nginx.service && die 'an active host nginx service conflicts with KITPro managed ingress'
     systemctl is-active --quiet docker.service || die 'a compatible, active Docker Engine is required'
     [[ -S /run/docker.sock || -S /var/run/docker.sock ]] || die 'Docker Engine socket is unavailable'
 fi

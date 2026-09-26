@@ -229,6 +229,8 @@ if ! /usr/libexec/kitpro-helper --verify-host-prerequisites; then
     exit 1
 fi
 
+systemctl disable --now nginx.service
+
 if [ -n "$old_version" ]; then
     env KITPRO_CONTROL_DB="$control_backup" /usr/bin/kitpro-api --verify-database
     env KITPRO_HELPER_DB="$helper_backup" /usr/libexec/kitpro-helper --verify-database
