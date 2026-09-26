@@ -82,9 +82,11 @@ configure_package() {
     apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-helper
     apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-acme
     apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-cloudflare
+    apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-ingress-validator
     apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-helper
     apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-acme
     apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-cloudflare
+    apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-ingress-validator
     if ! aa-status --enabled; then
         printf 'kitpro-server: AppArmor is not enabled\n' >&2
         return 1
@@ -105,7 +107,7 @@ configure_package() {
     runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
     /usr/libexec/kitpro-helper --migrate-only
     systemctl daemon-reload
-    systemctl enable --now kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service
+    systemctl enable --now kitpro-ingress-validator.service kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service kitpro-ingress-reload.path
 }
 
 pre_install() {
@@ -124,7 +126,7 @@ pre_upgrade() {
         return 1
     fi
     require_upgrade_approval "$old_version" "$new_version"
-    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service 2>/dev/null || true
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service 2>/dev/null || true
 }
 
 post_upgrade() {
@@ -138,10 +140,11 @@ post_upgrade() {
 }
 
 pre_remove() {
-    systemctl disable --now kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service 2>/dev/null || true
+    systemctl disable --now kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service 2>/dev/null || true
     apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-helper 2>/dev/null || true
     apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-acme 2>/dev/null || true
     apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-cloudflare 2>/dev/null || true
+    apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-ingress-validator 2>/dev/null || true
 }
 
 post_remove() {

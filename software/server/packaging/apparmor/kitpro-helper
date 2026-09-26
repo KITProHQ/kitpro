@@ -11,7 +11,6 @@
   /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,
   /run/kitpro-ingress/acme.sock rw,
-  /usr/sbin/nginx ix,
   # backup.Vacuum atomically publishes verified upgrade and host-state database
   # snapshots by hard-linking private temporary files to fixed final names in
   # root-owned backup directories. No other helper path gains link authority.

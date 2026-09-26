@@ -6,25 +6,29 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
-	"syscall"
 	"testing"
 )
 
 func TestNginxRuntimeUsesOnlyFixedCommandsAndAtomicGeneration(t *testing.T) {
 	root := t.TempDir()
-	var calls [][]string
+	var calls []struct {
+		target     string
+		generation int64
+	}
 	if err := os.MkdirAll(filepath.Join(root, "run"), 0750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "run", "nginx.pid"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var signals []syscall.Signal
-	runtime := NginxRuntime{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
-		calls = append(calls, append([]string{name}, args...))
-		return nil, nil
-	}, Signal: func(_ int, signal syscall.Signal) error { signals = append(signals, signal); return nil }}
+	var reloads, processChecks int
+	runtime := NginxRuntime{Root: root, Check: func(_ context.Context, target string, generation int64) error {
+		calls = append(calls, struct {
+			target     string
+			generation int64
+		}{target, generation})
+		return nil
+	}, Reload: func(context.Context) error { reloads++; return nil }, VerifyProcess: func() error { processChecks++; return nil }}
 	candidate := Candidate{Generation: 1, Configuration: []byte("events {}\nhttp {}\n")}
 	if err := runtime.Prepare(context.Background(), candidate); err != nil {
 		t.Fatal(err)
@@ -41,11 +45,11 @@ func TestNginxRuntimeUsesOnlyFixedCommandsAndAtomicGeneration(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls = %#v", calls)
 	}
-	if got := strings.Join(calls[0], " "); got != "/usr/sbin/nginx -t -p "+filepath.Join(root, "generations/1")+"/ -c nginx.conf" {
-		t.Fatalf("unexpected validation command %q", got)
+	if calls[0].target != "generation" || calls[0].generation != 1 || calls[1] != calls[0] {
+		t.Fatalf("unexpected validation calls %#v", calls)
 	}
-	if len(signals) != 2 || signals[0] != syscall.SIGHUP || signals[1] != 0 {
-		t.Fatalf("unexpected signals %#v", signals)
+	if reloads != 1 || processChecks != 1 {
+		t.Fatalf("reloads=%d process_checks=%d", reloads, processChecks)
 	}
 	current, err := filepath.EvalSymlinks(filepath.Join(root, "current"))
 	if err != nil || current != filepath.Join(root, "generations/1") {
@@ -65,14 +69,14 @@ func TestNginxRuntimeRejectsOverwriteAndRollsBackLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := false
-	runtime := NginxRuntime{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
-		return nil, nil
-	}, Signal: func(_ int, _ syscall.Signal) error {
+	runtime := NginxRuntime{Root: root, Check: func(_ context.Context, _ string, _ int64) error {
+		return nil
+	}, Reload: func(context.Context) error {
 		if failed {
 			return errors.New("synthetic failure")
 		}
 		return nil
-	}}
+	}, VerifyProcess: func() error { return nil }}
 	first := Candidate{Generation: 1, Configuration: []byte("one")}
 	if err := runtime.Prepare(context.Background(), first); err != nil {
 		t.Fatal(err)
@@ -123,15 +127,18 @@ func TestNginxRuntimeReloadsAndVerifiesCurrentCertificateConfiguration(t *testin
 		t.Fatal(err)
 	}
 	var calls int
-	var signals []syscall.Signal
-	runtime := NginxRuntime{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+	var reloads, processChecks int
+	runtime := NginxRuntime{Root: root, Check: func(_ context.Context, target string, generation int64) error {
 		calls++
-		return nil, nil
-	}, Signal: func(_ int, signal syscall.Signal) error { signals = append(signals, signal); return nil }}
+		if target != "current" || generation != 0 {
+			t.Fatalf("unexpected validation target %q generation %d", target, generation)
+		}
+		return nil
+	}, Reload: func(context.Context) error { reloads++; return nil }, VerifyProcess: func() error { processChecks++; return nil }}
 	if err := runtime.ReloadAndVerifyCurrent(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || len(signals) != 2 || signals[0] != syscall.SIGHUP || signals[1] != 0 {
-		t.Fatalf("calls=%d signals=%v", calls, signals)
+	if calls != 1 || reloads != 1 || processChecks != 1 {
+		t.Fatalf("calls=%d reloads=%d process_checks=%d", calls, reloads, processChecks)
 	}
 }

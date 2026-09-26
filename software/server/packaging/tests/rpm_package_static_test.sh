@@ -7,6 +7,7 @@ spec=$packaging_dir/rpm/kitpro-server.spec.in
 rocky_unit=$packaging_dir/systemd/kitpro-helper-rocky.service
 acme_unit=$packaging_dir/systemd/kitpro-acme-rocky.service
 cloudflare_unit=$packaging_dir/systemd/kitpro-cloudflare-rocky.service
+validator_unit=$packaging_dir/systemd/kitpro-ingress-validator-rocky.service
 uninstaller=$packaging_dir/rpm/kitpro-server-uninstall
 podman_command=$packaging_dir/rpm/kitpro-podman-command
 
@@ -35,8 +36,17 @@ grep -q '/etc/kitpro-server/runtime' "$rocky_unit"
 grep -q '^NoNewPrivileges=yes$' "$rocky_unit"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$rocky_unit"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$rocky_unit"
+grep -q '^RestrictAddressFamilies=AF_UNIX AF_NETLINK$' "$rocky_unit"
 grep -q 'go build .* -o kitpro-acme ./cmd/kitpro-acme' "$spec"
 grep -q 'go build .* -o kitpro-cloudflare ./cmd/kitpro-cloudflare' "$spec"
+grep -q 'go build .* -o kitpro-ingress-validator ./cmd/kitpro-ingress-validator' "$spec"
+grep -q 'kitpro-ingress-validator.service' "$spec"
+grep -q 'kitpro-ingress-reload.path' "$spec"
+grep -q 'kitpro-ingress-reload.service' "$spec"
+grep -q 'kitpro-ingress-reload.path' "$uninstaller"
+grep -q '^PrivateNetwork=yes$' "$validator_unit"
+grep -q '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE$' "$validator_unit"
+grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$validator_unit"
 grep -q 'kitpro-acme.service' "$spec"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$acme_unit"
 grep -q '^CapabilityBoundingSet=CAP_SETUID CAP_SETGID$' "$cloudflare_unit"

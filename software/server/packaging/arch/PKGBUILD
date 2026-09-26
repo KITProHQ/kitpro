@@ -8,7 +8,7 @@ license=('Apache-2.0')
 depends=('apparmor' 'docker' 'nginx' 'systemd')
 makedepends=('go')
 install=kitpro-server.install
-backup=('etc/apparmor.d/usr.libexec.kitpro-helper' 'etc/apparmor.d/usr.libexec.kitpro-acme' 'etc/apparmor.d/usr.libexec.kitpro-cloudflare')
+backup=('etc/apparmor.d/usr.libexec.kitpro-helper' 'etc/apparmor.d/usr.libexec.kitpro-acme' 'etc/apparmor.d/usr.libexec.kitpro-cloudflare' 'etc/apparmor.d/usr.libexec.kitpro-ingress-validator')
 options=('!debug' '!strip')
 source=("${pkgname}-${pkgver}.tar.gz")
 sha256sums=('SKIP')
@@ -27,6 +27,7 @@ build() {
     go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-helper ./cmd/kitpro-helper
     go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-acme ./cmd/kitpro-acme
     go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-cloudflare ./cmd/kitpro-cloudflare
+    go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-ingress-validator ./cmd/kitpro-ingress-validator
 }
 
 package() {
@@ -36,17 +37,22 @@ package() {
     install -Dm0755 "$source_root/kitpro-helper" "$pkgdir/usr/libexec/kitpro-helper"
     install -Dm0755 "$source_root/kitpro-acme" "$pkgdir/usr/libexec/kitpro-acme"
     install -Dm0755 "$source_root/kitpro-cloudflare" "$pkgdir/usr/libexec/kitpro-cloudflare"
+    install -Dm0755 "$source_root/kitpro-ingress-validator" "$pkgdir/usr/libexec/kitpro-ingress-validator"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-api.service" "$pkgdir/usr/lib/systemd/system/kitpro-api.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-ingress.service" "$pkgdir/usr/lib/systemd/system/kitpro-ingress.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.service" "$pkgdir/usr/lib/systemd/system/kitpro-helper.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.socket" "$pkgdir/usr/lib/systemd/system/kitpro-helper.socket"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-acme.service" "$pkgdir/usr/lib/systemd/system/kitpro-acme.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-cloudflare.service" "$pkgdir/usr/lib/systemd/system/kitpro-cloudflare.service"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-ingress-validator.service" "$pkgdir/usr/lib/systemd/system/kitpro-ingress-validator.service"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-ingress-reload.path" "$pkgdir/usr/lib/systemd/system/kitpro-ingress-reload.path"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-ingress-reload.service" "$pkgdir/usr/lib/systemd/system/kitpro-ingress-reload.service"
     install -Dm0644 "$source_root/packaging/tmpfiles/kitpro.conf" "$pkgdir/usr/lib/tmpfiles.d/kitpro.conf"
     install -Dm0644 "$source_root/packaging/nginx/bootstrap.conf" "$pkgdir/usr/share/kitpro-server/ingress-bootstrap.conf"
     install -Dm0644 "$source_root/packaging/apparmor/kitpro-helper" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-helper"
     install -Dm0644 "$source_root/packaging/apparmor/kitpro-acme" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-acme"
     install -Dm0644 "$source_root/packaging/apparmor/kitpro-cloudflare" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
+    install -Dm0644 "$source_root/packaging/apparmor/kitpro-ingress-validator" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.conf" "$pkgdir/usr/share/kitpro-server/kitpro-server.conf"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.sysusers" "$pkgdir/usr/lib/sysusers.d/kitpro-server.conf"
     install -Dm0755 "$source_root/packaging/arch/kitpro-arch-upgrade" "$pkgdir/usr/libexec/kitpro-arch-upgrade"

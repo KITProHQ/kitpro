@@ -4,38 +4,36 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
-
-	"golang.org/x/sys/unix"
 )
 
 const defaultIngressRoot = "/var/lib/kitpro-helper/ingress"
 
-type CommandRunner func(context.Context, string, ...string) ([]byte, error)
+type ConfigurationChecker func(context.Context, string, int64) error
 
 type NginxRuntime struct {
-	Root   string
-	Run    CommandRunner
-	Signal func(int, syscall.Signal) error
+	Root          string
+	Check         ConfigurationChecker
+	Reload        func(context.Context) error
+	VerifyProcess func() error
 }
 
 func NewNginxRuntime() NginxRuntime {
-	return NginxRuntime{Root: defaultIngressRoot, Run: runCommand, Signal: unix.Kill}
-}
-
-func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	return NginxRuntime{
+		Root:          defaultIngressRoot,
+		Check:         (ValidatorClient{}).Check,
+		Reload:        (ReloadBridge{}).Request,
+		VerifyProcess: func() error { return verifyManagedNginx(defaultIngressRoot) },
+	}
 }
 
 func (n NginxRuntime) validate() error {
 	if n.Root == "" {
 		n.Root = defaultIngressRoot
 	}
-	if !filepath.IsAbs(n.Root) || filepath.Clean(n.Root) != n.Root || n.Run == nil || n.Signal == nil {
+	if !filepath.IsAbs(n.Root) || filepath.Clean(n.Root) != n.Root || n.Check == nil || n.Reload == nil || n.VerifyProcess == nil {
 		return fmt.Errorf("invalid ingress runtime")
 	}
 	return nil
@@ -81,13 +79,11 @@ func (n NginxRuntime) Prepare(_ context.Context, candidate Candidate) error {
 }
 
 func (n NginxRuntime) Validate(ctx context.Context, candidate Candidate) error {
-	path, err := n.generationPath(candidate.Generation)
-	if err != nil {
+	if _, err := n.generationPath(candidate.Generation); err != nil {
 		return err
 	}
-	output, err := n.Run(ctx, "/usr/sbin/nginx", "-t", "-p", path+"/", "-c", "nginx.conf")
-	if err != nil {
-		return fmt.Errorf("nginx candidate rejected: %s", boundedOutput(output))
+	if err := n.Check(ctx, "generation", candidate.Generation); err != nil {
+		return fmt.Errorf("nginx candidate rejected: %w", err)
 	}
 	return nil
 }
@@ -100,7 +96,7 @@ func (n NginxRuntime) Activate(ctx context.Context, candidate Candidate) error {
 	if err = replaceSymlink(n.Root, path); err != nil {
 		return err
 	}
-	return n.reload()
+	return n.reload(ctx)
 }
 
 func (n NginxRuntime) Verify(ctx context.Context, candidate Candidate) error {
@@ -112,7 +108,7 @@ func (n NginxRuntime) Rollback(ctx context.Context, candidate Candidate) error {
 		if err := replaceSymlink(n.Root, filepath.Join(n.Root, "bootstrap")); err != nil {
 			return err
 		}
-		return n.reload()
+		return n.reload(ctx)
 	}
 	path, err := n.generationPath(candidate.PreviousGeneration)
 	if err != nil {
@@ -121,7 +117,7 @@ func (n NginxRuntime) Rollback(ctx context.Context, candidate Candidate) error {
 	if err = replaceSymlink(n.Root, path); err != nil {
 		return err
 	}
-	return n.reload()
+	return n.reload(ctx)
 }
 
 func (n NginxRuntime) VerifyGeneration(ctx context.Context, generation int64) error {
@@ -133,11 +129,10 @@ func (n NginxRuntime) VerifyGeneration(ctx context.Context, generation int64) er
 	if err != nil || current != path {
 		return fmt.Errorf("active ingress generation does not match")
 	}
-	output, err := n.Run(ctx, "/usr/sbin/nginx", "-t", "-p", n.Root+"/", "-c", "current/nginx.conf")
-	if err != nil {
-		return fmt.Errorf("active nginx configuration failed verification: %s", boundedOutput(output))
+	if err := n.Check(ctx, "generation", generation); err != nil {
+		return fmt.Errorf("active nginx configuration failed verification: %w", err)
 	}
-	if err = n.signal(0); err != nil {
+	if err = n.VerifyProcess(); err != nil {
 		return fmt.Errorf("managed nginx process is unavailable")
 	}
 	return nil
@@ -150,14 +145,13 @@ func (n NginxRuntime) ReloadAndVerifyCurrent(ctx context.Context) error {
 	if err := n.validate(); err != nil {
 		return err
 	}
-	output, err := n.Run(ctx, "/usr/sbin/nginx", "-t", "-p", n.Root+"/", "-c", "current/nginx.conf")
-	if err != nil {
-		return fmt.Errorf("active nginx configuration failed verification: %s", boundedOutput(output))
+	if err := n.Check(ctx, "current", 0); err != nil {
+		return fmt.Errorf("active nginx configuration failed verification: %w", err)
 	}
-	if err = n.reload(); err != nil {
+	if err := n.reload(ctx); err != nil {
 		return err
 	}
-	if err = n.signal(0); err != nil {
+	if err := n.VerifyProcess(); err != nil {
 		return fmt.Errorf("managed nginx process is unavailable")
 	}
 	return nil
@@ -177,15 +171,15 @@ func (n NginxRuntime) Cleanup(_ context.Context, candidate Candidate) error {
 	return nil
 }
 
-func (n NginxRuntime) reload() error {
-	if err := n.signal(syscall.SIGHUP); err != nil {
+func (n NginxRuntime) reload(ctx context.Context) error {
+	if err := n.Reload(ctx); err != nil {
 		return fmt.Errorf("reload KITPro ingress: %w", err)
 	}
 	return nil
 }
 
-func (n NginxRuntime) signal(value syscall.Signal) error {
-	raw, err := os.ReadFile(filepath.Join(n.Root, "run", "nginx.pid"))
+func verifyManagedNginx(root string) error {
+	raw, err := os.ReadFile(filepath.Join(root, "run", "nginx.pid"))
 	if err != nil {
 		return err
 	}
@@ -193,7 +187,11 @@ func (n NginxRuntime) signal(value syscall.Signal) error {
 	if err != nil || pid < 2 {
 		return fmt.Errorf("invalid managed nginx PID")
 	}
-	return n.Signal(pid, value)
+	command, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "comm"))
+	if err != nil || strings.TrimSpace(string(command)) != "nginx" {
+		return fmt.Errorf("managed nginx process is unavailable")
+	}
+	return nil
 }
 
 func replaceSymlink(root, target string) error {
@@ -221,12 +219,4 @@ func syncDirectory(path string) error {
 	}
 	defer directory.Close()
 	return directory.Sync()
-}
-
-func boundedOutput(value []byte) string {
-	const limit = 2048
-	if len(value) > limit {
-		value = value[:limit]
-	}
-	return string(value)
 }
