@@ -506,7 +506,8 @@ func (r MultiRunner) observeRepairableGeneration(ctx context.Context, generation
 		if component.ImageID != "" && observed.ImageID != component.ImageID {
 			return nil, fmt.Errorf("component %s image identity changed", component.ID)
 		}
-		if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash {
+		detached := detachedStoppedConfigurationMatches(observed, component.ConfigurationHash, generation.NetworkName, network.ID)
+		if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash && !detached {
 			return nil, fmt.Errorf("component %s configuration changed", component.ID)
 		}
 		if observed.State != containers.RuntimeRunning && observed.State != containers.RuntimeStopped {
@@ -516,7 +517,7 @@ func (r MultiRunner) observeRepairableGeneration(ctx context.Context, generation
 			return nil, errors.New("active network is missing while a component still exists")
 		}
 		attachment, ok := observed.Networks[generation.NetworkName]
-		if !ok || attachment.NetworkID != network.ID {
+		if (!ok || attachment.NetworkID != network.ID) && !detached {
 			return nil, fmt.Errorf("component %s network changed", component.ID)
 		}
 		observations[component.ID] = observed

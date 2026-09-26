@@ -283,7 +283,10 @@ func (r Runner) observeRepairableActive(ctx context.Context, generation Generati
 		return observed, errors.New("active container identity changed")
 	}
 	if generation.Component.ConfigurationHash != "" && observationHash(observed) != generation.Component.ConfigurationHash {
-		return observed, errors.New("active container configuration changed")
+		network, networkErr := r.Runtime.ObserveNetwork(ctx, generation.NetworkName)
+		if networkErr != nil || !network.Exists || (generation.NetworkID != "" && network.ID != generation.NetworkID) || !detachedStoppedConfigurationMatches(observed, generation.Component.ConfigurationHash, generation.NetworkName, network.ID) {
+			return observed, errors.New("active container configuration changed")
+		}
 	}
 	if observed.State != containers.RuntimeRunning && observed.State != containers.RuntimeStopped {
 		return observed, errors.New("active container state is not repairable")
@@ -593,6 +596,22 @@ func observationHash(observed containers.ContainerObservation) string {
 	encoded, _ := json.Marshal(value)
 	hash := sha256.Sum256(encoded)
 	return hex.EncodeToString(hash[:])
+}
+
+// detachedStoppedConfigurationMatches recognizes Docker's bounded failed-start
+// state: an exact stopped container can lose its live network attachment when
+// port programming fails even though its immutable HostConfig still names the
+// trusted network. The caller must separately verify that network's identity.
+// Reconstructing only the missing observation lets controlled recreation
+// remain available without accepting image, label, mount, port, or device
+// drift.
+func detachedStoppedConfigurationMatches(observed containers.ContainerObservation, expectedHash, networkName, networkID string) bool {
+	if expectedHash == "" || !observed.Exists || observed.State != containers.RuntimeStopped || observed.NetworkMode != networkName || len(observed.Networks) != 0 || networkName == "" || networkID == "" {
+		return false
+	}
+	reconstructed := observed
+	reconstructed.Networks = map[string]containers.NetworkAttachment{networkName: {NetworkID: networkID}}
+	return observationHash(reconstructed) == expectedHash
 }
 func networkNames(networks map[string]containers.NetworkAttachment) []string {
 	result := make([]string, 0, len(networks))

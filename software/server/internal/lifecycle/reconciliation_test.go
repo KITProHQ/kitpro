@@ -56,6 +56,14 @@ func TestReconciliationDistinguishesExactStoppedMissingDriftAndRuntimeUnavailabl
 		t.Fatalf("stopped result=%#v err=%v", result, err)
 	}
 
+	detached := old
+	detached.Networks = map[string]containers.NetworkAttachment{}
+	h.runtime.containers["old-id"] = detached
+	result, err = reconciler.Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationRepairable || result.RecommendedAction != RepairRecreateGeneration || !hasMismatch(result, MismatchActiveContainerDetached) || hasMismatch(result, MismatchConfiguration) || hasMismatch(result, MismatchNetwork) {
+		t.Fatalf("failed-start detach result=%#v err=%v", result, err)
+	}
+
 	delete(h.runtime.containers, "old-id")
 	result, err = reconciler.Reconcile(context.Background(), "inst-one")
 	if err != nil || result.State != ReconciliationRuntimeMissing || result.RecommendedAction != RepairRecreateGeneration {
@@ -145,6 +153,27 @@ func TestExactStoppedRepairKeepsGenerationAndExactReplayDoesNotMutate(t *testing
 func TestMissingRuntimeControlledRecreateAdvancesGeneration(t *testing.T) {
 	h := newHarness(t, true)
 	delete(h.runtime.containers, "old-id")
+	h.plan.AllowMissingActive = true
+	h.plan.RollbackSafe = false
+	result, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Generation != 2 {
+		t.Fatalf("generation=%d", result.Generation)
+	}
+	var active int
+	if err = h.db.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id='inst-one' AND status='active'`).Scan(&active); err != nil || active != 2 {
+		t.Fatalf("active=%d err=%v", active, err)
+	}
+}
+
+func TestFailedStartDetachedRuntimeControlledRecreateAdvancesGeneration(t *testing.T) {
+	h := newHarness(t, true)
+	detached := h.runtime.containers["old-id"]
+	detached.State = containers.RuntimeStopped
+	detached.Networks = map[string]containers.NetworkAttachment{}
+	h.runtime.containers["old-id"] = detached
 	h.plan.AllowMissingActive = true
 	h.plan.RollbackSafe = false
 	result, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan)

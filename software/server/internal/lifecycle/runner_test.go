@@ -157,6 +157,21 @@ func observationFromPlan(id string, p containers.ContainerPlan, networkID string
 	return containers.ContainerObservation{Exists: true, ID: id, Name: p.Name, ImageID: "image-id", ImageReference: p.Image, State: state, Labels: p.Labels, User: user, Command: p.Command, Environment: p.Environment, RestartPolicy: p.RestartPolicy, Mounts: mounts, Networks: map[string]containers.NetworkAttachment{p.Network: {NetworkID: networkID}}, NetworkMode: p.Network, PortBindings: p.PortBindings, Devices: p.Devices, DeviceRequests: p.DeviceRequests}
 }
 
+func TestDetachedStoppedConfigurationMatchRejectsOtherDrift(t *testing.T) {
+	plan := containers.ContainerPlan{Image: "repo/app@sha256:digest", Name: "app", Network: "trusted-network", User: "1000:1000", Labels: map[string]string{"com.kitpro.managed": "true"}, PortBindings: map[string][]containers.PortBinding{"22000/tcp": {{HostIP: "10.10.0.10", HostPort: "22000"}}}}
+	exact := observationFromPlan("container-id", plan, "network-id", containers.RuntimeStopped)
+	expected := observationHash(exact)
+	detached := exact
+	detached.Networks = map[string]containers.NetworkAttachment{}
+	if !detachedStoppedConfigurationMatches(detached, expected, plan.Network, "network-id") {
+		t.Fatal("exact Docker failed-start detach was not recognized")
+	}
+	detached.User = "0:0"
+	if detachedStoppedConfigurationMatches(detached, expected, plan.Network, "network-id") {
+		t.Fatal("configuration drift was accepted as a failed-start detach")
+	}
+}
+
 type harness struct {
 	db          *sql.DB
 	runtime     *fakeRuntime

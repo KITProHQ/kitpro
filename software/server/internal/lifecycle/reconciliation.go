@@ -31,6 +31,7 @@ type MismatchCode string
 const (
 	MismatchActiveContainerMissing    MismatchCode = "active_container_missing"
 	MismatchActiveContainerStopped    MismatchCode = "active_container_stopped"
+	MismatchActiveContainerDetached   MismatchCode = "active_container_detached"
 	MismatchActiveContainerRunning    MismatchCode = "active_container_unexpectedly_running"
 	MismatchActiveContainerUnstable   MismatchCode = "active_container_unstable"
 	MismatchImage                     MismatchCode = "image_mismatch"
@@ -240,12 +241,15 @@ func (r Reconciler) observeGeneration(ctx context.Context, generation MultiGener
 		attachment, attached := observed.Networks[generation.NetworkName]
 		stoppedBeforeFirstStart := (role == "candidate" || role == "cleanup") && observed.State == containers.RuntimeStopped && attachment.NetworkID == "" && observed.NetworkMode == generation.NetworkName
 		staleCleanupNetwork := (role == "candidate" || role == "cleanup") && observed.State == containers.RuntimeStopped && !network.Exists
-		if (!network.Exists && !staleCleanupNetwork) || (!staleCleanupNetwork && generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {
+		detachedAfterFailedStart := role == "active" && expected == "running" && network.Exists && (generation.NetworkID == "" || network.ID == generation.NetworkID) && detachedStoppedConfigurationMatches(observed, component.ConfigurationHash, generation.NetworkName, network.ID)
+		if detachedAfterFailedStart {
+			finding.MismatchCodes = append(finding.MismatchCodes, MismatchActiveContainerDetached)
+		} else if (!network.Exists && !staleCleanupNetwork) || (!staleCleanupNetwork && generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchNetwork)
 		}
 		if generation.Status == "verification_required" && generation.TopologyHash == "" && len(generation.Components) == 1 && component.ConfigurationHash == "" {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchConfiguration)
-		} else if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash {
+		} else if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash && !detachedAfterFailedStart {
 			finding.MismatchCodes = append(finding.MismatchCodes, MismatchConfiguration)
 		}
 		if role == "active" && expected == "running" && observed.State == containers.RuntimeStopped {
@@ -397,6 +401,8 @@ func (r *ReconciliationResult) finish() {
 		r.State, r.RecommendedAction, r.Summary = ReconciliationActionRequired, RepairNone, "runtime state cannot be safely classified"
 	case has(MismatchOwnershipAmbiguous) || has(MismatchImage) || has(MismatchConfiguration) || has(MismatchNetwork) || has(MismatchRetainedGenerationRunning) || has(MismatchActiveContainerRunning):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationActionRequired, RepairNone, "runtime identity or configuration differs from helper authority"
+	case has(MismatchActiveContainerDetached):
+		r.State, r.RecommendedAction, r.Summary = ReconciliationRepairable, RepairRecreateGeneration, "exact stopped runtime detached after a failed start; recreate the generation"
 	case has(MismatchActiveContainerMissing) || has(MismatchComponentMissing):
 		r.State, r.RecommendedAction, r.Summary = ReconciliationRuntimeMissing, RepairRecreateGeneration, "active runtime resources are missing"
 	case has(MismatchDependencyState) || has(MismatchComponentStateMixed):

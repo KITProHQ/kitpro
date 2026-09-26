@@ -1104,6 +1104,36 @@ func TestNetworkServiceLifecycleRequiresServerAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestNetworkServiceControlledRecreatePreservesAcknowledgement(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	lanAddress := localLANTestAddress(t)
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", lanAddress)
+	seedPiHoleInstallation(t, a, "inst-pihole01", lanAddress)
+	a.hostListeners = func() ([]exposure.ServiceBinding, error) { return nil, nil }
+	calls := 0
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		calls++
+		if request.Operation == "GetReconciliation" {
+			result := reconciliationResult{InstallationID: request.InstanceID, CheckedGeneration: 1, State: "repairable", RuntimeState: "stopped", ObservedAt: "2026-09-25T00:00:00Z", MismatchCodes: []string{"active_container_detached"}, RecommendedAction: "recreate_generation"}
+			return protocol.Response{OK: true, RequestID: request.ID, Result: result}, nil
+		}
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID}, nil
+	}
+	path := "/api/v1/installations/inst-pihole01/repair"
+	denied := httptest.NewRecorder()
+	a.guard(a.installations)(denied, authenticatedRequest(http.MethodPost, path, `{"action":"recreate_generation"}`, session, csrf))
+	if denied.Code != http.StatusPreconditionRequired || calls != 1 {
+		t.Fatalf("missing acknowledgement status=%d calls=%d body=%s", denied.Code, calls, denied.Body.String())
+	}
+
+	calls = 0
+	accepted := httptest.NewRecorder()
+	a.guard(a.installations)(accepted, authenticatedRequest(http.MethodPost, path, `{"action":"recreate_generation","acknowledged":true}`, session, csrf))
+	if accepted.Code != http.StatusAccepted || calls != 2 {
+		t.Fatalf("acknowledged repair status=%d calls=%d body=%s", accepted.Code, calls, accepted.Body.String())
+	}
+}
+
 func TestNetworkServiceUpdateRequiresServerAcknowledgement(t *testing.T) {
 	a, session, csrf := newTestApp(t)
 	lanAddress := localLANTestAddress(t)

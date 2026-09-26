@@ -45,7 +45,7 @@ mutation.
 | State | Meaning | Normal next step |
 | --- | --- | --- |
 | `consistent` | The recorded generation and fresh runtime observation agree. | No repair. Verify the application separately. |
-| `repairable` | The helper proved one bounded repair is safe. | Run only the returned recommended action. |
+| `repairable` | The helper proved one bounded repair is safe. This includes an exact stopped Docker container that lost only its live network attachment after a failed port-binding start. | Run only the returned recommended action. |
 | `degraded` | A non-authoritative or retained resource differs. | Preserve evidence; reconcile and review the mismatch codes. |
 | `action_required` | Ownership, configuration, dependency, or restore evidence is ambiguous. | Stop automatic retries and investigate. |
 | `runtime_missing` | The active runtime is absent but trusted desired state remains. | Use controlled `recreate_generation` only when recommended. |
@@ -63,7 +63,9 @@ one against fresh evidence:
 
 - `start_active`: start the exact stopped active generation in dependency order;
 - `recreate_generation`: create a new generation from trusted installation and
-  catalog state when the active runtime is missing;
+  catalog state when the active runtime is missing, or when fresh observation
+  proves that an otherwise exact stopped Docker container lost only its live
+  network attachment after a failed start;
 - `cleanup_resources`: remove exact non-active runtime resources without
   deleting managed or imported storage; and
 - `acknowledge_retained_missing`: record that a retained generation is already

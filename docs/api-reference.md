@@ -123,11 +123,23 @@ lifecycle path; the other actions execute through the helper repair operation.
 Clients must not invent a repair action that the latest reconciliation result
 did not recommend.
 
+Docker can remove a stopped container's live network attachment when a start
+fails while programming a host port. If the helper proves that the container,
+immutable configuration, configured network, and surviving network identity
+are otherwise exact, reconciliation reports `active_container_detached` and
+recommends `recreate_generation`. Other network or configuration drift remains
+`action_required` and is not adopted.
+
 The reconciliation request has no body. The repair request is JSON:
 
 ```json
 {"action":"recreate_generation"}
 ```
+
+For a network service whose lifecycle notice requires acknowledgement, include
+`"acknowledged":true` in the same repair request. The acknowledgement is
+revalidated by the normal recreate route; repair does not bypass the network
+service notice.
 
 Both mutation responses contain an operation `id`, its current `status`, and
 the latest reconciliation `result` when available. Repeating a request is not

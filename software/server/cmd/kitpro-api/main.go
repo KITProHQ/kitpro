@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"embed"
@@ -2240,7 +2241,8 @@ func (a *app) installationRepair(w http.ResponseWriter, r *http.Request, install
 		return
 	}
 	var input struct {
-		Action string `json:"action"`
+		Action       string `json:"action"`
+		Acknowledged bool   `json:"acknowledged,omitempty"`
 	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -2268,6 +2270,12 @@ func (a *app) installationRepair(w http.ResponseWriter, r *http.Request, install
 		query.Set("repair_action", input.Action)
 		r.URL.Path = "/api/v1/installations/" + installationID + "/recreate"
 		r.URL.RawQuery = query.Encode()
+		body, _ := json.Marshal(struct {
+			Acknowledged bool `json:"acknowledged"`
+		}{Acknowledged: input.Acknowledged})
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		r.Header.Set("Content-Type", "application/json")
 		a.installations(w, r)
 		return
 	}
