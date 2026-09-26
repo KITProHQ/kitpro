@@ -5,9 +5,9 @@
 | Debian 13 amd64 | Supported | Rootful Docker with an operator-selected non-overlapping address pool, enforcing AppArmor |
 | Ubuntu 26.04 LTS amd64 | Supported | `.deb`, rootful Docker with an operator-selected non-overlapping address pool, enforcing AppArmor; must pass the supported-host release checks |
 | Arch Linux x86_64 | Supported | `linux-lts`, fully updated official repositories, rootful Docker with an operator-selected non-overlapping address pool, enforcing AppArmor; no partial upgrades |
-| Rocky Linux 10 amd64 | Experimental | Rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; development acceptance does not promote this path into the public baseline |
+| Rocky Linux 10 amd64 | Experimental | Native RPM, rootful Podman 5, Quadlet, crun, SELinux Enforcing, and firewalld; alpha.13 application lifecycle is unavailable because the staged-generation contract is not implemented by the Podman adapter |
 
-Podman is Experimental in alpha.12 and is used only by the experimental Rocky
+Podman is Experimental in alpha.13 and is used only by the experimental Rocky
 Linux path. It is not a supported runtime on Debian, Arch Linux, or Ubuntu.
 
 Every Supported Docker host must satisfy the
@@ -19,18 +19,20 @@ Experimental Podman/Quadlet path and is not covered by this Docker prerequisite.
 
 | Capability | Debian 13 | Ubuntu 26.04 LTS | Arch Linux `linux-lts` | Rocky Linux 10 |
 | --- | --- | --- | --- | --- |
-| Basic KITPro | Certified | Supported; refresh acceptance before alpha.13 release | Certified | Experimental acceptance evidence |
-| Mandatory access control | AppArmor required and certified | AppArmor required; refresh acceptance before alpha.13 release | AppArmor required and certified | Experimental SELinux Enforcing evidence |
-| Container runtime | Rootful Docker certified | Rootful Docker required; refresh acceptance before alpha.13 release | Rootful Docker certified | Experimental rootful Podman 5 and Quadlet evidence |
-| 15-app trusted catalog | Certified | Supported; refresh catalog acceptance before alpha.13 release | Certified | Experimental acceptance evidence |
-| Multi-container Paperless-ngx | Certified | Supported; refresh lifecycle acceptance before alpha.13 release | Certified | Experimental acceptance evidence, including backup/restore |
-| Trusted external storage | Certified | Smoke certified | Smoke certified | Local read-only/read-write acceptance passed; NAS not exercised |
-| Ollama CPU | Certified | Certified | Certified | Acceptance passed |
+| Basic KITPro | Qualified | Qualified | Qualified | Package and host qualified; application install unavailable in alpha.13 |
+| Mandatory access control | AppArmor required and qualified | AppArmor required and qualified | AppArmor required and qualified | SELinux Enforcing package and host checks qualified |
+| Container runtime | Rootful Docker qualified | Rootful Docker qualified | Rootful Docker qualified | Rootful Podman 5 and Quadlet package integration only; staged application lifecycle unavailable |
+| 20-app trusted catalog | Qualified | Qualified | Qualified | Catalog is visible, but application deployment is unavailable |
+| Multi-container Paperless-ngx | Qualified | Qualified | Qualified | Not runnable through the alpha.13 Podman lifecycle path |
+| Trusted external storage | Qualified | Qualified | Qualified | Local read-only and read-write root registration passed; application attachment is blocked by the lifecycle limitation |
+| Ollama CPU | Qualified | Qualified | Qualified | Not exercised because application deployment is unavailable |
 | NVIDIA Ollama inference | Certified: RTX A2000 / Toolkit 1.20.0 | Development evidence: RTX A2000 / Toolkit 1.20.0 | Certified: RTX A2000 / Toolkit 1.20.0 | Not certified |
 | AMD accelerated workload | Not certified | Not certified | Device scoping evidence only; compute not certified | Not certified |
 | Intel accelerated workload | Not certified | Not certified | Device scoping evidence only; workload not certified | Not certified |
 | Existing host-mounted NFS/CIFS root | Detection implemented; KITPro does not mount shares | Detection implemented; KITPro does not mount shares | Detection implemented; KITPro does not mount shares | Not certified |
-| Jellyfin, Navidrome, Audiobookshelf, SFTPGo | Certified | Smoke certified | Smoke certified | Acceptance passed |
+| Jellyfin, Navidrome, Audiobookshelf, SFTPGo | Qualified | Qualified | Qualified | Not runnable through the alpha.13 Podman lifecycle path |
+| Forgejo and Plex | Qualified | Qualified | Qualified | Not runnable through the alpha.13 Podman lifecycle path |
+| Nextcloud, Pi-hole, and Syncthing Experimental profiles | Qualified within their documented constraints | Qualified within their documented constraints | Qualified within their documented constraints | Not runnable through the alpha.13 Podman lifecycle path |
 | Jellyfin NVIDIA transcoding | Not certified | Not certified | Not certified | Not certified |
 
 ## Hardware acceleration
@@ -55,15 +57,13 @@ Ollama and Jellyfin declare optional NVIDIA access. Ollama inference is live-cer
 | Debian 13 amd64 | Validated | Filesystem detection implemented; disposable live NAS unavailable | Validated with read-only media, drift, recreation, and reboot |
 | Ubuntu 26.04 LTS amd64 | Validated smoke | Same host-mounted model | Validated smoke |
 | Arch Linux x86_64 | Validated smoke | Same host-mounted model | Validated smoke under the existing `linux-lts` boundary |
-| Rocky Linux 10 amd64 | Validated | Host-mounted NAS unavailable during acceptance | Validated with SELinux Enforcing |
+| Rocky Linux 10 amd64 | Root registration validated | Host-mounted NAS unavailable during acceptance | Application attachment unavailable in alpha.13 |
 
 Navidrome and Audiobookshelf use read-only imported libraries. SFTPGo is the
-first read-write consumer and requires an exclusive root. Navidrome and SFTPGo
-passed live authenticated install, exact-mount, private-exposure, and reboot
-smoke tests on Debian and Arch. Existing Ubuntu results predate its supported
-designation and must be refreshed before the alpha.13 release.
-Audiobookshelf received full Debian acceptance with the same packaged schema
-and helper boundary.
+first read-write consumer and requires an exclusive root. The alpha.13
+Supported-host qualification covers external-storage persistence and lifecycle
+on Debian, Ubuntu, and Arch. Rocky root registration passed, but the
+Experimental Podman lifecycle limitation prevents application attachment.
 
 KITPro does not mount or credential network shares. The operating system must
 mount them first. Missing or changed mount identity fails closed.

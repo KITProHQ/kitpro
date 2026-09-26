@@ -1,12 +1,13 @@
 # KITPro Server current state
 
-Status date: 2026-09-21
+Status date: 2026-09-26
 
 This document defines the public capability boundary for KITPro Server
-`v0.1.0-alpha.12`. Shorter pages should link here instead of creating a second
-definition of what the release can do.
+`v0.1.0-alpha.13`. Alpha.13 is a release candidate until a human authorizes
+the tag and publication. Shorter pages should link here instead of creating a
+second definition of what the release can do.
 
-## What alpha.12 is
+## What alpha.13 is
 
 KITPro Server is an open-source platform for operating a trusted catalog of
 self-hosted applications on a Linux server. It coordinates runtime, storage,
@@ -18,8 +19,8 @@ owner's control. KITPro uses standard Linux, systemd, and container-runtime
 foundations that an operator can inspect. It is not a generic Docker or
 Compose administration interface.
 
-Alpha.12 is active alpha software. Breaking changes and incomplete workflows
-remain possible. Read [what alpha.12 does not yet provide](#what-alpha12-does-not-yet-provide)
+Alpha.13 is active alpha software. Breaking changes and incomplete workflows
+remain possible. Read [what alpha.13 does not yet provide](#what-alpha13-does-not-yet-provide)
 before using it with important data.
 
 ## What works today
@@ -36,6 +37,18 @@ Catalog definitions pin images by digest and describe allowed storage,
 services, secrets, dependencies, and optional devices. KITPro rejects
 arbitrary Compose files, Docker options, host networking, privileged
 containers, raw bind mounts, and arbitrary device access.
+
+Alpha.13 has exactly 20 visible applications. The original 15 are FreshRSS,
+Uptime Kuma, Mealie, Memos, Actual Budget, Vaultwarden, Home Assistant,
+Paperless-ngx, Open WebUI, IT-Tools, Ollama, Jellyfin, Navidrome,
+Audiobookshelf, and SFTPGo. Alpha.13 adds Forgejo, Plex, Nextcloud, Pi-hole,
+and Syncthing.
+
+Forgejo has no SSH exposure. Plex is CPU-only and does not configure automatic
+remote access. Nextcloud is an Experimental SQLite small-instance profile.
+Pi-hole is an Experimental DNS-only Network Service. Syncthing is an
+Experimental manual-peer TCP-only profile with discovery, relays, NAT
+traversal, QUIC, and UDP disabled.
 
 Removing an application runtime preserves its installation identity and data.
 Destructive application-data deletion is not a completed lifecycle.
@@ -70,17 +83,27 @@ repair actions, and escalation boundaries.
 ### Storage
 
 Each installation has durable identity. KITPro-managed storage belongs to that
-installation and survives runtime replacement. The helper verifies storage
-paths and ownership before it changes a runtime generation.
+installation and survives runtime replacement and runtime removal. The helper
+verifies storage paths and ownership before it changes a runtime generation.
 
 An administrator can register a local directory or an already-mounted NFS or
 CIFS directory as trusted imported storage. Applications request named,
 bounded slots. Imported storage remains outside KITPro's deletion and backup
 lifecycle.
 
+Generated application secrets remain stable across recreate, reboot, backup,
+and restore. Normal catalog, installation, operation, and HTML responses do
+not contain their values. A manifest-authorized credential reveal requires an
+authenticated session, CSRF, and valid Host and Origin headers, and returns
+`Cache-Control: no-store`.
+
+Generated secrets are root-bound plaintext in helper state and restrictive
+local backups. KITPro does not claim encryption at rest. Host root remains
+trusted.
+
 ### Backup and restore
 
-Alpha.12 can create a cold backup of declared managed application storage for
+Alpha.13 can create a cold backup of declared managed application storage for
 an existing installation. The backup records the installation, release,
 runtime generation, component images, storage topology, generated secrets,
 checksums, and detected SQLite databases.
@@ -97,23 +120,22 @@ before depending on it.
 
 ### Upgrades
 
-Fresh alpha.12 installations use the normal supported package path for Debian
-or Arch Linux.
+Fresh alpha.13 installations use the normal supported package path for Debian,
+Ubuntu, or Arch Linux.
 
-An existing alpha.11 installation must use the matching alpha.12 transition
-wrapper. The wrapper validates both KITPro state databases, creates and
-verifies the required backups, binds approval to the expected package, and
-only then permits the package transaction. Raw `apt install`, `dpkg -i`, and
-`pacman -U` transitions from alpha.11 are unsupported because they bypass
-KITPro's application-level safety checks.
+The Debian alpha.12 to alpha.13 transition uses the incoming package preflight.
+It verifies both state databases, creates a paired backup set, binds approval
+to the incoming package, and restores previously active services when
+preflight fails. Arch uses the package-bound upgrade wrapper and pacman
+pre-transaction hook.
 
-The supported transition migrates the alpha.11 schema 7 databases through
-alpha.12 schema 13 while preserving legacy receipts and ownership evidence.
+The supported transition migrates alpha.12 schema 13 databases to alpha.13
+schema 14 while preserving receipts and ownership evidence.
 Package downgrade after migration is unsupported.
 
 ### Release integrity and provenance
 
-The alpha.12 release includes SHA-256 checksums, a CycloneDX JSON SBOM, build
+The alpha.13 release set includes SHA-256 checksums, a CycloneDX JSON SBOM, build
 metadata, a release manifest, and a frozen source revision. These artifacts let
 an owner verify downloaded bytes, inspect the packaged component inventory,
 trace the release to its reviewed source state, and distinguish the frozen
@@ -124,20 +146,25 @@ formal supply-chain guarantee.
 
 ### Platform support
 
-| Category | Platform | Alpha.12 boundary |
+| Category | Platform | Alpha.13 boundary |
 | --- | --- | --- |
 | Supported | Debian 13 amd64 | Rootful Docker, systemd, and enforcing AppArmor |
+| Supported | Ubuntu 26.04 LTS amd64 | Same qualified `.deb`, rootful Docker, systemd, and enforcing AppArmor |
 | Supported | Arch Linux x86_64 | Fully updated official repositories, `linux-lts`, rootful Docker, systemd, and enforcing AppArmor |
-| Development and validation only | Ubuntu 26.04 LTS amd64 | Evidence exists, but Ubuntu is not in the public support baseline |
-| Experimental | Rocky Linux 10 amd64 | Podman, Quadlet, systemd, and SELinux work remains outside the supported baseline |
-| Experimental | Podman | Used only by the experimental Rocky path in alpha.12 |
+| Experimental | Rocky Linux 10 amd64 | Native RPM, Podman 5, Quadlet, crun, systemd, firewalld, and SELinux Enforcing; application lifecycle unavailable in alpha.13 |
+| Experimental | Podman | Used only by the Experimental Rocky path; the staged-generation lifecycle contract is not implemented |
 
 The [support matrix](../support-matrix.md) defines the platform-specific test
 and support boundary.
 
-## What alpha.12 does not yet provide
+Every Supported Docker host also requires an operator-selected,
+non-overlapping default address pool. KITPro validates current pool capacity,
+routes, and Docker networks. It does not edit Docker configuration or promise
+future collision detection.
 
-Alpha.12 does not provide:
+## What alpha.13 does not yet provide
+
+Alpha.13 does not provide:
 
 - application-aware readiness or health checks;
 - imported-storage backup;
@@ -149,11 +176,11 @@ Alpha.12 does not provide:
   restore, and recovery workflow;
 - destructive deletion of application data;
 - clustering, high availability, or automatic failover;
-- public TLS, domain, or reverse-proxy automation;
+- public TLS, domain, reverse-proxy, Certbot or ACME, or Cloudflare Tunnel automation;
 - generic Docker or Compose administration;
 - arbitrary host paths, devices, capabilities, or network modes;
 - automatic mounting of NFS or CIFS shares; or
-- a supported Rocky Linux, Podman, or Ubuntu public baseline.
+- a Supported Rocky Linux or Podman application lifecycle.
 
 The [known limitations](../release/known-limitations.md) adds application,
 hardware, and network-specific details.
@@ -163,7 +190,7 @@ hardware, and network-specific details.
 The architecture leaves room for application-aware readiness, broader backup
 and recovery, more complete browser recovery workflows, explicit data
 deletion, public TLS, additional supported platforms, and optional remote
-services. None of those directions changes the alpha.12 capability boundary.
+services. None of those directions changes the alpha.13 capability boundary.
 
 Read the [roadmap](../roadmap.md) for current priorities. Read the
 [architecture](../architecture.md) and [principles](../principles.md) for the

@@ -26,7 +26,7 @@ remains on schema version 6 to preserve backward-compatibility coverage.
 - Acceleration: optional NVIDIA with explicit CPU fallback
 - Limits: no automatic model downloads; AMD ROCm and Intel acceleration are not enabled for this release; NVIDIA is validated only within the published hardware support matrix
 
-## Supported applications
+## Visible applications
 
 | Application | Category | Purpose | Model | Storage model | GPU | Exposure and major limitation |
 | --- | --- | --- | --- | --- | --- | --- |

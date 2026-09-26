@@ -1,9 +1,10 @@
 # Back up and restore an application
 
 KITPro application backups protect one installed application's managed state.
-The public Debian and Arch baseline uses Docker. The same archive format has an
-Experimental Podman implementation for Rocky Linux, but that does not expand
-the public support promise.
+The Supported Debian, Ubuntu, and Arch baseline uses Docker. The archive format
+is runtime-neutral, but alpha.13 cannot exercise application backup or restore
+on Rocky because its Experimental Podman adapter does not implement the
+staged-generation lifecycle contract.
 
 This workflow is separate from `/api/v1/backup`. That older endpoint backs up
 the KITPro control and helper databases. It does not back up application data.
@@ -130,14 +131,13 @@ sudo systemctl status kitpro-api.service kitpro-helper.socket
 sudo journalctl -u kitpro-helper.service --since "10 minutes ago"
 ```
 
-On Docker hosts, inspect the application's containers with `docker ps`. On
-Experimental Rocky hosts use `podman ps` and check the generated Quadlet units with
-`systemctl status 'kitpro-*'`.
+On Supported hosts, inspect the application's containers with `docker ps`.
 
 Open the application and verify the restored record, file, or upload. A running
 container alone does not prove that the application's data is correct.
 
-On Rocky Linux, also verify SELinux after restore:
+When a future Rocky lifecycle implements this archive path, also verify SELinux
+after restore:
 
 ```sh
 getenforce
@@ -176,8 +176,8 @@ KITPro does not include these items:
 - custom external databases;
 - application data outside declared KITPro-managed storage.
 
-See [application backup format version 1](https://github.com/KITProHQ/kitpro/blob/v0.1.0-alpha.12/docs/architecture/application-backup-format-v1.md)
-for the frozen archive contract and [the frozen assessment](https://github.com/KITProHQ/kitpro/blob/v0.1.0-alpha.12/docs/architecture/application-backup-restore-assessment.md)
+See [application backup format version 1](../architecture/application-backup-format-v1.md)
+for the archive contract and [the assessment](../architecture/application-backup-restore-assessment.md)
 for the per-application strategy.
 
 ## Troubleshoot failures

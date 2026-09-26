@@ -1,0 +1,27 @@
+{
+  "kitpro_version": "0.1.0-alpha.13",
+  "release_status": "candidate-not-published",
+  "source_commit": null,
+  "source_tree": null,
+  "release_url": null,
+  "supported_platforms": [
+    "debian-13-amd64",
+    "ubuntu-26.04-amd64",
+    "arch-x86_64-linux-lts"
+  ],
+  "experimental_platforms": [
+    "rocky-linux-10-amd64",
+    "podman-5-quadlet"
+  ],
+  "experimental_limitations": [
+    "rocky-podman-staged-application-lifecycle-unavailable"
+  ],
+  "schema_version": 14,
+  "catalog_schema_versions": [7, 8],
+  "visible_application_count": 20,
+  "artifacts": [],
+  "sbom": null,
+  "build_metadata": [],
+  "checksums": null,
+  "completion_rule": "Copy this template outside the frozen source tree after the final build, then add the frozen source identity and verified artifact metadata."
+}

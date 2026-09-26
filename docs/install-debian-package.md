@@ -1,19 +1,18 @@
-# Install KITPro Server on Debian 13
+# Install KITPro Server on Debian 13 or Ubuntu 26.04 LTS
 
-KITPro Server's current public `.deb` baseline supports Debian 13 on amd64.
-Ubuntu Server 26.04 LTS has development validation evidence and uses the same
-`.deb` format, but it is not currently part of the public support baseline.
-Rocky Linux 10 remains Experimental.
-Use the filename and checksum from the [current public release](https://github.com/KITProHQ/kitpro/releases).
+KITPro Server alpha.13 supports Debian 13 and Ubuntu Server 26.04 LTS on amd64
+with the same qualified `.deb`. Rocky Linux 10 remains Experimental. After
+publication, use the filename and checksum from the
+[alpha.13 release](https://github.com/KITProHQ/kitpro/releases).
 
 > KITPro Server is active alpha software. Breaking changes and incomplete
-> workflows may occur. Review the [alpha.12 current state](product/kitpro-server-current-state.md)
+> workflows may occur. Review the [alpha.13 current state](product/kitpro-server-current-state.md)
 > and [known limitations](release/known-limitations.md) before using it with
 > important data.
 
 ## Prerequisites
 
-- Debian 13 on amd64, with systemd and AppArmor enabled
+- Debian 13 or Ubuntu 26.04 LTS on amd64, with systemd and AppArmor enabled
 - a compatible rootful Docker Engine that is running and exposes its local Unix
   socket
 - an explicit, operator-selected Docker default address pool that passes the
@@ -29,15 +28,14 @@ It never installs Docker, rewrites `/etc/docker/daemon.json`, or adds
 
 ## Install
 
-These commands are for a fresh alpha.12 installation. If this host runs
-alpha.11, use the [guarded alpha.11 to alpha.12 transition](upgrade-uninstall-debian-package.md#upgrade-from-alpha11-to-alpha12).
-Raw `apt install` and `dpkg -i` transitions from alpha.11 are unsupported.
+These commands are for a fresh alpha.13 installation. If this host runs
+alpha.12, use the [alpha.12 to alpha.13 transition](upgrade-uninstall-debian-package.md#upgrade-from-alpha12-to-alpha13).
 
 Verify the adjacent checksum, then install the local artifact:
 
 ```sh
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-sudo apt install ./kitpro-server_0.1.0.alpha12_amd64.deb
+sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 ```
 
 Installation creates the `kitpro-api` system account, loads the helper's
@@ -112,14 +110,11 @@ Check embedded build metadata with:
 /usr/libexec/kitpro-helper --version
 ```
 
-## Ubuntu development-evidence note
+## Ubuntu firewall note
 
-Ubuntu 26.04 validation used the same package, Docker Engine 29.8.0, and an
-inactive UFW policy. Exact-address loopback and LAN publications produced
-exact-address Docker nftables DNAT rules and no wildcard binding. Docker warns
-that published container traffic can bypass UFW's normal INPUT/OUTPUT chains,
-so administrators must not treat UFW alone as the policy boundary for a
-KITPro-published application. KITPro's Phase 1 boundary is the exact bind
-address and assigned port; hosts with custom UFW or nftables policy require a
-separate compatibility check before enabling LAN exposure. This evidence does
-not make Ubuntu a supported public platform.
+Ubuntu 26.04 qualification used the same package and rootful Docker path as
+Debian. Exact-address loopback and LAN publications created no wildcard
+binding. Docker-published traffic can bypass UFW's normal INPUT and OUTPUT
+paths, so do not treat UFW alone as the policy boundary for a published
+application. A host with custom UFW or nftables policy needs a separate
+compatibility check before LAN exposure.

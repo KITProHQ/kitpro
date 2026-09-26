@@ -367,7 +367,7 @@ Attack path:
 2. After validation, the attacker replaces a path component with a symbolic link or changes the mount.
 3. The helper writes, changes ownership, archives, or deletes a protected host path.
 
-Required outcome: the helper uses approved roots, descriptor-relative operations where practical, no-follow semantics, mount identity checks, and operation-specific path types. It rechecks mutable facts at the point of use.
+Required outcome: the helper uses approved roots, descriptor-relative operations where practical, no-follow semantics, hardlink-count checks, mount identity checks, and operation-specific path types. It rechecks mutable facts at the point of use.
 
 ### Scenario: compromised privileged helper
 
@@ -583,6 +583,19 @@ The exact credential, recovery, session, and multi-factor design remains for ADR
 Secrets need an inventory, owner, consumer list, creation source, rotation path, deletion behavior, and backup policy. A value without these properties is unmanaged.
 
 The web process should receive a secret only when its product responsibility needs the plaintext. The frontend receives a stored application credential only in the response to an explicit manifest-authorized reveal action. The helper receives only secrets required for the current privileged operation, and managed containers receive only their declared application secrets.
+
+Alpha.13 stores generated application secrets as root-bound plaintext in the
+helper database and restrictive local backups. The helper state directory is
+root-only, the API cannot read it directly, and normal unprivileged processes
+cannot traverse it. KITPro does not claim encryption at rest. Host root and an
+attacker who compromises the privileged helper remain able to read these
+values.
+
+Typed application configuration may temporarily run an exact pinned image
+offline so the application creates its own identity. The helper permits only a
+reviewed configuration type, exact managed paths, a bounded ownership handoff,
+and final owner and mode restoration. It preserves application-owned identity
+files and rejects generic templates, commands, or path input.
 
 Secret redaction happens before log and audit serialization. A display-time filter leaves copies in files and databases. Diagnostic exports apply the same rule.
 

@@ -2,7 +2,7 @@
 
 ## Contract status
 
-The alpha.12 API is an authenticated local control-plane interface for the
+The alpha.13 API is an authenticated local control-plane interface for the
 shipped dashboard and operator diagnostics. It is public source, but it is an
 alpha contract. Endpoint shapes and state names may change before a stable
 release. Internal helper socket operations are not public HTTP APIs.
@@ -55,6 +55,11 @@ reconciled before repair or retry.
 The dashboard is the supported client for installing an application, starting
 or stopping a runtime, removing a runtime while keeping its data, and
 recreating a runtime with the same installation identity and storage.
+
+Runtime removal retains the installation record, managed storage,
+external-storage bindings, and generated secrets. The next supported recovery
+uses the same installation identity. The API has no destructive
+application-data deletion endpoint.
 
 For a catalog `network-service` whose lifecycle notice requires
 acknowledgement, the API returns `428 Precondition Required` unless stop,
@@ -160,6 +165,9 @@ exists or reconcile the installation before taking another action.
 `POST /api/v1/installations/{id}/services/{service}/exposure` accepts only a
 policy mode (`internal`, `loopback`, or `lan`). Host addresses, host ports,
 container ports, protocols, and Docker binding objects are not client inputs.
+The trusted manifest can authorize dynamic TCP, multiple bindings, fixed TCP,
+fixed UDP, the same numeric TCP and UDP port, or non-HTTP TCP. Wildcard
+publication and host networking remain invalid.
 
 `DELETE /api/v1/installations/{id}/services/{service}/exposure` returns the
 service to `internal` and retains its assigned port for stable re-enable. A

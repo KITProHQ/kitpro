@@ -1,13 +1,15 @@
 # KITPro Server technical entry point
 
-KITPro Server is a Go control plane and narrowly privileged helper for trusted self-hosted applications. The API owns authentication, desired state, the browser UI, and operations. The AppArmor-confined helper independently validates typed plans and is the only KITPro process permitted to operate Docker or approved host storage.
+KITPro Server is a Go control plane and narrowly privileged helper for trusted self-hosted applications. The API owns authentication, desired state, the browser UI, and operations. The mandatory-access-control-confined helper independently validates typed plans and is the only KITPro process permitted to operate the container runtime or approved host storage.
 
 ## Supported production boundary
 
 - Debian 13 amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Ubuntu 26.04 LTS amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Arch Linux x86_64: native package, `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor.
-- Rocky Linux 10 amd64 and Podman: Experimental.
+- Rocky Linux 10 amd64 and Podman: Experimental. The native package and host
+  boundary pass, but alpha.13 application lifecycle is unavailable because the
+  Podman adapter does not implement staged generations.
 
 See the definitive [support matrix](../../docs/support-matrix.md).
 
@@ -37,11 +39,14 @@ gofmt -l .
 Build packages with the version documented in the release manifest:
 
 ```sh
-./packaging/build-package.sh 0.1.0~alpha11
-./packaging/build-arch-package.sh 0.1.0_alpha11
+./packaging/build-package.sh 0.1.0~alpha13
+./packaging/build-arch-package.sh 0.1.0_alpha13
 ```
 
-Do not infer a public release from a source version. Use the [v0.1.0-alpha.12 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12) for published artifacts. Its frozen source is commit `ada9555ab680613f8b56f6f0762abce6f0955670` on `release/0.1.0-alpha.12-prep`.
+Do not infer publication from a source version. Alpha.13 packages become
+official only after the release tag and GitHub release are published. Until
+then, use the [latest published prerelease](https://github.com/KITProHQ/kitpro/releases/latest)
+for public artifacts.
 
 ## Contributor references
 

@@ -1,41 +1,56 @@
 # KITPro Server public alpha quickstart
 
-KITPro Server `v0.1.0-alpha.12` is active alpha software. Breaking changes and
+KITPro Server `v0.1.0-alpha.13` is active alpha software. Breaking changes and
 incomplete workflows may occur. Review the [current state](../product/kitpro-server-current-state.md)
 and [known limitations](known-limitations.md) before using it with important
 data.
 
-Download the package and matching checksum file from the
-[`v0.1.0-alpha.12` release](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12).
-Verify the package before installation.
+After publication, download the package and matching checksum file from the
+`v0.1.0-alpha.13` GitHub release. Until then, alpha.13 artifacts are release
+candidates and must not be presented as published downloads.
 
-If this host runs alpha.11, do not use the fresh-install commands below. Use
-the guarded alpha.11 to alpha.12 transition for
-[Debian](../upgrade-uninstall-debian-package.md#upgrade-from-alpha11-to-alpha12)
-or [Arch Linux](../install-arch-package.md#upgrade-from-alpha11-to-alpha12).
-Raw `apt install`, `dpkg -i`, and `pacman -U` transitions from alpha.11 are
-unsupported because they bypass KITPro's application-level safety checks.
+If this host runs alpha.12, use the documented alpha.13 upgrade path for
+[Debian or Ubuntu](../upgrade-uninstall-debian-package.md#upgrade-from-alpha12-to-alpha13)
+or [Arch Linux](../install-arch-package.md#upgrade-from-alpha12-to-alpha13).
 
 ## Debian 13
 
-Requirements: amd64, rootful Docker, systemd, and an enforcing AppArmor kernel/userspace setup.
+Requirements: amd64, rootful Docker, systemd, enforcing AppArmor, and a Docker
+address pool that passes the [Supported-host prerequisite](../docker-address-pool-prerequisite.md).
 
 ```sh
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-sudo apt install ./kitpro-server_0.1.0.alpha12_amd64.deb
+sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 sudo systemctl status kitpro-api kitpro-helper
 ```
 
-The package is named `kitpro-server`. If Docker is absent, review and run `tools/install-docker.sh` or install Docker using the operating-system policy before installing KITPro.
+The package is named `kitpro-server`. If Docker is absent, review and run
+`tools/install-docker.sh` or install Docker through the operating-system
+policy before installing KITPro.
+
+## Ubuntu 26.04 LTS
+
+Ubuntu 26.04 LTS is Supported with the same qualified `.deb` and prerequisites
+as Debian. Custom UFW or nftables policies require a separate compatibility
+review because Docker-published ports do not rely only on the normal UFW
+INPUT and OUTPUT paths.
+
+```sh
+sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
+sudo systemctl status kitpro-api kitpro-helper
+```
 
 ## Arch Linux
 
-Requirements: x86_64, a fully updated system using official repositories, `linux-lts`, rootful Docker, systemd, and enforcing AppArmor. Partial upgrades are unsupported.
+Requirements: x86_64, a fully updated system using official repositories,
+`linux-lts`, rootful Docker, systemd, enforcing AppArmor, and the documented
+Docker address pool. Partial upgrades are unsupported.
 
 ```sh
 sudo pacman -Syu
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-sudo pacman -U ./kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst
+sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sudo pacman -U ./kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst
 sudo systemctl status kitpro-api kitpro-helper
 ```
 
@@ -53,7 +68,9 @@ boundary before expecting the helper's platform checks to pass.
 
 Managed data lives under `/srv/kitpro/apps/<application>/<installation>/` and survives runtime recreation. Imported data stays at the administrator-approved root and is not deleted or backed up by KITPro. Package migrations and trusted app updates protect control state, not the complete external library.
 
-Ubuntu 26.04 has development validation evidence but is not in the current public support baseline. Rocky Linux and Podman remain Experimental.
+Rocky Linux and Podman remain Experimental. The alpha.13 native package and
+host checks pass, but application installation is unavailable on the Podman
+path. See the [Rocky notes](../install-rocky-linux.md).
 
 See the [Debian guide](../install-debian-package.md), [Arch guide](../install-arch-package.md),
 [backup and restore guide](../operations/application-backup-restore.md),

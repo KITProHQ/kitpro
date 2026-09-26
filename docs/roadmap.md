@@ -1,12 +1,12 @@
 # KITPro Server roadmap
 
-This roadmap separates released alpha.12 behavior from future work. It does
+This roadmap separates alpha.13 release-candidate behavior from future work. It does
 not set delivery dates or turn direction into a commitment.
 
 ## Current state
 
-The current release is `v0.1.0-alpha.12`. KITPro Server coordinates a trusted
-application lifecycle on Debian 13 and Arch Linux. The API records durable
+The release candidate is `v0.1.0-alpha.13`. KITPro Server coordinates a trusted
+application lifecycle on Debian 13, Ubuntu 26.04 LTS, and Arch Linux. The API records durable
 operations, and a narrowly privileged helper validates and applies host and
 container changes.
 
@@ -17,7 +17,7 @@ for the full shipped boundary.
 
 ## Shipped foundations
 
-Alpha.12 includes these foundations:
+Alpha.13 includes these foundations:
 
 - local administrator setup and a local browser interface;
 - a trusted, digest-pinned application catalog;
@@ -29,13 +29,17 @@ Alpha.12 includes these foundations:
 - bounded backup and same-installation restore for managed application storage;
 - generated-secret preservation within supported backup and restore;
 - exact loopback or LAN service exposure without wildcard publication;
-- guarded alpha.11 to alpha.12 upgrade wrappers;
-- release checksums, an SBOM, build metadata, and frozen source identity; and
-- native packages for the supported Debian and Arch baselines.
+- guarded alpha.12 to alpha.13 package transitions;
+- release checksums, an SBOM, build metadata, and frozen source identity;
+- native packages for the Supported Debian, Ubuntu, and Arch baselines;
+- a 20-application catalog with constrained Forgejo, Plex, Nextcloud, Pi-hole,
+  and Syncthing profiles;
+- multiple TCP and UDP bindings with trusted fixed-port policy;
+- a fail-closed Docker address-pool prerequisite for Supported hosts.
 
 ## Current limitations
 
-Alpha.12 does not provide these capabilities:
+Alpha.13 does not provide these capabilities:
 
 - application-aware readiness checks;
 - imported-storage backup;
@@ -45,11 +49,13 @@ Alpha.12 does not provide these capabilities:
 - a complete browser workflow for every repair, backup, or recovery action;
 - destructive application-data deletion;
 - clustering, high availability, or automatic failover;
-- public TLS or domain automation; or
+- a reverse proxy, Certbot or ACME management, Cloudflare Tunnel integration,
+  or public TLS and domain automation; or
 - generic Docker or Compose administration.
 
-Rocky Linux and Podman remain Experimental. Ubuntu has development and
-validation evidence only. Neither is part of the supported alpha.12 baseline.
+Rocky Linux and Podman remain Experimental. The package and host boundary
+passes, but the alpha.13 Podman adapter cannot run the staged-generation
+application lifecycle. Ubuntu is part of the Supported alpha.13 baseline.
 The [known limitations](release/known-limitations.md) document has the complete
 public list.
 
@@ -81,9 +87,11 @@ These items are direction, not shipped capability:
 - reviewed host-to-host recovery;
 - broader hardware and application coverage;
 - public TLS and domain integration;
-- additional supported operating systems and container runtimes; and
+- additional supported operating systems and container runtimes;
 - optional remote operations that do not make local use depend on a KITPro
-  cloud service.
+  cloud service; and
+- KITPro-owned deterministic IPAM and subnet allocation, if a future design
+  can preserve per-generation isolation and host administrator control.
 
 The [historical Phase 1 roadmap](history/phase-1-roadmap.md) remains available
 as a record of the plan that led to the current implementation.

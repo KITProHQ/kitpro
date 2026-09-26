@@ -6,13 +6,13 @@ operation and recovery.
 ## Start here
 
 - [KITPro Server current state](product/kitpro-server-current-state.md)
-- [Known alpha.12 limitations](release/known-limitations.md)
+- [Known alpha.13 limitations](release/known-limitations.md)
 - [Platform support matrix](support-matrix.md)
 
 ## Installation
 
 - [Public alpha quickstart](release/quickstart.md)
-- [Install on Debian 13](install-debian-package.md)
+- [Install on Debian 13 or Ubuntu 26.04 LTS](install-debian-package.md)
 - [Install on Arch Linux](install-arch-package.md)
 - [Configure the Supported-host Docker address pool](docker-address-pool-prerequisite.md)
 - [Upgrade or remove the Debian package](upgrade-uninstall-debian-package.md)
@@ -28,13 +28,13 @@ operation and recovery.
 ## Backup and restore
 
 - [Back up and restore an application](operations/application-backup-restore.md)
-- [Application backup format in the frozen alpha.12 source](https://github.com/KITProHQ/kitpro/blob/v0.1.0-alpha.12/docs/architecture/application-backup-format-v1.md)
+- [Application backup format](architecture/application-backup-format-v1.md)
 
 ## Recovery and troubleshooting
 
 - [Recover application lifecycle state](operations/lifecycle-recovery.md)
 - [Debian installation troubleshooting](install-debian-package.md#troubleshooting)
-- [Known alpha.12 limitations](release/known-limitations.md)
+- [Known alpha.13 limitations](release/known-limitations.md)
 
 ## Concepts and architecture
 
@@ -48,11 +48,12 @@ operation and recovery.
 
 - [KITPro Server current state](product/kitpro-server-current-state.md)
 - [Platform support matrix](support-matrix.md)
-- [Known alpha.12 limitations](release/known-limitations.md)
+- [Known alpha.13 limitations](release/known-limitations.md)
 - [Current roadmap](roadmap.md)
 
 ## API and release reference
 
 - [API reference](api-reference.md)
-- [Alpha.12 release notes](release/0.1.0-alpha.12-release-notes.md)
+- [Prepared alpha.13 release notes](release/0.1.0-alpha.13-release-notes.md)
+- [Alpha.13 platform qualification](testing/results/2026-09-26-alpha13-platform-qualification.md)
 - [Release checklist](release/release-checklist.md)

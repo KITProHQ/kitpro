@@ -2,8 +2,9 @@
 
 Use this runbook when an operation remains accepted, the helper reports
 `action_required`, reconciliation reports drift, or a restore was interrupted.
-It applies to the Docker-based Debian and Arch public baseline. Rocky Linux and
-Podman remain Experimental.
+It applies to the Docker-based Debian, Ubuntu, and Arch Supported baseline.
+Rocky Linux and Podman remain Experimental, and alpha.13 cannot install an
+application through the Podman staged-generation path.
 
 This runbook recovers recorded lifecycle state on the same host and
 installation. It does not provide host-to-host restore, bare-host recovery, or

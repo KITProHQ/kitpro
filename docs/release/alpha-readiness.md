@@ -2,15 +2,16 @@
 
 ## Decision
 
-**READY FOR PUBLIC ALPHA** for the certified environments below, subject to
-the limitations in this document.
+**ALPHA.13 RELEASE CANDIDATE QUALIFIED** for the Supported environments below,
+subject to the limitations in this document. Tagging and publication still
+require explicit human authorization.
 
 ## Objective criteria
 
 - Fresh installation, authenticated setup, catalog installation, lifecycle,
   controlled exposure, and reconciliation work.
 - Single- and multi-container applications preserve installation-scoped data.
-- Debian and Arch package artifacts passed the alpha.12 release validation,
+- Debian/Ubuntu and Arch package artifacts passed the alpha.13 release validation,
   and AppArmor and systemd hardening remain active.
 - Native package upgrades create a validated pre-update backup and surface
   migration or service failures without deleting application data.
@@ -25,7 +26,11 @@ rollback of irreversible schema migrations is not promised.
 
 ## Support boundary
 
-Supported: Debian 13 amd64 and Arch Linux x86_64 with `linux-lts`, fully
-updated official repositories, rootful Docker, and enforcing AppArmor. Ubuntu
-26.04 LTS has development evidence but is not in the public baseline. Rocky
-Linux 10 and Podman remain Experimental.
+Supported: Debian 13 amd64, Ubuntu 26.04 LTS amd64, and Arch Linux x86_64 with
+`linux-lts` and fully updated official repositories. Each uses rootful Docker,
+enforcing AppArmor, and an operator-selected non-overlapping address pool.
+
+Rocky Linux 10 and Podman remain Experimental. Native package, SELinux, host,
+storage registration, and reboot checks pass. Application lifecycle is
+unavailable because the Podman adapter does not implement alpha.13 staged
+generations.

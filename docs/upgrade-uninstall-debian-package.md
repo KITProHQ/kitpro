@@ -1,31 +1,28 @@
 # Upgrade and remove the Debian-compatible package
 
-## Upgrade from alpha.11 to alpha.12
+## Upgrade from alpha.12 to alpha.13
 
-Use the alpha.12 transition wrapper on an existing alpha.11 host. A package
-manager can install bytes, but it cannot determine whether KITPro's control and
-helper state form a recoverable ownership record. The wrapper validates both
-state databases, creates and verifies the required backup set, binds approval
-to the expected package and artifact identity, and only then permits the
-package transaction.
+Alpha.13's incoming package owns the pre-unpack gate for an existing alpha.12
+host. The gate validates both state databases with the installed alpha.12
+binaries, creates one paired and verified backup set, records approval for the
+exact incoming package, and only then permits unpack and migration.
 
-Raw `apt install` and `dpkg -i` transitions from alpha.11 are unsupported.
-They bypass KITPro's application-level checks before package mutation. This
-restriction does not apply to a fresh alpha.12 installation.
+Use `apt install` so the package manager resolves the local artifact and runs
+the incoming maintainer scripts:
 
 ```sh
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-debian-upgrade
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-server_0.1.0.alpha12_amd64.deb
-curl -LO https://github.com/KITProHQ/kitpro/releases/download/v0.1.0-alpha.12/kitpro-alpha12-SHA256SUMS
-sha256sum -c kitpro-alpha12-SHA256SUMS --ignore-missing
-chmod +x kitpro-debian-upgrade
-sudo ./kitpro-debian-upgrade ./kitpro-server_0.1.0.alpha12_amd64.deb
+sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 ```
 
-The wrapper stops KITPro writers and asks each installed binary to create a
-SQLite `VACUUM INTO` backup. The verification code opens each backup
-independently, runs `integrity_check` and `foreign_key_check`, and records its
-schema version. Only then may unpack and migration continue.
+Do not use `dpkg -i` as a substitute for the documented apt path. An alpha.11
+host must first follow the published alpha.11 to alpha.12 transition. Do not
+skip a release transition that owns a package-specific recovery contract.
+
+The incoming preflight stops KITPro writers and asks each installed binary to
+create a SQLite-safe backup. It verifies both backups independently and binds
+them under one transition identity. Only then may unpack and migration
+continue.
 
 Backups remain in `/var/lib/kitpro-api/backups` and
 `/var/lib/kitpro-helper/backups` with the trust ownership of their source
@@ -34,13 +31,9 @@ AppArmor and the systemd manager configuration, and then restarts services. If p
 aborted and the previous services are restarted. Universal rollback after an
 incompatible database migration is not promised.
 
-The supported transition migrates both databases from alpha.11 schema 7
-through alpha.12 schema 13. It preserves legacy `receipts`,
-`ownership`, and `component_ownership` as migration and forensic evidence while
-adding helper operations, leases, generations, component progress,
-reconciliation state, control projections, and restore journals. Do not delete
-the pre-upgrade backups until post-upgrade reconciliation and an application
-smoke test pass.
+The supported transition migrates both databases from alpha.12 schema 13 to
+alpha.13 schema 14. Do not delete the paired pre-upgrade backups until
+post-upgrade reconciliation and an application smoke test pass.
 
 Root-local recovery tooling can verify a restored copy without opening the live
 database:

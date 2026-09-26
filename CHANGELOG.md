@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.0-alpha.13 (release candidate)
+
+- Expand the visible catalog from 15 to 20 applications with Forgejo, Plex,
+  and constrained Experimental Nextcloud, Pi-hole, and Syncthing profiles.
+- Add multiple TCP and UDP bindings, trusted fixed ports, transport-aware
+  conflict detection, and Network Service lifecycle acknowledgement.
+- Add typed application configuration, bounded ownership handoff, and the
+  Syncthing TCP-only bootstrap policy.
+- Preserve installation identity, storage choices, managed data, external
+  storage, and generated secrets through failed install recovery and runtime
+  removal.
+- Strengthen runtime identity, mount verification, candidate cleanup, package
+  preflight, paired upgrade backups, and AppArmor transitions.
+- Qualify Debian 13, Ubuntu 26.04 LTS, and Arch Linux as Supported. Keep Rocky
+  Linux 10 and Podman Experimental with the documented alpha.13 staged
+  lifecycle limitation.
+- Require an operator-selected, non-overlapping Docker address pool on
+  Supported hosts. KITPro validates the prerequisite but does not edit Docker
+  configuration or select a universal CIDR.
+
 ## Launch-video product baseline (documentation-only)
 
 - Freeze a truthful 15-application inventory and one definitive platform/capability matrix.
