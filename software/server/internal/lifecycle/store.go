@@ -276,7 +276,11 @@ func (s Store) Commit(ctx context.Context, plan Plan) error {
 		return errors.New("candidate generation has not been verified")
 	}
 	if currentActive {
-		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET status='retained',retired_at=?,cleanup_state='not_required' WHERE installation_id=? AND runtime_generation=? AND status='active'`, now, plan.InstallationID, plan.ExpectedGeneration)
+		retiredStatus, cleanupState := "retained", "not_required"
+		if plan.AllowMissingActive {
+			retiredStatus, cleanupState = "cleanup_pending", "pending"
+		}
+		result, updateErr := tx.ExecContext(ctx, `UPDATE runtime_generations SET status=?,retired_at=?,cleanup_state=? WHERE installation_id=? AND runtime_generation=? AND status='active'`, retiredStatus, now, cleanupState, plan.InstallationID, plan.ExpectedGeneration)
 		if updateErr != nil {
 			return updateErr
 		}

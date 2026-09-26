@@ -130,6 +130,11 @@ are otherwise exact, reconciliation reports `active_container_detached` and
 recommends `recreate_generation`. Other network or configuration drift remains
 `action_required` and is not adopted.
 
+Controlled recreation does not label the missing or detached source generation
+as a usable rollback. After the replacement commits, the helper removes only
+the exact unusable source resources and records that generation as removed. A
+normal verified update continues to retain its valid prior generation.
+
 The reconciliation request has no body. The repair request is JSON:
 
 ```json

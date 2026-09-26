@@ -202,7 +202,11 @@ func (r Runner) Replace(ctx context.Context, plan Plan) (Result, error) {
 		return result, UnknownOutcomeError{Phase: PhaseAfterCommit, Cause: err}
 	}
 
-	result.CleanupDeferred = r.cleanupOlder(ctx, plan)
+	keepGeneration := plan.ExpectedGeneration
+	if plan.AllowMissingActive {
+		keepGeneration = 0
+	}
+	result.CleanupDeferred = r.cleanupOlder(ctx, plan, keepGeneration)
 	return result, nil
 }
 
@@ -420,8 +424,8 @@ func (r Runner) cleanupCandidate(ctx context.Context, plan Plan) error {
 	return r.Evidence.RecordPhase(ctx, plan.OperationID, plan.FencingToken, "candidate_cleanup", "confirmed", map[string]string{"generation": fmt.Sprint(plan.Generation)})
 }
 
-func (r Runner) cleanupOlder(ctx context.Context, plan Plan) bool {
-	older, err := r.Store.OlderRetained(ctx, plan.InstallationID, plan.ExpectedGeneration)
+func (r Runner) cleanupOlder(ctx context.Context, plan Plan, keepGeneration int) bool {
+	older, err := r.Store.OlderRetained(ctx, plan.InstallationID, keepGeneration)
 	if err != nil {
 		return true
 	}
@@ -439,7 +443,12 @@ func (r Runner) cleanupOlder(ctx context.Context, plan Plan) bool {
 			continue
 		}
 		if observed.Exists {
-			if _, observeErr = r.verifyStoredGeneration(ctx, generation, containers.RuntimeStopped); observeErr != nil {
+			if plan.AllowMissingActive && generation.Generation == plan.ExpectedGeneration {
+				_, observeErr = r.observeRepairableActive(ctx, generation)
+			} else {
+				_, observeErr = r.verifyStoredGeneration(ctx, generation, containers.RuntimeStopped)
+			}
+			if observeErr != nil {
 				_ = r.Store.MarkCleanupPending(ctx, generation)
 				deferred = true
 				continue

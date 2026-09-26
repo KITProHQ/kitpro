@@ -401,7 +401,11 @@ func (r MultiRunner) Replace(ctx context.Context, plan MultiPlan) (Result, error
 	if err = r.checkpoint(ctx, plan, PhaseAfterCommit, "confirmed", nil); err != nil {
 		return result, UnknownOutcomeError{Phase: PhaseAfterCommit, Cause: err}
 	}
-	result.CleanupDeferred = r.cleanupOlder(ctx, plan)
+	keepGeneration := plan.ExpectedGeneration
+	if plan.AllowMissingActive {
+		keepGeneration = 0
+	}
+	result.CleanupDeferred = r.cleanupOlder(ctx, plan, keepGeneration)
 	return result, nil
 }
 
@@ -732,8 +736,8 @@ func (r MultiRunner) cleanupCandidate(ctx context.Context, plan MultiPlan) error
 	return nil
 }
 
-func (r MultiRunner) cleanupOlder(ctx context.Context, plan MultiPlan) bool {
-	older, err := r.Store.MultiOlderRetained(ctx, plan.InstallationID, plan.ExpectedGeneration)
+func (r MultiRunner) cleanupOlder(ctx context.Context, plan MultiPlan, keepGeneration int) bool {
+	older, err := r.Store.MultiOlderRetained(ctx, plan.InstallationID, keepGeneration)
 	if err != nil {
 		return true
 	}
@@ -745,7 +749,13 @@ func (r MultiRunner) cleanupOlder(ctx context.Context, plan MultiPlan) bool {
 			continue
 		}
 		failed := false
-		if verifyErr := r.verifyGeneration(ctx, generation, containers.RuntimeStopped); verifyErr != nil {
+		var verifyErr error
+		if plan.AllowMissingActive && generation.Generation == plan.ExpectedGeneration {
+			_, verifyErr = r.observeRepairableGeneration(ctx, generation)
+		} else {
+			verifyErr = r.verifyGeneration(ctx, generation, containers.RuntimeStopped)
+		}
+		if verifyErr != nil {
 			_ = r.Store.MarkCleanupPending(ctx, Generation{InstallationID: generation.InstallationID, Generation: generation.Generation})
 			deferred = true
 			continue

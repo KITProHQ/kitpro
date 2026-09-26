@@ -169,6 +169,13 @@ func TestMissingRuntimeControlledRecreateAdvancesGeneration(t *testing.T) {
 	if err = h.db.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id='inst-one' AND status='active'`).Scan(&active); err != nil || active != 2 {
 		t.Fatalf("active=%d err=%v", active, err)
 	}
+	var priorStatus string
+	if err = h.db.QueryRow(`SELECT status FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=1`).Scan(&priorStatus); err != nil || priorStatus != "removed" {
+		t.Fatalf("prior status=%q err=%v", priorStatus, err)
+	}
+	if h.runtime.networks["kitpro-net-inst-one-g1"].Exists {
+		t.Fatal("missing prior runtime network was retained")
+	}
 }
 
 func TestFailedStartDetachedRuntimeControlledRecreateAdvancesGeneration(t *testing.T) {
@@ -189,6 +196,16 @@ func TestFailedStartDetachedRuntimeControlledRecreateAdvancesGeneration(t *testi
 	var active int
 	if err = h.db.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id='inst-one' AND status='active'`).Scan(&active); err != nil || active != 2 {
 		t.Fatalf("active=%d err=%v", active, err)
+	}
+	var priorStatus string
+	if err = h.db.QueryRow(`SELECT status FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=1`).Scan(&priorStatus); err != nil || priorStatus != "removed" {
+		t.Fatalf("prior status=%q err=%v", priorStatus, err)
+	}
+	if observed := h.runtime.containers["old-id"]; observed.Exists {
+		t.Fatal("detached prior runtime was retained")
+	}
+	if h.runtime.networks["kitpro-net-inst-one-g1"].Exists {
+		t.Fatal("detached prior runtime network was retained")
 	}
 }
 

@@ -65,7 +65,9 @@ one against fresh evidence:
 - `recreate_generation`: create a new generation from trusted installation and
   catalog state when the active runtime is missing, or when fresh observation
   proves that an otherwise exact stopped Docker container lost only its live
-  network attachment after a failed start;
+  network attachment after a failed start. The unusable source generation is
+  cleaned after the replacement commits; it is not represented as a valid
+  retained rollback generation;
 - `cleanup_resources`: remove exact non-active runtime resources without
   deleting managed or imported storage; and
 - `acknowledge_retained_missing`: record that a retained generation is already

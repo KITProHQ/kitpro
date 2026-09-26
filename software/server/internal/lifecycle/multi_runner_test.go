@@ -98,6 +98,41 @@ func TestMultiReplacementUsesDependencyOrderAndAtomicCommit(t *testing.T) {
 	}
 }
 
+func TestMultiControlledRecreateRemovesDetachedPriorGeneration(t *testing.T) {
+	store, runtime, coordinator, plan := newMultiHarness(t, true)
+	for _, id := range []string{"db", "redis", "worker", "web"} {
+		key := "old-" + id
+		observed := runtime.containers[key]
+		observed.State = containers.RuntimeStopped
+		observed.Networks = map[string]containers.NetworkAttachment{}
+		runtime.containers[key] = observed
+	}
+	if _, err := store.DB.Exec(`UPDATE runtime_components SET state='stopped' WHERE installation_id='inst-multi' AND runtime_generation=1`); err != nil {
+		t.Fatal(err)
+	}
+	plan.AllowMissingActive = true
+	plan.RollbackSafe = false
+	result, err := (MultiRunner{Runtime: runtime, Store: *store, Evidence: coordinator}).Replace(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Generation != 2 || result.CleanupDeferred {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	var priorStatus string
+	if err = store.DB.QueryRow(`SELECT status FROM runtime_generations WHERE installation_id='inst-multi' AND runtime_generation=1`).Scan(&priorStatus); err != nil || priorStatus != "removed" {
+		t.Fatalf("prior status=%q err=%v", priorStatus, err)
+	}
+	for _, id := range []string{"db", "redis", "worker", "web"} {
+		if observed := runtime.containers["old-"+id]; observed.Exists {
+			t.Fatalf("detached prior component %s was retained", id)
+		}
+	}
+	if runtime.networks["kitpro-net-inst-multi-g1"].Exists {
+		t.Fatal("detached prior generation network was retained")
+	}
+}
+
 func TestMultiFailedCandidatePersistsIdentityBeforeCleanup(t *testing.T) {
 	store, runtime, coordinator, plan := newMultiHarness(t, true)
 	runtime.createdUserOverride = "unexpected:override"
