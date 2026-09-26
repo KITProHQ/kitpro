@@ -84,6 +84,40 @@ func TestIngressFailedCandidateRemovesIntentAndPreservesExistingState(t *testing
 	}
 }
 
+func TestIngressDeleteReleasesHostnameForSafeRecreation(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedIngressInstallation(t, a, "inst-delete01", "uptime-kuma")
+	generation := int64(0)
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		generation++
+		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: map[string]any{"generation": generation, "previous_generation": generation - 1, "configuration_sha256": strings.Repeat("a", 64)}}, nil
+	}
+	body := `{"installation_id":"inst-delete01","service_id":"web","hostname":"delete.example.test","exposure_mode":"lan","upstream_protocol":"http","tls_policy":"none","enabled":true}`
+	create := httptest.NewRecorder()
+	a.guard(a.ingressRoutes)(create, authenticatedRequest(http.MethodPost, "/api/v1/ingress", body, session, csrf))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var route ingress.Route
+	if err := json.Unmarshal(create.Body.Bytes(), &route); err != nil || route.ID == "" {
+		t.Fatalf("created route=%#v err=%v", route, err)
+	}
+	remove := httptest.NewRecorder()
+	a.guard(a.ingressRoutes)(remove, authenticatedRequest(http.MethodDelete, "/api/v1/ingress/"+route.ID, "", session, csrf))
+	if remove.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", remove.Code, remove.Body.String())
+	}
+	var count int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_routes WHERE hostname='delete.example.test'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("deleted hostname remains reserved count=%d err=%v", count, err)
+	}
+	recreate := httptest.NewRecorder()
+	a.guard(a.ingressRoutes)(recreate, authenticatedRequest(http.MethodPost, "/api/v1/ingress", body, session, csrf))
+	if recreate.Code != http.StatusCreated {
+		t.Fatalf("recreate status=%d body=%s", recreate.Code, recreate.Body.String())
+	}
+}
+
 func TestCertificateAPIResponseNeverEchoesPrivateMaterial(t *testing.T) {
 	a, session, csrf := newTestApp(t)
 	const secret = "-----BEGIN PRIVATE KEY-----\nKNOWN-PRIVATE-KEY\n-----END PRIVATE KEY-----"

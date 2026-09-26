@@ -167,7 +167,19 @@ func (a *app) ingressRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ingress candidate failed; previous routes remain active", http.StatusBadGateway)
 			return
 		}
-		_, _ = a.db.ExecContext(r.Context(), `DELETE FROM ingress_route_holds WHERE route_id=?`, routeID)
+		tx, err := a.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			http.Error(w, "route deletion requires attention", http.StatusInternalServerError)
+			return
+		}
+		if _, err = tx.ExecContext(r.Context(), `DELETE FROM ingress_route_holds WHERE route_id=?`, routeID); err == nil {
+			_, err = tx.ExecContext(r.Context(), `DELETE FROM ingress_routes WHERE route_id=?`, routeID)
+		}
+		if err != nil || tx.Commit() != nil {
+			_ = tx.Rollback()
+			http.Error(w, "route deletion requires attention", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, http.StatusOK, route)
 	default:
 		http.Error(w, "method denied", http.StatusMethodNotAllowed)
