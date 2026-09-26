@@ -7,11 +7,11 @@
 - [x] Lifecycle, runtime removal, networking, credentials, backup/restore, reboot, and security checks are current on Supported hosts.
 - [x] The Debian alpha.12 to alpha.13 and schema 13 to 14 migration is qualified.
 - [x] Current documentation records Supported and Experimental boundaries, runtime removal, credentials, plaintext secret storage, and networking limits.
-- [ ] Freeze the final documentation commit and record its HEAD and tree.
-- [ ] Run the complete repository suite on the final frozen source.
-- [ ] Build and inspect the final Debian, Arch, Rocky, SELinux, and SBOM artifacts.
-- [ ] Verify artifact reproducibility, embedded source identity, and SHA-256 checksums.
-- [ ] Install the final artifacts on the qualification hosts and rerun affected source-identity and recovery checks.
-- [ ] Complete the final release manifest and checksum manifest outside the frozen source tree.
-- [ ] Confirm a clean branch with no stale version strings or secret material.
+- [x] Freeze the final documentation commit and record its HEAD and tree.
+- [x] Run the complete repository suite on the final frozen source.
+- [x] Build and inspect the final Debian, Arch, Rocky, SELinux, and SBOM artifacts.
+- [x] Verify artifact reproducibility, embedded source identity, and SHA-256 checksums.
+- [x] Install the final artifacts on the qualification hosts and rerun affected source-identity and recovery checks.
+- [x] Complete the final release manifest and checksum manifest outside the frozen source tree.
+- [x] Confirm a clean branch with no stale version strings or secret material.
 - [ ] Obtain human authorization before push, tag, GitHub release creation, or artifact publication.
