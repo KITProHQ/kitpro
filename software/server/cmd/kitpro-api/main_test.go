@@ -48,7 +48,7 @@ func newTestApp(t *testing.T) (*app, *http.Cookie, *http.Cookie) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app{db: db, tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, allowedHosts: map[string]bool{"127.0.0.1:8080": true}, catalog: entries}
+	a := &app{db: db, supportRoot: filepath.Join(t.TempDir(), "support"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, allowedHosts: map[string]bool{"127.0.0.1:8080": true}, catalog: entries}
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
 		return protocol.Response{OK: true, RequestID: request.ID}, nil
 	}
@@ -172,7 +172,7 @@ func TestVersionEndpointReportsBuildAndSchemaMetadata(t *testing.T) {
 	req := authenticatedRequest(http.MethodGet, "/api/v1/version", "", session, csrf)
 	rec := httptest.NewRecorder()
 	a.guard(a.version)(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":7`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"catalog_schema_version":9`) {
 		t.Fatalf("version response: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -603,7 +603,7 @@ func TestCatalogAPIExposesManifestMetadata(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.SchemaVersion != manifest.CatalogMetadataSchemaVersion || detail.ID != "forgejo" || detail.Category != "Developer Tools" || detail.Kind != "application" || detail.CatalogStatus != "standard" || detail.SourceURL != "https://codeberg.org/forgejo/forgejo" {
+	if detail.SchemaVersion != manifest.IngressReadinessSchemaVersion || detail.ID != "forgejo" || detail.Category != "Developer Tools" || detail.Kind != "application" || detail.CatalogStatus != "standard" || detail.SourceURL != "https://codeberg.org/forgejo/forgejo" {
 		t.Fatalf("incomplete catalog detail: %#v", detail)
 	}
 }

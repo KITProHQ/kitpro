@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -31,6 +32,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 //go:embed web.html
@@ -60,6 +63,7 @@ type app struct {
 	helperCall    func(protocol.Request) (protocol.Response, error)
 	allocatePort  func(map[int]bool, string) (int, error)
 	hostListeners func() ([]exposure.ServiceBinding, error)
+	supportRoot   string
 	// beforeControlProjection is a deterministic fault-injection seam. A nil
 	// hook has no production effect.
 	beforeControlProjection func() error
@@ -168,7 +172,7 @@ func main() {
 			allowed[h] = true
 		}
 	}
-	a := &app{db: db, helper: env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, secureCookies: env("KITPRO_SECURE_COOKIES", "") == "1", allowedHosts: allowed}
+	a := &app{db: db, helper: env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock"), supportRoot: env("KITPRO_SUPPORT_ROOT", "/var/lib/kitpro-api/support"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, secureCookies: env("KITPRO_SECURE_COOKIES", "") == "1", allowedHosts: allowed}
 	a.catalog, e = catalog.Load()
 	if e != nil {
 		panic(e)
@@ -202,6 +206,13 @@ func main() {
 	http.HandleFunc("/api/v1/storage-roots", a.guard(a.storageRoots))
 	http.HandleFunc("/api/v1/storage-roots/", a.guard(a.storageRoots))
 	http.HandleFunc("/api/v1/backup", a.guard(a.backup))
+	http.HandleFunc("/api/v1/ingress", a.guard(a.ingressRoutes))
+	http.HandleFunc("/api/v1/ingress/", a.guard(a.ingressRoutes))
+	http.HandleFunc("/api/v1/certificates", a.guard(a.certificates))
+	http.HandleFunc("/api/v1/system/readiness", a.guard(a.systemReadiness))
+	http.HandleFunc("/api/v1/setup", a.guard(a.setupState))
+	http.HandleFunc("/api/v1/diagnostics", a.guard(a.diagnostics))
+	http.HandleFunc("/api/v1/exposure-providers", a.guard(a.exposureProviders))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
 	http.ListenAndServe(env("KITPRO_API_ADDR", "127.0.0.1:8080"), nil)
 }
@@ -344,10 +355,71 @@ func handleMaintenance(args []string) bool {
 		}
 		slog.Info("database verification completed", "component", "api", "event", "database_verification_completed", "result", "success")
 		return true
+	case "admin":
+		if len(args) < 2 || args[1] != "reset-password" || len(args) > 3 {
+			fatalMaintenance("usage: kitpro-server admin reset-password [username]")
+		}
+		if os.Geteuid() != 0 {
+			fatalMaintenance("administrator password recovery requires local root authority")
+		}
+		username := "admin"
+		if len(args) == 3 {
+			username = args[2]
+		}
+		password, err := readLocalPassword("New administrator password: ")
+		if err != nil {
+			fatalMaintenance(err.Error())
+		}
+		confirmation, err := readLocalPassword("Confirm administrator password: ")
+		if err != nil || password != confirmation {
+			fatalMaintenance("password confirmation did not match")
+		}
+		db, err := state.Open(env("KITPRO_CONTROL_DB", "/var/lib/kitpro-api/control.db"))
+		if err == nil {
+			defer db.Close()
+			err = state.Migrate(context.Background(), db, false)
+		}
+		if err == nil {
+			err = auth.Init(context.Background(), db)
+		}
+		var result auth.RecoveryResult
+		if err == nil {
+			result, err = auth.ResetPassword(context.Background(), db, username, password)
+		}
+		if err != nil {
+			fatalMaintenance(err.Error())
+		}
+		fmt.Printf("Administrator password reset. Revoked %d session(s).\n", result.SessionsRevoked)
+		return true
 	default:
 		fatalMaintenance("unknown argument")
 	}
 	return true
+}
+
+func readLocalPassword(prompt string) (string, error) {
+	info, err := os.Stdin.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return "", fmt.Errorf("password recovery requires an interactive terminal")
+	}
+	fd := int(os.Stdin.Fd())
+	termios, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		return "", fmt.Errorf("read terminal state")
+	}
+	noEcho := *termios
+	noEcho.Lflag &^= unix.ECHO
+	if err = unix.IoctlSetTermios(fd, unix.TCSETS, &noEcho); err != nil {
+		return "", fmt.Errorf("disable terminal echo")
+	}
+	defer unix.IoctlSetTermios(fd, unix.TCSETS, termios)
+	fmt.Fprint(os.Stderr, prompt)
+	value, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+	fmt.Fprintln(os.Stderr)
+	if readErr != nil {
+		return "", fmt.Errorf("read password")
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r"), nil
 }
 
 func fatalMaintenance(message string) {
@@ -537,7 +609,7 @@ func (a *app) version(w http.ResponseWriter, r *http.Request) {
 		"package_family":         packageFamily(),
 		"platform":               platformName(),
 		"schema_version":         schema,
-		"catalog_schema_version": manifest.CatalogMetadataSchemaVersion,
+		"catalog_schema_version": manifest.IngressReadinessSchemaVersion,
 	})
 }
 func (a *app) hardware(w http.ResponseWriter, r *http.Request) {
@@ -800,7 +872,7 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.CatalogMetadataSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
+	if err := a.tmpl.Execute(w, map[string]any{"Rows": rows, "Apps": apps, "Installations": installations, "StorageRoots": storageRoots, "CSRF": csrf, "Version": buildinfo.Version, "SourceCommit": buildinfo.SourceCommit, "Platform": platformName(), "Architecture": runtime.GOARCH, "PackageFamily": packageFamily(), "SchemaVersion": schema, "CatalogSchemaVersion": manifest.IngressReadinessSchemaVersion, "Health": health, "InstalledCount": len(installations), "RunningCount": runningCount, "PrivateCount": privateCount, "AttentionCount": attentionCount, "UpdateCount": updateCount, "HardwareSummary": hardwareSummary}); err != nil {
 		slog.Default().Error("dashboard render failed", "event", "ui_render_failed", "error", err)
 	}
 }
