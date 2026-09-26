@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	acmelifecycle "github.com/kitpro/kitpro/software/server/internal/acme"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/certificates"
 	"github.com/kitpro/kitpro/software/server/internal/ingress"
@@ -16,6 +17,12 @@ import (
 
 var ingressRuntime = func() ingress.Runtime { return ingress.NewNginxRuntime() }
 var certificateStore = func() certificates.MaterialStore { return certificates.MaterialStore{} }
+var acmeWorkerIssue = func(ctx context.Context, request acmelifecycle.WorkerRequest) (acmelifecycle.IssuedMaterial, error) {
+	return (acmelifecycle.WorkerClient{}).Issue(ctx, request)
+}
+var reloadIngressCertificate = func(ctx context.Context) error {
+	return ingress.NewNginxRuntime().ReloadAndVerifyCurrent(ctx)
+}
 
 func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Request) (map[string]any, error) {
 	if len(request.IngressRoutes) > 128 {
@@ -136,6 +143,88 @@ func installCertificateMaterial(ctx context.Context, db *sql.DB, request protoco
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.ExecContext(ctx, `INSERT INTO certificate_material(certificate_id,hostname,method,certificate_sha256,public_key_sha256,state,created_at,updated_at) VALUES(?,?,'provided',?,?,'issued',?,?) ON CONFLICT(certificate_id) DO UPDATE SET hostname=excluded.hostname,certificate_sha256=excluded.certificate_sha256,public_key_sha256=excluded.public_key_sha256,state='issued',updated_at=excluded.updated_at`, metadata.CertificateID, metadata.Hostname, metadata.CertificateSHA256, metadata.PublicKeySHA256, now, now)
 	return metadata, err
+}
+
+func issueACMECertificate(ctx context.Context, db *sql.DB, request protocol.Request, renewal bool) (certificates.Metadata, error) {
+	if request.CertificateID == "" || request.Hostname == "" {
+		return certificates.Metadata{}, fmt.Errorf("invalid ACME request")
+	}
+	email, directory, acceptTerms := request.ACMEEmail, request.ACMEDirectory, request.AcceptACMETerms
+	var existing int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificate_material WHERE certificate_id=? AND hostname=? AND method='acme'`, request.CertificateID, request.Hostname).Scan(&existing); err != nil {
+		return certificates.Metadata{}, fmt.Errorf("certificate state unavailable")
+	}
+	if renewal {
+		if existing != 1 {
+			return certificates.Metadata{}, fmt.Errorf("ACME certificate is unavailable")
+		}
+		if err := db.QueryRowContext(ctx, `SELECT contact_email,directory FROM certificate_acme WHERE certificate_id=?`, request.CertificateID).Scan(&email, &directory); err != nil {
+			return certificates.Metadata{}, fmt.Errorf("ACME renewal state unavailable")
+		}
+		acceptTerms = true
+	} else if existing != 0 {
+		return certificates.Metadata{}, fmt.Errorf("ACME certificate already exists")
+	}
+	material, err := acmeWorkerIssue(ctx, acmelifecycle.WorkerRequest{Hostname: request.Hostname, Email: email, Directory: directory, AcceptTerms: acceptTerms})
+	if err != nil {
+		return certificates.Metadata{}, err
+	}
+	materialStore := certificateStore()
+	metadata, err := materialStore.Install(request.CertificateID, request.Hostname, material.CertificatePEM, material.PrivateKeyPEM, time.Now().UTC())
+	material.PrivateKeyPEM, material.CertificatePEM = nil, nil
+	if err != nil {
+		return certificates.Metadata{}, fmt.Errorf("issued certificate material was rejected")
+	}
+	var referenced int
+	if existing == 1 {
+		if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ingress_generation_routes r JOIN ingress_generations g ON g.generation=r.generation WHERE r.certificate_id=? AND g.status='active'`, request.CertificateID).Scan(&referenced); err != nil {
+			_ = materialStore.RollbackReplacement(request.CertificateID)
+			return certificates.Metadata{}, fmt.Errorf("certificate route state unavailable")
+		}
+	}
+	if referenced > 0 {
+		if err = reloadIngressCertificate(ctx); err != nil {
+			if rollbackErr := materialStore.RollbackReplacement(request.CertificateID); rollbackErr == nil {
+				_ = reloadIngressCertificate(ctx)
+			}
+			return certificates.Metadata{}, fmt.Errorf("certificate activation failed; previous certificate retained")
+		}
+	}
+	state := "issued"
+	if referenced > 0 {
+		state = "active"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	nextRenewal := metadata.NotAfter.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		if existing == 1 {
+			_ = materialStore.RollbackReplacement(request.CertificateID)
+		}
+		return certificates.Metadata{}, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO certificate_material(certificate_id,hostname,method,certificate_sha256,public_key_sha256,state,created_at,updated_at) VALUES(?,?,'acme',?,?,?, ?,?) ON CONFLICT(certificate_id) DO UPDATE SET certificate_sha256=excluded.certificate_sha256,public_key_sha256=excluded.public_key_sha256,state=excluded.state,updated_at=excluded.updated_at`, metadata.CertificateID, metadata.Hostname, metadata.CertificateSHA256, metadata.PublicKeySHA256, state, now, now); err == nil {
+		_, err = tx.ExecContext(ctx, `INSERT INTO certificate_acme(certificate_id,contact_email,directory,next_renewal_at,last_attempt_at,last_success_at,last_error_code) VALUES(?,?,?,?,?,?, '') ON CONFLICT(certificate_id) DO UPDATE SET contact_email=excluded.contact_email,directory=excluded.directory,next_renewal_at=excluded.next_renewal_at,last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,last_error_code=''`, metadata.CertificateID, email, directory, nextRenewal, now, now)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		if existing == 1 {
+			_ = materialStore.RollbackReplacement(request.CertificateID)
+			if referenced > 0 {
+				_ = reloadIngressCertificate(ctx)
+			}
+		}
+		return certificates.Metadata{}, fmt.Errorf("certificate state could not be committed")
+	}
+	if existing == 1 {
+		if err = materialStore.CommitReplacement(request.CertificateID); err != nil {
+			return certificates.Metadata{}, fmt.Errorf("certificate cleanup failed")
+		}
+	}
+	return metadata, nil
 }
 
 func ingressErrorCode(err error) string {

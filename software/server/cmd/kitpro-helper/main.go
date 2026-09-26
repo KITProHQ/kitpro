@@ -464,7 +464,7 @@ func revealApplicationCredential(db *sql.DB, request protocol.Request) (protocol
 
 func isDurableMutation(operation string) bool {
 	switch operation {
-	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup", "ApplyIngressGeneration", "InstallCertificateMaterial":
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup", "ApplyIngressGeneration", "InstallCertificateMaterial", "IssueACMECertificate", "RenewACMECertificate":
 		return true
 	default:
 		return false
@@ -487,7 +487,7 @@ func operationScope(r protocol.Request) string {
 	if r.Operation == "RegisterStorageRoot" || r.Operation == "RemoveStorageRoot" {
 		return "host-storage"
 	}
-	if r.Operation == "ApplyIngressGeneration" || r.Operation == "InstallCertificateMaterial" {
+	if r.Operation == "ApplyIngressGeneration" || r.Operation == "InstallCertificateMaterial" || r.Operation == "IssueACMECertificate" || r.Operation == "RenewACMECertificate" {
 		return "host-ingress"
 	}
 	return "helper-state"
@@ -585,6 +585,13 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 		result, err := installCertificateMaterial(context.Background(), db, r)
 		if err != nil {
 			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "CertificateRejected", Error: "certificate material was rejected"})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "IssueACMECertificate", "RenewACMECertificate":
+		result, err := issueACMECertificate(context.Background(), db, r, r.Operation == "RenewACMECertificate")
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "ACMERejected", Error: err.Error()})
 		} else {
 			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 		}

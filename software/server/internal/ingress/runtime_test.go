@@ -103,3 +103,35 @@ func TestNginxRuntimeRejectsOverwriteAndRollsBackLink(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNginxRuntimeReloadsAndVerifiesCurrentCertificateConfiguration(t *testing.T) {
+	root := t.TempDir()
+	generation := filepath.Join(root, "generations", "1")
+	if err := os.MkdirAll(filepath.Join(root, "run"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(generation, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(generation, "nginx.conf"), []byte("events {}"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(generation, filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run", "nginx.pid"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	var signals []syscall.Signal
+	runtime := NginxRuntime{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls++
+		return nil, nil
+	}, Signal: func(_ int, signal syscall.Signal) error { signals = append(signals, signal); return nil }}
+	if err := runtime.ReloadAndVerifyCurrent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(signals) != 2 || signals[0] != syscall.SIGHUP || signals[1] != 0 {
+		t.Fatalf("calls=%d signals=%v", calls, signals)
+	}
+}

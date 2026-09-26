@@ -104,7 +104,7 @@ stop_runtime() {
             systemctl stop "$unit" 2>/dev/null || true
         done < <(find "$QUADLET_DIR" -maxdepth 1 -type f \( -name 'kitpro-*.container' -o -name 'kitpro-*.network' -o -name 'kitpro-*.volume' -o -name 'kitpro-*.pod' \) -print0)
     fi
-    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket 2>/dev/null || true
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service 2>/dev/null || true
 }
 
 archive_runtime() {

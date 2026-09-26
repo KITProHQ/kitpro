@@ -35,7 +35,7 @@ UMask=0077
 # Podman lifecycle execution occurs in the generated systemd units. The helper
 # writes only KITPro Quadlets and secret files; rootful Podman inspection needs
 # its runtime and storage locks.
-ReadWritePaths=/run/kitpro -/run/containers -/var/lib/containers /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro /etc/containers/systemd /etc/kitpro-server/runtime
+ReadWritePaths=/run/kitpro /run/kitpro-ingress -/run/containers -/var/lib/containers /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro /etc/containers/systemd /etc/kitpro-server/runtime
 Restart=on-failure
 
 [Install]

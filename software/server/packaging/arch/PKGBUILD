@@ -8,7 +8,7 @@ license=('Apache-2.0')
 depends=('apparmor' 'docker' 'nginx' 'systemd')
 makedepends=('go')
 install=kitpro-server.install
-backup=('etc/apparmor.d/usr.libexec.kitpro-helper')
+backup=('etc/apparmor.d/usr.libexec.kitpro-helper' 'etc/apparmor.d/usr.libexec.kitpro-acme')
 options=('!debug' '!strip')
 source=("${pkgname}-${pkgver}.tar.gz")
 sha256sums=('SKIP')
@@ -25,6 +25,7 @@ build() {
     export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
     go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-api ./cmd/kitpro-api
     go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-helper ./cmd/kitpro-helper
+    go build -trimpath -buildvcs=false -ldflags "$ldflags" -o kitpro-acme ./cmd/kitpro-acme
 }
 
 package() {
@@ -32,13 +33,16 @@ package() {
     install -Dm0755 "$source_root/kitpro-api" "$pkgdir/usr/bin/kitpro-api"
     ln -s kitpro-api "$pkgdir/usr/bin/kitpro-server"
     install -Dm0755 "$source_root/kitpro-helper" "$pkgdir/usr/libexec/kitpro-helper"
+    install -Dm0755 "$source_root/kitpro-acme" "$pkgdir/usr/libexec/kitpro-acme"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-api.service" "$pkgdir/usr/lib/systemd/system/kitpro-api.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-ingress.service" "$pkgdir/usr/lib/systemd/system/kitpro-ingress.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.service" "$pkgdir/usr/lib/systemd/system/kitpro-helper.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.socket" "$pkgdir/usr/lib/systemd/system/kitpro-helper.socket"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-acme.service" "$pkgdir/usr/lib/systemd/system/kitpro-acme.service"
     install -Dm0644 "$source_root/packaging/tmpfiles/kitpro.conf" "$pkgdir/usr/lib/tmpfiles.d/kitpro.conf"
     install -Dm0644 "$source_root/packaging/nginx/bootstrap.conf" "$pkgdir/usr/share/kitpro-server/ingress-bootstrap.conf"
     install -Dm0644 "$source_root/packaging/apparmor/kitpro-helper" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-helper"
+    install -Dm0644 "$source_root/packaging/apparmor/kitpro-acme" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-acme"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.conf" "$pkgdir/usr/share/kitpro-server/kitpro-server.conf"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.sysusers" "$pkgdir/usr/lib/sysusers.d/kitpro-server.conf"
     install -Dm0755 "$source_root/packaging/arch/kitpro-arch-upgrade" "$pkgdir/usr/libexec/kitpro-arch-upgrade"

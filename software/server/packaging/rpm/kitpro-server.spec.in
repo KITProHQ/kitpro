@@ -53,6 +53,7 @@ cd software/server
 export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-api ./cmd/kitpro-api
 go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-helper ./cmd/kitpro-helper
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-acme ./cmd/kitpro-acme
 make -C packaging/selinux kitpro.pp
 bzip2 -9 packaging/selinux/kitpro.pp
 
@@ -61,6 +62,7 @@ cd software/server
 install -Dpm0755 kitpro-api %{buildroot}%{_bindir}/kitpro-api
 ln -s kitpro-api %{buildroot}%{_bindir}/kitpro-server
 install -Dpm0755 kitpro-helper %{buildroot}%{_libexecdir}/kitpro-helper
+install -Dpm0755 kitpro-acme %{buildroot}%{_libexecdir}/kitpro-acme
 install -Dpm0755 packaging/rpm/kitpro-podman-command %{buildroot}%{_libexecdir}/kitpro-podman-command
 install -Dpm0755 packaging/rpm/kitpro-server-uninstall %{buildroot}%{_sbindir}/kitpro-server-uninstall
 install -Dpm0644 packaging/systemd/kitpro-api.service %{buildroot}%{_unitdir}/kitpro-api.service
@@ -68,6 +70,7 @@ install -Dpm0644 packaging/systemd/kitpro-ingress.service %{buildroot}%{_unitdir
 install -Dpm0644 packaging/nginx/bootstrap.conf %{buildroot}%{_datadir}/kitpro-server/ingress-bootstrap.conf
 install -Dpm0644 packaging/systemd/kitpro-helper-rocky.service %{buildroot}%{_unitdir}/kitpro-helper.service
 install -Dpm0644 packaging/systemd/kitpro-helper.socket %{buildroot}%{_unitdir}/kitpro-helper.socket
+install -Dpm0644 packaging/systemd/kitpro-acme-rocky.service %{buildroot}%{_unitdir}/kitpro-acme.service
 install -Dpm0644 packaging/tmpfiles/kitpro.conf %{buildroot}%{_tmpfilesdir}/kitpro.conf
 install -Dpm0644 packaging/rpm/kitpro-server.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/kitpro-server
 install -Dpm0644 packaging/rpm/kitpro-server.sysusers %{buildroot}%{_sysusersdir}/kitpro-server.conf
@@ -114,7 +117,7 @@ if [ "$1" -gt 1 ] && [ -x %{_bindir}/kitpro-api ] && [ -x %{_libexecdir}/kitpro-
 fi
 
 %post
-%systemd_post kitpro-helper.socket kitpro-api.service kitpro-ingress.service
+%systemd_post kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service
 systemd-sysusers %{_sysusersdir}/kitpro-server.conf
 systemd-tmpfiles --create %{_tmpfilesdir}/kitpro.conf
 if [ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf ]; then
@@ -134,16 +137,16 @@ runuser -u kitpro-api -- %{_bindir}/kitpro-api --migrate-only
 %{_libexecdir}/kitpro-helper --migrate-only
 %{_sbindir}/kitpro-server-uninstall --restore
 systemctl daemon-reload
-systemctl enable --now kitpro-helper.socket kitpro-api.service kitpro-ingress.service
+systemctl enable --now kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service
 
 %preun
 if [ "$1" -eq 0 ] && [ ! -e /run/kitpro/purge-complete ]; then
     %{_sbindir}/kitpro-server-uninstall --preserve-data
 fi
-%systemd_preun kitpro-helper.socket kitpro-api.service kitpro-ingress.service
+%systemd_preun kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service
 
 %postun
-%systemd_postun_with_restart kitpro-helper.socket kitpro-api.service kitpro-ingress.service
+%systemd_postun_with_restart kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service
 if [ "$1" -eq 0 ]; then
     rm -f /run/kitpro/purge-complete
     rmdir /run/kitpro 2>/dev/null || true
@@ -164,6 +167,7 @@ fi
 %{_bindir}/kitpro-api
 %{_bindir}/kitpro-server
 %{_libexecdir}/kitpro-helper
+%{_libexecdir}/kitpro-acme
 %{_libexecdir}/kitpro-podman-command
 %{_sbindir}/kitpro-server-uninstall
 %{_unitdir}/kitpro-api.service
@@ -171,6 +175,7 @@ fi
 %{_datadir}/kitpro-server/ingress-bootstrap.conf
 %{_unitdir}/kitpro-helper.service
 %{_unitdir}/kitpro-helper.socket
+%{_unitdir}/kitpro-acme.service
 %{_tmpfilesdir}/kitpro.conf
 %{_sysusersdir}/kitpro-server.conf
 %{_mandir}/man8/kitpro-api.8*

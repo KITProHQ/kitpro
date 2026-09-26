@@ -9,6 +9,7 @@
   /run/kitpro/** rw,
   /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,
+  /run/kitpro-ingress/acme.sock rw,
   /usr/sbin/nginx ix,
   # backup.Vacuum atomically publishes a verified helper upgrade backup by
   # hard-linking its private temporary file to the final name in the same

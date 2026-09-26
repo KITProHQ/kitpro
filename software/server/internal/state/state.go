@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 15
+	target := 16
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -596,6 +596,31 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=15"); err != nil {
+			return err
+		}
+	}
+	if n < 16 {
+		certificateTable := "certificates"
+		if helper {
+			certificateTable = "certificate_material"
+			if _, err = tx.ExecContext(ctx, `ALTER TABLE ingress_generation_routes ADD COLUMN backend_port INTEGER NOT NULL DEFAULT 0 CHECK(backend_port BETWEEN 0 AND 65535)`); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS certificate_acme (
+			certificate_id TEXT PRIMARY KEY,
+			contact_email TEXT NOT NULL,
+			directory TEXT NOT NULL CHECK(directory IN ('letsencrypt-production','letsencrypt-staging')),
+			next_renewal_at TEXT NOT NULL,
+			last_attempt_at TEXT NOT NULL DEFAULT '',
+			last_success_at TEXT NOT NULL DEFAULT '',
+			last_error_code TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(certificate_id) REFERENCES `+certificateTable+`(certificate_id) ON DELETE CASCADE
+		);`)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=16"); err != nil {
 			return err
 		}
 	}

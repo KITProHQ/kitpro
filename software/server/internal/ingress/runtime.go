@@ -143,6 +143,26 @@ func (n NginxRuntime) VerifyGeneration(ctx context.Context, generation int64) er
 	return nil
 }
 
+// ReloadAndVerifyCurrent is used after atomically replacing certificate
+// material referenced by the active generation. It validates before reload and
+// confirms the managed process remains alive after accepting the new material.
+func (n NginxRuntime) ReloadAndVerifyCurrent(ctx context.Context) error {
+	if err := n.validate(); err != nil {
+		return err
+	}
+	output, err := n.Run(ctx, "/usr/sbin/nginx", "-t", "-p", n.Root+"/", "-c", "current/nginx.conf")
+	if err != nil {
+		return fmt.Errorf("active nginx configuration failed verification: %s", boundedOutput(output))
+	}
+	if err = n.reload(); err != nil {
+		return err
+	}
+	if err = n.signal(0); err != nil {
+		return fmt.Errorf("managed nginx process is unavailable")
+	}
+	return nil
+}
+
 func (n NginxRuntime) Cleanup(_ context.Context, candidate Candidate) error {
 	if candidate.PreviousGeneration == 0 {
 		return nil

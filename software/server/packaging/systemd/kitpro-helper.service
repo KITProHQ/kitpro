@@ -32,7 +32,7 @@ SystemCallFilter=@system-service
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH
 AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH
 UMask=0077
-ReadWritePaths=/run/kitpro /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro
+ReadWritePaths=/run/kitpro /run/kitpro-ingress /var/lib/kitpro-helper /srv/kitpro /var/log/kitpro
 Restart=on-failure
 
 [Install]

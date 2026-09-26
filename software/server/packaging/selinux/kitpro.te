@@ -1,7 +1,35 @@
-policy_module(kitpro, 1.0.0)
+policy_module(kitpro, 1.1.0)
 
 # KITPro-managed application data uses the standard container file type. Each
 # private mount receives an MCS label from Podman's :Z handling at runtime.
 gen_require(`
     type container_file_t;
+    type httpd_t;
+    type var_run_t;
 ')
+
+type kitpro_acme_t;
+type kitpro_acme_exec_t;
+init_daemon_domain(kitpro_acme_t, kitpro_acme_exec_t)
+
+type kitpro_acme_state_t;
+files_type(kitpro_acme_state_t)
+
+type kitpro_acme_runtime_t;
+files_runtime_file(kitpro_acme_runtime_t)
+
+manage_dirs_pattern(kitpro_acme_t, kitpro_acme_state_t, kitpro_acme_state_t)
+manage_files_pattern(kitpro_acme_t, kitpro_acme_state_t, kitpro_acme_state_t)
+manage_sock_files_pattern(kitpro_acme_t, var_run_t, kitpro_acme_runtime_t)
+
+files_search_var_lib(kitpro_acme_t)
+files_search_pids(kitpro_acme_t)
+auth_read_passwd(kitpro_acme_t)
+miscfiles_read_generic_certs(kitpro_acme_t)
+sysnet_dns_name_resolve(kitpro_acme_t)
+corenet_tcp_connect_http_port(kitpro_acme_t)
+corenet_tcp_connect_http_cache_port(kitpro_acme_t)
+
+files_search_pids(httpd_t)
+allow httpd_t kitpro_acme_runtime_t:sock_file { getattr open read write };
+allow httpd_t kitpro_acme_t:unix_stream_socket connectto;

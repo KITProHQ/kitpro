@@ -212,11 +212,13 @@ func main() {
 	http.HandleFunc("/api/v1/ingress", a.guard(a.ingressRoutes))
 	http.HandleFunc("/api/v1/ingress/", a.guard(a.ingressRoutes))
 	http.HandleFunc("/api/v1/certificates", a.guard(a.certificates))
+	http.HandleFunc("/api/v1/certificates/", a.guard(a.certificates))
 	http.HandleFunc("/api/v1/system/readiness", a.guard(a.systemReadiness))
 	http.HandleFunc("/api/v1/setup", a.guard(a.setupState))
 	http.HandleFunc("/api/v1/diagnostics", a.guard(a.diagnostics))
 	http.HandleFunc("/api/v1/exposure-providers", a.guard(a.exposureProviders))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
+	go a.runACMERenewalScheduler()
 	http.ListenAndServe(env("KITPRO_API_ADDR", "127.0.0.1:8080"), nil)
 }
 

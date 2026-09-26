@@ -8,6 +8,7 @@ import (
 )
 
 const cloudflareOriginPort = 18080
+const acmeChallengeSocket = "/run/kitpro-ingress/acme.sock"
 
 type RenderOptions struct {
 	CertificateRoot string
@@ -31,14 +32,19 @@ func RenderNginx(routes []AppliedRoute, options RenderOptions) ([]byte, error) {
 	var out bytes.Buffer
 	fmt.Fprintf(&out, "user %s;\nworker_processes auto;\npid run/nginx.pid;\nerror_log logs/error.log warn;\nevents { worker_connections 1024; }\nhttp {\n", options.WorkerUser)
 	out.WriteString("  access_log logs/access.log combined;\n  server_tokens off;\n  proxy_http_version 1.1;\n  map $http_upgrade $kitpro_connection { default upgrade; '' close; }\n")
-	out.WriteString("  server { listen 80 default_server; listen 443 ssl default_server; ssl_reject_handshake on; server_name _; return 444; }\n")
+	out.WriteString("  server { listen 80 default_server; server_name _;\n")
+	writeACMEChallengeLocation(&out)
+	out.WriteString("    location / { return 444; }\n  }\n")
+	out.WriteString("  server { listen 443 ssl default_server; ssl_reject_handshake on; server_name _; }\n")
 	for _, route := range routes {
 		listen := "80"
 		if route.ExposureMode == CloudflareTunnel {
 			listen = "127.0.0.1:" + strconv.Itoa(cloudflareOriginPort)
 		}
 		if route.ExposureMode == ManagedHTTPS || route.TLSPolicy == TLSProvided {
-			out.WriteString("  server {\n    listen 80;\n    server_name " + route.Hostname + ";\n    return 308 https://$host$request_uri;\n  }\n")
+			out.WriteString("  server {\n    listen 80;\n    server_name " + route.Hostname + ";\n")
+			writeACMEChallengeLocation(&out)
+			out.WriteString("    location / { return 308 https://$host$request_uri; }\n  }\n")
 			listen = "443 ssl"
 		}
 		out.WriteString("  server {\n    listen " + listen + ";\n    server_name " + route.Hostname + ";\n")
@@ -55,4 +61,13 @@ func RenderNginx(routes []AppliedRoute, options RenderOptions) ([]byte, error) {
 	}
 	out.WriteString("}\n")
 	return out.Bytes(), nil
+}
+
+func writeACMEChallengeLocation(out *bytes.Buffer) {
+	out.WriteString("    location ^~ /.well-known/acme-challenge/ {\n")
+	out.WriteString("      proxy_pass http://unix:" + acmeChallengeSocket + ":;\n")
+	out.WriteString("      proxy_set_header Host $host;\n")
+	out.WriteString("      proxy_pass_request_body off;\n")
+	out.WriteString("      proxy_set_header Content-Length \"\";\n")
+	out.WriteString("    }\n")
 }

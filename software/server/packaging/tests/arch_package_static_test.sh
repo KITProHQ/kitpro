@@ -9,7 +9,7 @@ upgrade_hook="$arch_dir/kitpro-server-upgrade.hook"
 
 bash -n "$server_dir/packaging/build-arch-package.sh" "$arch_dir/kitpro-server.install" "$upgrade_script"
 shellcheck "$server_dir/packaging/build-arch-package.sh" "$arch_dir/kitpro-server.install" "$upgrade_script"
-grep -Fxq "depends=('apparmor' 'docker' 'systemd')" "$arch_dir/PKGBUILD"
+grep -Fxq "depends=('apparmor' 'docker' 'nginx' 'systemd')" "$arch_dir/PKGBUILD"
 grep -Fxq "license=('Apache-2.0')" "$arch_dir/PKGBUILD"
 grep -Fxq "options=('!debug' '!strip')" "$arch_dir/PKGBUILD"
 grep -Fq 'local public_version=${pkgver/_/"~"}' "$arch_dir/PKGBUILD"
@@ -18,6 +18,10 @@ grep -q 'EnvironmentFile=-/etc/conf.d/kitpro-server' "$server_dir/packaging/syst
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$server_dir/packaging/tmpfiles/kitpro.conf"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$server_dir/packaging/systemd/kitpro-helper.service"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$server_dir/packaging/systemd/kitpro-helper.service"
+grep -q 'go build .* -o kitpro-acme ./cmd/kitpro-acme' "$arch_dir/PKGBUILD"
+grep -q 'kitpro-acme.service' "$arch_dir/kitpro-server.install"
+grep -q 'usr.libexec.kitpro-acme' "$arch_dir/kitpro-server.install"
+grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$server_dir/packaging/systemd/kitpro-acme.service"
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$server_dir/packaging/systemd/kitpro-helper.service"; then
     printf 'helper gained an unapproved capability\n' >&2
     exit 1

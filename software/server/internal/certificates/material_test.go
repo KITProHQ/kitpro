@@ -81,3 +81,50 @@ func TestPrivateKeyIsNeverReturnedInMetadata(t *testing.T) {
 		t.Fatal("private key disclosed")
 	}
 }
+
+func TestFailedReplacementRestoresPreviousKnownGoodMaterial(t *testing.T) {
+	now := time.Now().UTC()
+	firstCertificate, firstKey := testMaterial(t, "app.example.test", now)
+	secondCertificate, secondKey := testMaterial(t, "app.example.test", now)
+	store := MaterialStore{Root: t.TempDir()}
+	const certificateID = "cert-0123456789abcdef"
+	if _, err := store.Install(certificateID, "app.example.test", firstCertificate, firstKey, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Install(certificateID, "app.example.test", secondCertificate, secondKey, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RollbackReplacement(certificateID); err != nil {
+		t.Fatal(err)
+	}
+	active, err := os.ReadFile(filepath.Join(store.Root, certificateID, "fullchain.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(active) != string(firstCertificate) {
+		t.Fatal("failed replacement remained active")
+	}
+	if _, err = os.Stat(filepath.Join(store.Root, certificateID+".previous")); !os.IsNotExist(err) {
+		t.Fatal("previous certificate was not consumed by rollback")
+	}
+}
+
+func TestSuccessfulReplacementCommitsAndDropsPredecessor(t *testing.T) {
+	now := time.Now().UTC()
+	firstCertificate, firstKey := testMaterial(t, "app.example.test", now)
+	secondCertificate, secondKey := testMaterial(t, "app.example.test", now)
+	store := MaterialStore{Root: t.TempDir()}
+	const certificateID = "cert-0123456789abcdef"
+	if _, err := store.Install(certificateID, "app.example.test", firstCertificate, firstKey, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Install(certificateID, "app.example.test", secondCertificate, secondKey, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitReplacement(certificateID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root, certificateID+".previous")); !os.IsNotExist(err) {
+		t.Fatal("previous certificate retained after commit")
+	}
+}

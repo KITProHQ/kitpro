@@ -62,6 +62,9 @@ type Request struct {
 	Hostname        string                   `json:"hostname,omitempty"`
 	CertificatePEM  string                   `json:"certificate_pem,omitempty"`
 	PrivateKeyPEM   string                   `json:"private_key_pem,omitempty"`
+	ACMEEmail       string                   `json:"acme_email,omitempty"`
+	ACMEDirectory   string                   `json:"acme_directory,omitempty"`
+	AcceptACMETerms bool                     `json:"accept_acme_terms,omitempty"`
 	ProviderID      string                   `json:"provider_id,omitempty"`
 	ProviderToken   string                   `json:"provider_token,omitempty"`
 }

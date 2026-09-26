@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,5 +98,43 @@ func TestCertificateAPIResponseNeverEchoesPrivateMaterial(t *testing.T) {
 	}
 	if contains := string(recorder.Body.Bytes()); contains == secret || len(contains) > 0 && json.Valid([]byte(contains)) == false {
 		t.Fatalf("unsafe response %q", contains)
+	}
+}
+
+func TestACMECertificateLifecycleIsTypedAndCredentialFree(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedIngressInstallation(t, a, "inst-acme0001", "uptime-kuma")
+	var certificateID string
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		if request.Operation == "IssueACMECertificate" {
+			if request.CertificatePEM != "" || request.PrivateKeyPEM != "" || request.ACMEEmail != "admin@example.test" || request.ACMEDirectory != "letsencrypt-staging" || !request.AcceptACMETerms {
+				t.Fatalf("unsafe or incomplete ACME request: %#v", request)
+			}
+			certificateID = request.CertificateID
+			return protocol.Response{OK: true, Result: map[string]any{"certificate_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "not_before": "2026-09-01T00:00:00Z", "not_after": "2026-12-01T00:00:00Z"}}, nil
+		}
+		if request.Operation == "RenewACMECertificate" && request.CertificateID == certificateID {
+			return protocol.Response{ErrorCode: "ACMERejected", Error: "renewal failed"}, nil
+		}
+		t.Fatalf("unexpected helper request: %#v", request)
+		return protocol.Response{}, nil
+	}
+	recorder := httptest.NewRecorder()
+	body := `{"method":"acme","hostname":"app.example.test","email":"admin@example.test","directory":"letsencrypt-staging","accept_terms":true,"installation_id":"inst-acme0001","service_id":"web"}`
+	a.guard(a.certificates)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/certificates", body, session, csrf))
+	if recorder.Code != http.StatusCreated || certificateID == "" {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "admin@example.test") {
+		t.Fatal("ACME contact leaked in certificate response")
+	}
+	recorder = httptest.NewRecorder()
+	a.guard(a.certificates)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/certificates/"+certificateID+"/renew", `{}`, session, csrf))
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("renewal status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var state, digest, errorCode string
+	if err := a.db.QueryRow(`SELECT state,leaf_sha256,last_error_code FROM certificates WHERE certificate_id=?`, certificateID).Scan(&state, &digest, &errorCode); err != nil || state != "renewal-failed" || len(digest) != 64 || errorCode != "renewal_failed" {
+		t.Fatalf("state=%q digest=%q error=%q err=%v", state, digest, errorCode, err)
 	}
 }

@@ -26,6 +26,17 @@ type Metadata struct {
 
 type MaterialStore struct{ Root string }
 
+func (s MaterialStore) root() (string, error) {
+	root := s.Root
+	if root == "" {
+		root = "/var/lib/kitpro-helper/ingress/certificates"
+	}
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return "", fmt.Errorf("invalid certificate store")
+	}
+	return root, nil
+}
+
 func (s MaterialStore) Install(certificateID, hostname string, certificatePEM, privateKeyPEM []byte, now time.Time) (Metadata, error) {
 	if !validID(certificateID, "cert-") || !validHostname(hostname) {
 		return Metadata{}, fmt.Errorf("invalid certificate identity")
@@ -34,12 +45,9 @@ func (s MaterialStore) Install(certificateID, hostname string, certificatePEM, p
 	if err != nil {
 		return Metadata{}, err
 	}
-	root := s.Root
-	if root == "" {
-		root = "/var/lib/kitpro-helper/ingress/certificates"
-	}
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return Metadata{}, fmt.Errorf("invalid certificate store")
+	root, err := s.root()
+	if err != nil {
+		return Metadata{}, err
 	}
 	if err = os.MkdirAll(root, 0700); err != nil {
 		return Metadata{}, fmt.Errorf("create certificate store: %w", err)
@@ -76,6 +84,55 @@ func (s MaterialStore) Install(certificateID, hostname string, certificatePEM, p
 	certDigest := sha256.Sum256(chain)
 	publicDigest := sha256.Sum256(key)
 	return Metadata{CertificateID: certificateID, Hostname: hostname, CertificateSHA256: hex.EncodeToString(certDigest[:]), PublicKeySHA256: hex.EncodeToString(publicDigest[:]), NotBefore: leaf.NotBefore.UTC(), NotAfter: leaf.NotAfter.UTC(), RenewalRecommended: leaf.NotAfter.Before(now.Add(30 * 24 * time.Hour))}, nil
+}
+
+// CommitReplacement removes the one retained predecessor only after the caller
+// proves that nginx accepted and serves the replacement.
+func (s MaterialStore) CommitReplacement(certificateID string) error {
+	if !validID(certificateID, "cert-") {
+		return fmt.Errorf("invalid certificate identity")
+	}
+	root, err := s.root()
+	if err != nil {
+		return err
+	}
+	previous := filepath.Join(root, certificateID) + ".previous"
+	if err = os.RemoveAll(previous); err != nil {
+		return fmt.Errorf("remove previous certificate: %w", err)
+	}
+	return syncDirectory(root)
+}
+
+// RollbackReplacement restores the predecessor atomically. It never leaves the
+// rejected key at the active certificate path.
+func (s MaterialStore) RollbackReplacement(certificateID string) error {
+	if !validID(certificateID, "cert-") {
+		return fmt.Errorf("invalid certificate identity")
+	}
+	root, err := s.root()
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(root, certificateID)
+	previous := target + ".previous"
+	if _, err = os.Stat(previous); err != nil {
+		return fmt.Errorf("previous certificate is unavailable")
+	}
+	rejected := target + ".rejected"
+	if err = os.RemoveAll(rejected); err != nil {
+		return err
+	}
+	if err = os.Rename(target, rejected); err != nil {
+		return fmt.Errorf("preserve rejected certificate: %w", err)
+	}
+	if err = os.Rename(previous, target); err != nil {
+		_ = os.Rename(rejected, target)
+		return fmt.Errorf("restore previous certificate: %w", err)
+	}
+	if err = os.RemoveAll(rejected); err != nil {
+		return err
+	}
+	return syncDirectory(root)
 }
 
 func validateMaterial(hostname string, certificatePEM, privateKeyPEM []byte, now time.Time) (*x509.Certificate, []byte, []byte, error) {
