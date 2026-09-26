@@ -138,3 +138,89 @@ func TestACMECertificateLifecycleIsTypedAndCredentialFree(t *testing.T) {
 		t.Fatalf("state=%q digest=%q error=%q err=%v", state, digest, errorCode, err)
 	}
 }
+
+func TestCloudflareProviderCredentialIsWriteOnlyAndLocalDisablePreservesRemoteState(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	const token = "known-cloudflare-token-012345678901"
+	var operationsSeen []string
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		operationsSeen = append(operationsSeen, request.Operation)
+		if request.Operation == "ConfigureCloudflareProvider" {
+			if request.ProviderToken != token || request.ProviderAccount == "" || request.ProviderZone == "" || request.ProviderTunnel == "" {
+				t.Fatalf("incomplete provider configuration: %#v", request)
+			}
+		}
+		return protocol.Response{OK: true, Result: map[string]any{"provider_id": request.ProviderID}}, nil
+	}
+	body := `{"account_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","zone_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tunnel_id":"12345678-1234-4123-8123-123456789abc","api_token":"` + token + `"}`
+	recorder := httptest.NewRecorder()
+	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/exposure-providers", body, session, csrf))
+	if recorder.Code != http.StatusCreated || strings.Contains(recorder.Body.String(), token) {
+		t.Fatalf("configure status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var created map[string]any
+	if json.Unmarshal(recorder.Body.Bytes(), &created) != nil {
+		t.Fatal("provider response is invalid")
+	}
+	providerID, _ := created["provider_id"].(string)
+	if providerID == "" {
+		t.Fatal("provider identity missing")
+	}
+	recorder = httptest.NewRecorder()
+	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/exposure-providers/"+providerID+"/enable", `{}`, session, csrf))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/exposure-providers/"+providerID+"/disable", `{}`, session, csrf))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var desired string
+	if err := a.db.QueryRow(`SELECT desired_state FROM exposure_providers WHERE provider_id=?`, providerID).Scan(&desired); err != nil || desired != "disabled" {
+		t.Fatalf("desired=%q err=%v", desired, err)
+	}
+	for _, operation := range operationsSeen {
+		if strings.Contains(operation, "Delete") || strings.Contains(operation, "Remove") {
+			t.Fatalf("ordinary disable invoked remote deletion: %v", operationsSeen)
+		}
+	}
+	recorder = httptest.NewRecorder()
+	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodGet, "/api/v1/exposure-providers", "", session, csrf))
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), token) || strings.Contains(recorder.Body.String(), "credential_sha256") {
+		t.Fatalf("unsafe provider projection: %s", recorder.Body.String())
+	}
+}
+
+func TestCloudflareRouteFailureRollsBackLocalIngress(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedIngressInstallation(t, a, "inst-cloudflare1", "uptime-kuma")
+	const providerID = "provider-0123456789abcdef"
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT INTO exposure_providers(provider_id,provider_type,account_id,zone_id,tunnel_id,credential_sha256,desired_state,runtime_state,created_at,updated_at) VALUES(?,'cloudflare-tunnel','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','12345678-1234-4123-8123-123456789abc','digest','enabled','ready',?,?)`, providerID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	generation := 0
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		switch request.Operation {
+		case "ApplyIngressGeneration":
+			generation++
+			return protocol.Response{OK: true, Result: map[string]any{"generation": generation, "previous_generation": generation - 1, "configuration_sha256": strings.Repeat("a", 64)}}, nil
+		case "AddCloudflareRoute":
+			return protocol.Response{ErrorCode: "CloudflareRejected", Error: "provider unavailable"}, nil
+		default:
+			t.Fatalf("unexpected operation %q", request.Operation)
+			return protocol.Response{}, nil
+		}
+	}
+	body := `{"installation_id":"inst-cloudflare1","service_id":"web","hostname":"remote.example.test","exposure_mode":"cloudflare-tunnel","upstream_protocol":"http","tls_policy":"cloudflare","provider_id":"` + providerID + `","enabled":true}`
+	recorder := httptest.NewRecorder()
+	a.guard(a.ingressRoutes)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/ingress", body, session, csrf))
+	if recorder.Code != http.StatusBadGateway || generation != 2 {
+		t.Fatalf("status=%d generations=%d body=%s", recorder.Code, generation, recorder.Body.String())
+	}
+	var count int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_routes`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed remote route left local ingress count=%d err=%v", count, err)
+	}
+}

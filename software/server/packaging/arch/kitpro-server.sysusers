@@ -4,3 +4,6 @@ m kitpro-api kitpro-api
 u kitpro-ingress - "KITPro managed ingress" /nonexistent /usr/bin/nologin
 g kitpro-ingress -
 m kitpro-ingress kitpro-ingress
+u kitpro-cloudflared - "KITPro Cloudflare Tunnel runtime" /nonexistent /usr/bin/nologin
+g kitpro-cloudflared -
+m kitpro-cloudflared kitpro-cloudflared

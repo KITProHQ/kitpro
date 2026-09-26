@@ -1,3 +1,4 @@
 /etc/default/kitpro-server
 /etc/apparmor.d/usr.libexec.kitpro-helper
 /etc/apparmor.d/usr.libexec.kitpro-acme
+/etc/apparmor.d/usr.libexec.kitpro-cloudflare

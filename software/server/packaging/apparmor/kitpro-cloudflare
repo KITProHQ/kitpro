@@ -1,0 +1,26 @@
+# KITPro Server constrained Cloudflare provider profile.
+#include <tunables/global>
+/usr/libexec/kitpro-cloudflare flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /usr/libexec/kitpro-cloudflare rix,
+  /usr/bin/cloudflared ix,
+  capability setuid,
+  capability setgid,
+  /etc/passwd r,
+  /etc/group r,
+  /etc/ssl/certs/** r,
+  /run/kitpro/ rw,
+  /run/kitpro/cloudflare.sock rw,
+  /var/lib/kitpro-helper/providers/cloudflare/ rw,
+  /var/lib/kitpro-helper/providers/cloudflare/** rwk,
+  /proc/*/fd/ r,
+  /proc/*/fd/* r,
+  network unix stream,
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  deny /home/** r,
+  deny /root/** r,
+}

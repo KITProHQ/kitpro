@@ -76,6 +76,13 @@ func (a *app) ingressRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ingress policy rejected", http.StatusBadRequest)
 			return
 		}
+		if route.ExposureMode == ingress.CloudflareTunnel {
+			var desiredState string
+			if err = a.db.QueryRowContext(r.Context(), `SELECT desired_state FROM exposure_providers WHERE provider_id=? AND provider_type='cloudflare-tunnel'`, route.ProviderID).Scan(&desiredState); err != nil || desiredState != "enabled" {
+				http.Error(w, "Cloudflare provider must be configured and enabled", http.StatusBadRequest)
+				return
+			}
+		}
 		if _, err = store.CreateRoute(r.Context(), route); err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				http.Error(w, "hostname is already assigned", http.StatusConflict)
@@ -95,6 +102,17 @@ func (a *app) ingressRoutes(w http.ResponseWriter, r *http.Request) {
 			if route.CertificateID != "" {
 				_, _ = a.db.ExecContext(r.Context(), `UPDATE certificates SET state='active',updated_at=? WHERE certificate_id=? AND state IN ('issued','active')`, time.Now().UTC().Format(time.RFC3339Nano), route.CertificateID)
 			}
+			if route.ExposureMode == ingress.CloudflareTunnel {
+				if err = a.addCloudflareRemoteRoute(r.Context(), route.ProviderID, route.Hostname); err != nil {
+					_, _ = a.db.ExecContext(r.Context(), `DELETE FROM ingress_routes WHERE route_id=?`, route.ID)
+					if _, rollbackErr := a.applyIngress(r, store); rollbackErr != nil {
+						http.Error(w, "Cloudflare route failed and local ingress recovery requires attention", http.StatusServiceUnavailable)
+						return
+					}
+					http.Error(w, "Cloudflare route failed; local ingress was rolled back", http.StatusBadGateway)
+					return
+				}
+			}
 		}
 		writeJSON(w, http.StatusCreated, route)
 	case http.MethodDelete:
@@ -113,6 +131,19 @@ func (a *app) ingressRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method denied", http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *app) addCloudflareRemoteRoute(ctx context.Context, providerID, hostname string) error {
+	response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "AddCloudflareRoute", OperationRevision: 1, ProviderID: providerID, Hostname: hostname})
+	if err != nil || !response.OK {
+		return errors.New("Cloudflare route rejected")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = a.db.ExecContext(ctx, `INSERT INTO exposure_provider_routes(provider_id,hostname,remote_state,last_error_code,created_at,updated_at) VALUES(?,?,'configured','',?,?) ON CONFLICT(provider_id,hostname) DO UPDATE SET remote_state='configured',last_error_code='',updated_at=excluded.updated_at`, providerID, hostname, now, now); err != nil {
+		_, _ = a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RemoveCloudflareRemoteRoute", OperationRevision: 1, ProviderID: providerID, Hostname: hostname, ConfirmRemote: true})
+		return err
+	}
+	return nil
 }
 
 func (a *app) ingressGrant(r *http.Request, installationID, serviceID string) ([]string, bool, error) {
@@ -181,7 +212,7 @@ func (a *app) applyIngress(r *http.Request, store ingress.Store) (int64, error) 
 		return 0, errors.New("helper returned invalid ingress result")
 	}
 	candidate := ingress.Candidate{Generation: result.Generation, PreviousGeneration: result.PreviousGeneration, SHA256: result.SHA256}
-	if err = store.RecordGeneration(r.Context(), candidate, operationID, "active", ""); err != nil {
+	if err = store.RecordGeneration(r.Context(), candidate, operationID, "validated", ""); err != nil {
 		return 0, err
 	}
 	if err = store.CommitGeneration(r.Context(), candidate, activeIDs); err != nil {
@@ -460,9 +491,162 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-// The exposure-provider stub is replaced by the Cloudflare integration.
+type providerInput struct {
+	ProviderID    string `json:"provider_id"`
+	AccountID     string `json:"account_id"`
+	ZoneID        string `json:"zone_id"`
+	TunnelID      string `json:"tunnel_id"`
+	APIToken      string `json:"api_token"`
+	Hostname      string `json:"hostname"`
+	ConfirmRemote bool   `json:"confirm_remote"`
+}
+
 func (a *app) exposureProviders(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/exposure-providers" {
+		rows, err := a.db.QueryContext(r.Context(), `SELECT provider_id,provider_type,account_id,zone_id,tunnel_id,desired_state,runtime_state,last_error_code,created_at,updated_at FROM exposure_providers ORDER BY provider_id`)
+		if err != nil {
+			http.Error(w, "provider state unavailable", 500)
+			return
+		}
+		defer rows.Close()
+		providers := []map[string]string{}
+		for rows.Next() {
+			var id, providerType, account, zone, tunnel, desired, runtimeState, errorCode, created, updated string
+			if rows.Scan(&id, &providerType, &account, &zone, &tunnel, &desired, &runtimeState, &errorCode, &created, &updated) != nil {
+				http.Error(w, "provider state unavailable", 500)
+				return
+			}
+			providers = append(providers, map[string]string{"provider_id": id, "provider_type": providerType, "account_id": account, "zone_id": zone, "tunnel_id": tunnel, "desired_state": desired, "runtime_state": runtimeState, "last_error_code": errorCode, "created_at": created, "updated_at": updated})
+		}
+		writeJSON(w, 200, map[string]any{"providers": providers})
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/exposure-providers" {
+		var input providerInput
+		if decodeStrictJSON(r, 32*1024, &input) != nil {
+			http.Error(w, "invalid provider request", 400)
+			return
+		}
+		providerID := input.ProviderID
+		if providerID == "" {
+			var count int
+			if err := a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM exposure_providers WHERE desired_state<>'unlinked'`).Scan(&count); err != nil || count != 0 {
+				http.Error(w, "a Cloudflare provider is already configured", http.StatusConflict)
+				return
+			}
+			providerID, _ = ingress.NewID("provider")
+		} else {
+			var account, zone, tunnel string
+			if err := a.db.QueryRowContext(r.Context(), `SELECT account_id,zone_id,tunnel_id FROM exposure_providers WHERE provider_id=?`, providerID).Scan(&account, &zone, &tunnel); err != nil {
+				http.Error(w, "provider not found", http.StatusNotFound)
+				return
+			}
+			if account != input.AccountID || zone != input.ZoneID || tunnel != input.TunnelID {
+				http.Error(w, "credential replacement cannot change remote resource identity", 400)
+				return
+			}
+		}
+		digest := sha256.Sum256([]byte(input.APIToken))
+		response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "ConfigureCloudflareProvider", OperationRevision: 1, ProviderID: providerID, ProviderAccount: input.AccountID, ProviderZone: input.ZoneID, ProviderTunnel: input.TunnelID, ProviderToken: input.APIToken})
+		input.APIToken = ""
+		if err != nil || !response.OK {
+			http.Error(w, "Cloudflare credential or permissions were rejected", http.StatusBadGateway)
+			return
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		_, err = a.db.ExecContext(r.Context(), `INSERT INTO exposure_providers(provider_id,provider_type,account_id,zone_id,tunnel_id,credential_sha256,desired_state,runtime_state,last_error_code,created_at,updated_at) VALUES(?,'cloudflare-tunnel',?,?,?,?, 'disabled','offline','',?,?) ON CONFLICT(provider_id) DO UPDATE SET credential_sha256=excluded.credential_sha256,last_error_code='',updated_at=excluded.updated_at`, providerID, input.AccountID, input.ZoneID, input.TunnelID, hex.EncodeToString(digest[:]), now, now)
+		if err != nil {
+			http.Error(w, "provider state could not be committed", 500)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"provider_id": providerID, "provider_type": "cloudflare-tunnel", "desired_state": "disabled", "runtime_state": "offline"})
+		return
+	}
+	a.providerAction(w, r)
+}
+
+func (a *app) providerAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/exposure-providers/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || !strings.HasPrefix(parts[0], "provider-") || len(parts[0]) != 25 {
+		http.Error(w, "provider not found", http.StatusNotFound)
+		return
+	}
+	providerID, action := parts[0], parts[1]
+	if r.Method == http.MethodGet && action == "health" && len(parts) == 2 {
+		response, err := a.callHelper(protocol.Request{Version: 2, ID: operations.NewRequestID(), Operation: "InspectCloudflareProvider", ProviderID: providerID})
+		if err != nil {
+			http.Error(w, "provider health unavailable", http.StatusBadGateway)
+			return
+		}
+		var result map[string]any
+		encoded, _ := json.Marshal(response.Result)
+		_ = json.Unmarshal(encoded, &result)
+		if result == nil {
+			result = map[string]any{"provider_id": providerID, "runtime_state": "failed"}
+		}
+		errorCode := ""
+		if !response.OK {
+			errorCode = response.ErrorCode
+		}
+		if runtimeState, ok := result["runtime_state"].(string); ok {
+			_, _ = a.db.ExecContext(r.Context(), `UPDATE exposure_providers SET runtime_state=?,last_error_code=?,updated_at=? WHERE provider_id=?`, runtimeState, errorCode, time.Now().UTC().Format(time.RFC3339Nano), providerID)
+		}
+		result["last_error_code"] = errorCode
+		writeJSON(w, 200, result)
+		return
+	}
+	if r.Method == http.MethodDelete && len(parts) == 2 && action == "unlink" {
+		a.runProviderMutation(w, r, "UnlinkCloudflareProvider", providerID, "", false)
+		return
+	}
+	if r.Method == http.MethodDelete && len(parts) == 2 && action == "remote-tunnel" {
+		a.runProviderMutation(w, r, "DeleteCloudflareRemoteTunnel", providerID, "", r.URL.Query().Get("confirm_remote") == "true")
+		return
+	}
+	if r.Method == http.MethodPost && len(parts) == 2 && (action == "enable" || action == "disable") {
+		operation := "EnableCloudflareProvider"
+		if action == "disable" {
+			operation = "DisableCloudflareProvider"
+		}
+		a.runProviderMutation(w, r, operation, providerID, "", false)
+		return
+	}
+	if len(parts) == 3 && action == "routes" && r.Method == http.MethodDelete {
+		hostname, err := ingress.NormalizeHostname(parts[2])
+		if err != nil || hostname != parts[2] {
+			http.Error(w, "invalid hostname", 400)
+			return
+		}
+		a.runProviderMutation(w, r, "RemoveCloudflareRemoteRoute", providerID, hostname, r.URL.Query().Get("confirm_remote") == "true")
+		return
+	}
+	http.Error(w, "route not found", http.StatusNotFound)
+}
+
+func (a *app) runProviderMutation(w http.ResponseWriter, r *http.Request, operation, providerID, hostname string, confirmRemote bool) bool {
+	response, err := a.callHelperOperation(protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: operation, OperationRevision: 1, ProviderID: providerID, Hostname: hostname, ConfirmRemote: confirmRemote})
+	if err != nil || !response.OK {
+		http.Error(w, "Cloudflare provider operation failed", http.StatusBadGateway)
+		return false
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch operation {
+	case "EnableCloudflareProvider":
+		_, err = a.db.ExecContext(r.Context(), `UPDATE exposure_providers SET desired_state='enabled',runtime_state='connecting',last_error_code='',updated_at=? WHERE provider_id=?`, now, providerID)
+	case "DisableCloudflareProvider":
+		_, err = a.db.ExecContext(r.Context(), `UPDATE exposure_providers SET desired_state='disabled',runtime_state='offline',last_error_code='',updated_at=? WHERE provider_id=?`, now, providerID)
+	case "RemoveCloudflareRemoteRoute":
+		_, err = a.db.ExecContext(r.Context(), `UPDATE exposure_provider_routes SET remote_state='removed',last_error_code='',updated_at=? WHERE provider_id=? AND hostname=?`, now, providerID, hostname)
+	case "UnlinkCloudflareProvider", "DeleteCloudflareRemoteTunnel":
+		_, err = a.db.ExecContext(r.Context(), `DELETE FROM exposure_providers WHERE provider_id=?`, providerID)
+	}
+	if err != nil {
+		http.Error(w, "provider state could not be committed", 500)
+		return false
+	}
+	writeJSON(w, 200, map[string]any{"provider_id": providerID, "operation": operation, "hostname": hostname})
+	return true
 }
 
 func (a *app) setupState(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,30 @@
+[Unit]
+Description=KITPro constrained Cloudflare Tunnel provider
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/kitpro-cloudflare
+User=root
+Group=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+UMask=0077
+ReadWritePaths=/run/kitpro /var/lib/kitpro-helper/providers/cloudflare
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

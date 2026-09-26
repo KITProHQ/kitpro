@@ -28,20 +28,26 @@ tar -xJf "$unpack/data.tar.xz" -C "$unpack/data"
 test -x "$unpack/data/usr/bin/kitpro-api"
 test -x "$unpack/data/usr/libexec/kitpro-helper"
 test -x "$unpack/data/usr/libexec/kitpro-acme"
+test -x "$unpack/data/usr/libexec/kitpro-cloudflare"
 test -x "$unpack/data/usr/libexec/kitpro-debian-upgrade"
 test -x "$first/kitpro-debian-upgrade"
 test "$(sha256sum "$first/kitpro-debian-upgrade" | awk '{print $1}')" = "$(sha256sum "$second/kitpro-debian-upgrade" | awk '{print $1}')"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-acme"
+test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-acme"
 cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-acme" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-acme"
+test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-cloudflare"
+cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-cloudflare"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-helper "$unpack/control/conffiles"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-acme "$unpack/control/conffiles"
-grep -q 'for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme' "$unpack/control/postinst"
+grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-cloudflare "$unpack/control/conffiles"
+grep -q 'for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare' "$unpack/control/postinst"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-helper.socket"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"
+test -f "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
 test -f "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
 grep -q '^Version: 0.1.0~alpha3$' "$unpack/control/control"
@@ -49,6 +55,7 @@ grep -q '^Depends: adduser, apparmor, nginx, systemd$' "$unpack/control/control"
 grep -q 'Environment=KITPRO_API_USER=kitpro-api' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-helper$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-acme$' "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"
+grep -q '^AppArmorProfile=/usr/libexec/kitpro-cloudflare$' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"; then
@@ -63,6 +70,18 @@ grep -q '^  network inet6 stream,$' "$unpack/data/etc/apparmor.d/usr.libexec.kit
 grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|DAC_READ_SEARCH|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"; then
     echo "ACME worker gained an unapproved capability" >&2
+    exit 1
+fi
+grep -q '^CapabilityBoundingSet=CAP_SETUID CAP_SETGID$' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
+if grep -q '^AmbientCapabilities=' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"; then
+    echo "Cloudflare tunnel runtime would inherit worker capabilities" >&2
+    exit 1
+fi
+grep -Fq '/usr/bin/cloudflared ix,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
+grep -Fq 'network inet dgram,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
+grep -Fq 'network inet6 dgram,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
+if grep -Rq -- '--token ' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service" "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"; then
+    echo "Cloudflare token is exposed in packaged process arguments" >&2
     exit 1
 fi
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"

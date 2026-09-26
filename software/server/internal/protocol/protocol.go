@@ -67,6 +67,10 @@ type Request struct {
 	AcceptACMETerms bool                     `json:"accept_acme_terms,omitempty"`
 	ProviderID      string                   `json:"provider_id,omitempty"`
 	ProviderToken   string                   `json:"provider_token,omitempty"`
+	ProviderAccount string                   `json:"provider_account,omitempty"`
+	ProviderZone    string                   `json:"provider_zone,omitempty"`
+	ProviderTunnel  string                   `json:"provider_tunnel,omitempty"`
+	ConfirmRemote   bool                     `json:"confirm_remote,omitempty"`
 }
 type IngressRoute struct {
 	RouteID          string `json:"route_id"`

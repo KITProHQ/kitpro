@@ -188,6 +188,13 @@ if ! getent passwd kitpro-ingress >/dev/null; then
     adduser --system --ingroup kitpro-ingress --home /nonexistent \
         --no-create-home --shell /usr/sbin/nologin kitpro-ingress >/dev/null
 fi
+if ! getent group kitpro-cloudflared >/dev/null; then
+    addgroup --system kitpro-cloudflared >/dev/null
+fi
+if ! getent passwd kitpro-cloudflared >/dev/null; then
+    adduser --system --ingroup kitpro-cloudflared --home /nonexistent \
+        --no-create-home --shell /usr/sbin/nologin kitpro-cloudflared >/dev/null
+fi
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
 if [ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf ]; then
@@ -199,7 +206,7 @@ fi
 load_package_paths
 verify_upgrade_approval_metadata
 
-for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme; do
+for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare; do
     profile=/etc/apparmor.d/$profile_name
     profile_source=/usr/share/kitpro-server/apparmor/$profile_name
     if [ ! -f "$profile" ]; then
@@ -234,12 +241,13 @@ done
 runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
 /usr/libexec/kitpro-helper --migrate-only
 
-deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service >/dev/null || true
-deb-systemd-helper enable kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service >/dev/null
+deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service >/dev/null || true
+deb-systemd-helper enable kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service >/dev/null
 systemctl daemon-reload
 deb-systemd-invoke restart kitpro-helper.socket
 deb-systemd-invoke restart kitpro-api.service
 deb-systemd-invoke restart kitpro-acme.service
+deb-systemd-invoke restart kitpro-cloudflare.service
 deb-systemd-invoke restart kitpro-ingress.service
 rm -f -- "$approval"
 

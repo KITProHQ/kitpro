@@ -1,4 +1,4 @@
-policy_module(kitpro, 1.1.0)
+policy_module(kitpro, 1.2.0)
 
 # KITPro-managed application data uses the standard container file type. Each
 # private mount receives an MCS label from Podman's :Z handling at runtime.
@@ -33,3 +33,29 @@ corenet_tcp_connect_http_cache_port(kitpro_acme_t)
 files_search_pids(httpd_t)
 allow httpd_t kitpro_acme_runtime_t:sock_file { getattr open read write };
 allow httpd_t kitpro_acme_t:unix_stream_socket connectto;
+
+type kitpro_cloudflare_t;
+type kitpro_cloudflare_exec_t;
+init_daemon_domain(kitpro_cloudflare_t, kitpro_cloudflare_exec_t)
+
+type kitpro_cloudflare_state_t;
+files_type(kitpro_cloudflare_state_t)
+
+type kitpro_cloudflare_runtime_t;
+files_runtime_file(kitpro_cloudflare_runtime_t)
+
+manage_dirs_pattern(kitpro_cloudflare_t, kitpro_cloudflare_state_t, kitpro_cloudflare_state_t)
+manage_files_pattern(kitpro_cloudflare_t, kitpro_cloudflare_state_t, kitpro_cloudflare_state_t)
+manage_sock_files_pattern(kitpro_cloudflare_t, var_run_t, kitpro_cloudflare_runtime_t)
+
+files_search_var_lib(kitpro_cloudflare_t)
+files_search_pids(kitpro_cloudflare_t)
+auth_read_passwd(kitpro_cloudflare_t)
+miscfiles_read_generic_certs(kitpro_cloudflare_t)
+sysnet_dns_name_resolve(kitpro_cloudflare_t)
+corenet_tcp_connect_http_port(kitpro_cloudflare_t)
+corenet_tcp_connect_all_unreserved_ports(kitpro_cloudflare_t)
+corenet_udp_bind_generic_node(kitpro_cloudflare_t)
+corenet_udp_connect_all_unreserved_ports(kitpro_cloudflare_t)
+corecmd_exec_bin(kitpro_cloudflare_t)
+allow kitpro_cloudflare_t self:capability { setgid setuid };

@@ -6,6 +6,7 @@ packaging_dir=$(cd -- "$script_dir/.." && pwd)
 spec=$packaging_dir/rpm/kitpro-server.spec.in
 rocky_unit=$packaging_dir/systemd/kitpro-helper-rocky.service
 acme_unit=$packaging_dir/systemd/kitpro-acme-rocky.service
+cloudflare_unit=$packaging_dir/systemd/kitpro-cloudflare-rocky.service
 uninstaller=$packaging_dir/rpm/kitpro-server-uninstall
 podman_command=$packaging_dir/rpm/kitpro-podman-command
 
@@ -35,10 +36,21 @@ grep -q '^NoNewPrivileges=yes$' "$rocky_unit"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$rocky_unit"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$rocky_unit"
 grep -q 'go build .* -o kitpro-acme ./cmd/kitpro-acme' "$spec"
+grep -q 'go build .* -o kitpro-cloudflare ./cmd/kitpro-cloudflare' "$spec"
 grep -q 'kitpro-acme.service' "$spec"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$acme_unit"
+grep -q '^CapabilityBoundingSet=CAP_SETUID CAP_SETGID$' "$cloudflare_unit"
+if grep -q '^AmbientCapabilities=' "$cloudflare_unit"; then
+    printf 'Cloudflare tunnel runtime would inherit worker capabilities\n' >&2
+    exit 1
+fi
 grep -q 'kitpro_acme_exec_t' "$packaging_dir/selinux/kitpro.fc"
 grep -q 'corenet_tcp_connect_http_port(kitpro_acme_t)' "$packaging_dir/selinux/kitpro.te"
+grep -q 'kitpro_cloudflare_exec_t' "$packaging_dir/selinux/kitpro.fc"
+grep -q 'kitpro_cloudflare_state_t' "$packaging_dir/selinux/kitpro.fc"
+grep -q 'corenet_udp_connect_all_unreserved_ports(kitpro_cloudflare_t)' "$packaging_dir/selinux/kitpro.te"
+grep -q 'allow kitpro_cloudflare_t self:capability { setgid setuid };' "$packaging_dir/selinux/kitpro.te"
+grep -q 'kitpro-cloudflared' "$packaging_dir/rpm/kitpro-server.sysusers"
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$packaging_dir/tmpfiles/kitpro.conf"
 grep -q -- '--property=CapabilityBoundingSet=CAP_SYS_ADMIN' "$podman_command"
 grep -q -- "SystemCallFilter=open_tree fsopen fsconfig fsmount move_mount mount_setattr mount umount2" "$podman_command"

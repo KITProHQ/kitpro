@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 16
+	target := 17
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -621,6 +621,45 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=16"); err != nil {
+			return err
+		}
+	}
+	if n < 17 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cloudflare_provider_state (
+				provider_id TEXT PRIMARY KEY,
+				account_id TEXT NOT NULL,
+				zone_id TEXT NOT NULL,
+				tunnel_id TEXT NOT NULL,
+				desired_state TEXT NOT NULL CHECK(desired_state IN ('disabled','enabled','unlinked')),
+				runtime_state TEXT NOT NULL CHECK(runtime_state IN ('not-configured','offline','connecting','ready','degraded','failed','revoked')),
+				last_error_code TEXT NOT NULL DEFAULT '',
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS cloudflare_provider_routes (
+				provider_id TEXT NOT NULL,
+				hostname TEXT NOT NULL,
+				dns_record_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY(provider_id,hostname),
+				FOREIGN KEY(provider_id) REFERENCES cloudflare_provider_state(provider_id) ON DELETE CASCADE
+			);`)
+		} else {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS exposure_provider_routes (
+				provider_id TEXT NOT NULL,
+				hostname TEXT NOT NULL,
+				remote_state TEXT NOT NULL CHECK(remote_state IN ('configured','removal-pending','removed','conflict','failed')),
+				last_error_code TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(provider_id,hostname),
+				FOREIGN KEY(provider_id) REFERENCES exposure_providers(provider_id) ON DELETE CASCADE
+			);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=17"); err != nil {
 			return err
 		}
 	}
