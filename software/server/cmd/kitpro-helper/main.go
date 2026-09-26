@@ -464,7 +464,7 @@ func revealApplicationCredential(db *sql.DB, request protocol.Request) (protocol
 
 func isDurableMutation(operation string) bool {
 	switch operation {
-	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup":
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup", "ApplyIngressGeneration", "InstallCertificateMaterial":
 		return true
 	default:
 		return false
@@ -486,6 +486,9 @@ func operationScope(r protocol.Request) string {
 	}
 	if r.Operation == "RegisterStorageRoot" || r.Operation == "RemoveStorageRoot" {
 		return "host-storage"
+	}
+	if r.Operation == "ApplyIngressGeneration" || r.Operation == "InstallCertificateMaterial" {
+		return "host-ingress"
 	}
 	return "helper-state"
 }
@@ -568,6 +571,20 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 			} else {
 				protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
 			}
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "ApplyIngressGeneration":
+		result, err := applyIngressGeneration(context.Background(), db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: ingressErrorCode(err), Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "InstallCertificateMaterial":
+		result, err := installCertificateMaterial(context.Background(), db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "CertificateRejected", Error: "certificate material was rejected"})
 		} else {
 			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 		}

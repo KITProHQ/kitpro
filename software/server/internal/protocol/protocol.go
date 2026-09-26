@@ -57,6 +57,24 @@ type Request struct {
 	RepairAction    string                   `json:"repair_action,omitempty"`
 	CredentialID    string                   `json:"credential_id,omitempty"`
 	Configuration   *ConfigurationPolicy     `json:"configuration,omitempty"`
+	IngressRoutes   []IngressRoute           `json:"ingress_routes,omitempty"`
+	CertificateID   string                   `json:"certificate_id,omitempty"`
+	Hostname        string                   `json:"hostname,omitempty"`
+	CertificatePEM  string                   `json:"certificate_pem,omitempty"`
+	PrivateKeyPEM   string                   `json:"private_key_pem,omitempty"`
+	ProviderID      string                   `json:"provider_id,omitempty"`
+	ProviderToken   string                   `json:"provider_token,omitempty"`
+}
+type IngressRoute struct {
+	RouteID          string `json:"route_id"`
+	InstallationID   string `json:"installation_id"`
+	ServiceID        string `json:"service_id"`
+	Hostname         string `json:"hostname"`
+	ExposureMode     string `json:"exposure_mode"`
+	UpstreamProtocol string `json:"upstream_protocol"`
+	TLSPolicy        string `json:"tls_policy"`
+	CertificateID    string `json:"certificate_id,omitempty"`
+	ProviderID       string `json:"provider_id,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -158,6 +176,9 @@ func Canonical(r Request) ([]byte, error) {
 	r.ID = ""
 	r.OperationID = ""
 	r.Deadline = ""
+	r.CertificatePEM = ""
+	r.PrivateKeyPEM = ""
+	r.ProviderToken = ""
 	for i := range r.Environment {
 		if r.Environment[i].Secret {
 			r.Environment[i].Value = ""
