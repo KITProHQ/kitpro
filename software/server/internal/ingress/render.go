@@ -31,6 +31,7 @@ func RenderNginx(routes []AppliedRoute, options RenderOptions) ([]byte, error) {
 	}
 	var out bytes.Buffer
 	fmt.Fprintf(&out, "user %s;\nworker_processes auto;\npid run/nginx.pid;\nerror_log logs/error.log warn;\nevents { worker_connections 1024; }\nhttp {\n", options.WorkerUser)
+	out.WriteString("  client_body_temp_path temp-client-body;\n  proxy_temp_path temp-proxy;\n  fastcgi_temp_path temp-fastcgi;\n  uwsgi_temp_path temp-uwsgi;\n  scgi_temp_path temp-scgi;\n")
 	out.WriteString("  access_log logs/access.log combined;\n  server_tokens off;\n  proxy_http_version 1.1;\n  map $http_upgrade $kitpro_connection { default upgrade; '' close; }\n")
 	out.WriteString("  server { listen 80 default_server; server_name _;\n")
 	writeACMEChallengeLocation(&out)

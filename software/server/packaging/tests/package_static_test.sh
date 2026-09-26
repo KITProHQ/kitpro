@@ -50,6 +50,18 @@ test -f "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
 test -f "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
+for temp_dir in client-body proxy fastcgi uwsgi scgi; do
+    grep -q "^d /var/lib/kitpro-helper/ingress/temp-$temp_dir 0700 kitpro-ingress kitpro-ingress -$" "$unpack/data/usr/lib/tmpfiles.d/kitpro.conf"
+done
+for directive in \
+    'client_body_temp_path temp-client-body;' \
+    'proxy_temp_path temp-proxy;' \
+    'fastcgi_temp_path temp-fastcgi;' \
+    'uwsgi_temp_path temp-uwsgi;' \
+    'scgi_temp_path temp-scgi;'
+do
+    grep -Fq "$directive" "$unpack/data/usr/share/kitpro-server/ingress-bootstrap.conf"
+done
 grep -q '^Version: 0.1.0~alpha3$' "$unpack/control/control"
 grep -q '^Depends: adduser, apparmor, nginx, systemd$' "$unpack/control/control"
 grep -q 'Environment=KITPRO_API_USER=kitpro-api' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
