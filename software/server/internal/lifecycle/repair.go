@@ -110,8 +110,17 @@ func (r Repairer) cleanupNonActive(ctx context.Context, installation, operationI
 		return err
 	}
 	for _, generation := range generations {
-		if generation.Status == "active" || generation.Status == "verification_required" || generation.Status == "retained" {
+		if generation.Status == "active" || generation.Status == "verification_required" {
 			continue
+		}
+		if generation.Status == "retained" {
+			detached, detachedErr := r.retainedGenerationDetached(ctx, generation)
+			if detachedErr != nil {
+				return detachedErr
+			}
+			if !detached {
+				continue
+			}
 		}
 		plan := repairPlan(generation, operationID, token)
 		for _, component := range reverseComponents(generation.Components) {
@@ -302,20 +311,39 @@ func (r Repairer) verifyExactComponent(ctx context.Context, generation MultiGene
 	if component.ImageID != "" && observed.ImageID != component.ImageID {
 		return observed, errors.New("repair refused because component image identity changed")
 	}
-	if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash {
-		return observed, errors.New("repair refused because component configuration changed")
-	}
 	network, err := r.Runtime.ObserveNetwork(ctx, generation.NetworkName)
 	if err != nil {
 		return observed, err
 	}
+	detached := network.Exists && (generation.NetworkID == "" || network.ID == generation.NetworkID) && detachedStoppedConfigurationMatches(observed, component.ConfigurationHash, generation.NetworkName, network.ID)
+	if component.ConfigurationHash != "" && observationHash(observed) != component.ConfigurationHash && !detached {
+		return observed, errors.New("repair refused because component configuration changed")
+	}
 	attachment, attached := observed.Networks[generation.NetworkName]
 	stoppedBeforeFirstStart := (generation.Status == "prepared" || generation.Status == "candidate" || generation.Status == "failed" || generation.Status == "cleanup_pending") && observed.State == containers.RuntimeStopped && attachment.NetworkID == "" && observed.NetworkMode == generation.NetworkName
 	staleCleanupNetwork := (generation.Status == "prepared" || generation.Status == "candidate" || generation.Status == "failed" || generation.Status == "cleanup_pending") && observed.State == containers.RuntimeStopped && !network.Exists
-	if (!network.Exists && !staleCleanupNetwork) || (!staleCleanupNetwork && generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart) {
+	if !detached && ((!network.Exists && !staleCleanupNetwork) || (!staleCleanupNetwork && generation.NetworkID != "" && network.ID != generation.NetworkID) || !attached || (network.ID != "" && attachment.NetworkID != network.ID && !stoppedBeforeFirstStart)) {
 		return observed, errors.New("repair refused because component network identity changed")
 	}
 	return observed, nil
+}
+
+func (r Repairer) retainedGenerationDetached(ctx context.Context, generation MultiGeneration) (bool, error) {
+	network, err := r.Runtime.ObserveNetwork(ctx, generation.NetworkName)
+	if err != nil || !network.Exists || (generation.NetworkID != "" && network.ID != generation.NetworkID) {
+		return false, err
+	}
+	detached := false
+	for _, component := range generation.Components {
+		observed, observeErr := r.verifyExactComponent(ctx, generation, component)
+		if observeErr != nil {
+			return false, observeErr
+		}
+		if detachedStoppedConfigurationMatches(observed, component.ConfigurationHash, generation.NetworkName, network.ID) {
+			detached = true
+		}
+	}
+	return detached, nil
 }
 
 func repairPlan(generation MultiGeneration, operationID string, token int64) MultiPlan {

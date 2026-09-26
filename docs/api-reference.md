@@ -133,7 +133,10 @@ recommends `recreate_generation`. Other network or configuration drift remains
 Controlled recreation does not label the missing or detached source generation
 as a usable rollback. After the replacement commits, the helper removes only
 the exact unusable source resources and records that generation as removed. A
-normal verified update continues to retain its valid prior generation.
+normal verified update continues to retain its valid prior generation. If an
+older build already recorded an exact detached source as retained, fresh
+reconciliation recommends `cleanup_resources`; the bounded repair removes only
+that proven unusable retained generation.
 
 The reconciliation request has no body. The repair request is JSON:
 

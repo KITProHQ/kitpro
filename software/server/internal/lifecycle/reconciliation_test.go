@@ -209,6 +209,45 @@ func TestFailedStartDetachedRuntimeControlledRecreateAdvancesGeneration(t *testi
 	}
 }
 
+func TestCleanupRepairRemovesLegacyDetachedRetainedGeneration(t *testing.T) {
+	h := newHarness(t, true)
+	replaced, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.coordinator.Complete(context.Background(), h.plan.OperationID, h.plan.FencingToken, protocol.Response{OK: true, Result: replaced}); err != nil {
+		t.Fatal(err)
+	}
+	detached := h.runtime.containers["old-id"]
+	detached.Networks = map[string]containers.NetworkAttachment{}
+	h.runtime.containers["old-id"] = detached
+
+	result, err := (Reconciler{Runtime: h.runtime, Store: h.Store()}).Reconcile(context.Background(), "inst-one")
+	if err != nil || result.State != ReconciliationCleanupPending || result.RecommendedAction != RepairCleanupResources || !hasMismatch(result, MismatchCleanupPending) || hasMismatch(result, MismatchConfiguration) || hasMismatch(result, MismatchNetwork) {
+		t.Fatalf("detached retained reconciliation=%#v err=%v", result, err)
+	}
+
+	request := protocol.Request{Version: 2, ID: operations.NewRequestID(), OperationID: operations.NewID(), Operation: "RepairInstallation", OperationRevision: 1, InstanceID: "inst-one", RepairAction: RepairCleanupResources}
+	decision, err := h.coordinator.Begin(context.Background(), request, 0, request.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.coordinator.AuthorizeMutation(context.Background(), request.OperationID, decision.FencingToken); err != nil {
+		t.Fatal(err)
+	}
+	result, err = (Repairer{Runtime: h.runtime, Store: h.Store(), Evidence: h.coordinator}).Repair(context.Background(), request.InstanceID, request.OperationID, decision.FencingToken, request.RepairAction)
+	if err != nil || result.State != ReconciliationConsistent {
+		t.Fatalf("cleanup result=%#v err=%v", result, err)
+	}
+	var priorStatus string
+	if err = h.db.QueryRow(`SELECT status FROM runtime_generations WHERE installation_id='inst-one' AND runtime_generation=1`).Scan(&priorStatus); err != nil || priorStatus != "removed" {
+		t.Fatalf("prior status=%q err=%v", priorStatus, err)
+	}
+	if observed := h.runtime.containers["old-id"]; observed.Exists {
+		t.Fatal("legacy detached retained runtime was not removed")
+	}
+}
+
 func TestRetainedGenerationLossAndUnexpectedRunningAreClassifiedWithoutChangingActive(t *testing.T) {
 	h := newHarness(t, true)
 	if _, err := (Runner{Runtime: h.runtime, Store: Store{DB: h.db}, Evidence: h.coordinator}).Replace(context.Background(), h.plan); err != nil {
