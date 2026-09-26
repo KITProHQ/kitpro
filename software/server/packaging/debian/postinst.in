@@ -181,8 +181,21 @@ if ! getent passwd kitpro-api >/dev/null; then
     adduser --system --ingroup kitpro-api --home /var/lib/kitpro-api \
         --no-create-home --shell /usr/sbin/nologin kitpro-api >/dev/null
 fi
+if ! getent group kitpro-ingress >/dev/null; then
+    addgroup --system kitpro-ingress >/dev/null
+fi
+if ! getent passwd kitpro-ingress >/dev/null; then
+    adduser --system --ingroup kitpro-ingress --home /nonexistent \
+        --no-create-home --shell /usr/sbin/nologin kitpro-ingress >/dev/null
+fi
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
+if [ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf ]; then
+    install -m 0640 -o root -g root /usr/share/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
+fi
+if [ ! -e /var/lib/kitpro-helper/ingress/current ]; then
+    ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
+fi
 load_package_paths
 verify_upgrade_approval_metadata
 
@@ -219,11 +232,12 @@ done
 runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
 /usr/libexec/kitpro-helper --migrate-only
 
-deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service >/dev/null || true
-deb-systemd-helper enable kitpro-helper.socket kitpro-api.service >/dev/null
+deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service kitpro-ingress.service >/dev/null || true
+deb-systemd-helper enable kitpro-helper.socket kitpro-api.service kitpro-ingress.service >/dev/null
 systemctl daemon-reload
 deb-systemd-invoke restart kitpro-helper.socket
 deb-systemd-invoke restart kitpro-api.service
+deb-systemd-invoke restart kitpro-ingress.service
 rm -f -- "$approval"
 
 exit 0

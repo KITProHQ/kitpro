@@ -20,6 +20,7 @@ Requires:       container-selinux
 Requires:       firewalld
 Requires:       policycoreutils-python-utils
 Requires:       systemd
+Requires:       nginx
 Requires:       util-linux
 Requires:       kitpro-selinux = %{version}-%{release}
 Requires(pre):  systemd
@@ -58,10 +59,13 @@ bzip2 -9 packaging/selinux/kitpro.pp
 %install
 cd software/server
 install -Dpm0755 kitpro-api %{buildroot}%{_bindir}/kitpro-api
+ln -s kitpro-api %{buildroot}%{_bindir}/kitpro-server
 install -Dpm0755 kitpro-helper %{buildroot}%{_libexecdir}/kitpro-helper
 install -Dpm0755 packaging/rpm/kitpro-podman-command %{buildroot}%{_libexecdir}/kitpro-podman-command
 install -Dpm0755 packaging/rpm/kitpro-server-uninstall %{buildroot}%{_sbindir}/kitpro-server-uninstall
 install -Dpm0644 packaging/systemd/kitpro-api.service %{buildroot}%{_unitdir}/kitpro-api.service
+install -Dpm0644 packaging/systemd/kitpro-ingress.service %{buildroot}%{_unitdir}/kitpro-ingress.service
+install -Dpm0644 packaging/nginx/bootstrap.conf %{buildroot}%{_datadir}/kitpro-server/ingress-bootstrap.conf
 install -Dpm0644 packaging/systemd/kitpro-helper-rocky.service %{buildroot}%{_unitdir}/kitpro-helper.service
 install -Dpm0644 packaging/systemd/kitpro-helper.socket %{buildroot}%{_unitdir}/kitpro-helper.socket
 install -Dpm0644 packaging/tmpfiles/kitpro.conf %{buildroot}%{_tmpfilesdir}/kitpro.conf
@@ -110,9 +114,13 @@ if [ "$1" -gt 1 ] && [ -x %{_bindir}/kitpro-api ] && [ -x %{_libexecdir}/kitpro-
 fi
 
 %post
-%systemd_post kitpro-helper.socket kitpro-api.service
+%systemd_post kitpro-helper.socket kitpro-api.service kitpro-ingress.service
 systemd-sysusers %{_sysusersdir}/kitpro-server.conf
 systemd-tmpfiles --create %{_tmpfilesdir}/kitpro.conf
+if [ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf ]; then
+    install -m 0640 -o root -g root %{_datadir}/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
+fi
+[ -e /var/lib/kitpro-helper/ingress/current ] || ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
 restorecon -RF /run/kitpro /var/lib/kitpro-api /var/lib/kitpro-helper /var/log/kitpro /srv/kitpro %{_sysconfdir}/kitpro-server || true
 . %{_sysconfdir}/sysconfig/kitpro-server
 export KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}
@@ -126,16 +134,16 @@ runuser -u kitpro-api -- %{_bindir}/kitpro-api --migrate-only
 %{_libexecdir}/kitpro-helper --migrate-only
 %{_sbindir}/kitpro-server-uninstall --restore
 systemctl daemon-reload
-systemctl enable --now kitpro-helper.socket kitpro-api.service
+systemctl enable --now kitpro-helper.socket kitpro-api.service kitpro-ingress.service
 
 %preun
 if [ "$1" -eq 0 ] && [ ! -e /run/kitpro/purge-complete ]; then
     %{_sbindir}/kitpro-server-uninstall --preserve-data
 fi
-%systemd_preun kitpro-helper.socket kitpro-api.service
+%systemd_preun kitpro-helper.socket kitpro-api.service kitpro-ingress.service
 
 %postun
-%systemd_postun_with_restart kitpro-helper.socket kitpro-api.service
+%systemd_postun_with_restart kitpro-helper.socket kitpro-api.service kitpro-ingress.service
 if [ "$1" -eq 0 ]; then
     rm -f /run/kitpro/purge-complete
     rmdir /run/kitpro 2>/dev/null || true
@@ -154,10 +162,13 @@ fi
 %license LICENSE
 %doc software/server/README.md
 %{_bindir}/kitpro-api
+%{_bindir}/kitpro-server
 %{_libexecdir}/kitpro-helper
 %{_libexecdir}/kitpro-podman-command
 %{_sbindir}/kitpro-server-uninstall
 %{_unitdir}/kitpro-api.service
+%{_unitdir}/kitpro-ingress.service
+%{_datadir}/kitpro-server/ingress-bootstrap.conf
 %{_unitdir}/kitpro-helper.service
 %{_unitdir}/kitpro-helper.socket
 %{_tmpfilesdir}/kitpro.conf

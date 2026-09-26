@@ -47,13 +47,16 @@ install -d "$control" "$root/usr/bin" "$root/usr/libexec" \
 ldflags="-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=$version -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=$source_commit -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=$build_date"
 (cd "$server_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$root/usr/bin/kitpro-api" ./cmd/kitpro-api)
 (cd "$server_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$root/usr/libexec/kitpro-helper" ./cmd/kitpro-helper)
+ln -s kitpro-api "$root/usr/bin/kitpro-server"
 
 install -m 0644 "$script_dir/systemd/kitpro-api.service" "$root/usr/lib/systemd/system/"
+install -m 0644 "$script_dir/systemd/kitpro-ingress.service" "$root/usr/lib/systemd/system/"
 install -m 0644 "$script_dir/systemd/kitpro-helper.service" "$root/usr/lib/systemd/system/"
 install -m 0644 "$script_dir/systemd/kitpro-helper.socket" "$root/usr/lib/systemd/system/"
 install -m 0644 "$script_dir/tmpfiles/kitpro.conf" "$root/usr/lib/tmpfiles.d/"
 install -m 0644 "$script_dir/apparmor/kitpro-helper" "$root/etc/apparmor.d/usr.libexec.kitpro-helper"
 install -m 0644 "$script_dir/apparmor/kitpro-helper" "$root/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
+install -m 0644 "$script_dir/nginx/bootstrap.conf" "$root/usr/share/kitpro-server/ingress-bootstrap.conf"
 install -m 0644 "$script_dir/debian/kitpro-server.default" "$root/etc/default/kitpro-server"
 sed -e "s/@KITPRO_PACKAGE_VERSION@/$version/g" \
     "$script_dir/debian/kitpro-debian-upgrade" > "$root/usr/libexec/kitpro-debian-upgrade"

@@ -7,6 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const defaultIngressRoot = "/var/lib/kitpro-helper/ingress"
@@ -14,12 +18,13 @@ const defaultIngressRoot = "/var/lib/kitpro-helper/ingress"
 type CommandRunner func(context.Context, string, ...string) ([]byte, error)
 
 type NginxRuntime struct {
-	Root string
-	Run  CommandRunner
+	Root   string
+	Run    CommandRunner
+	Signal func(int, syscall.Signal) error
 }
 
 func NewNginxRuntime() NginxRuntime {
-	return NginxRuntime{Root: defaultIngressRoot, Run: runCommand}
+	return NginxRuntime{Root: defaultIngressRoot, Run: runCommand, Signal: unix.Kill}
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -30,7 +35,7 @@ func (n NginxRuntime) validate() error {
 	if n.Root == "" {
 		n.Root = defaultIngressRoot
 	}
-	if !filepath.IsAbs(n.Root) || filepath.Clean(n.Root) != n.Root || n.Run == nil {
+	if !filepath.IsAbs(n.Root) || filepath.Clean(n.Root) != n.Root || n.Run == nil || n.Signal == nil {
 		return fmt.Errorf("invalid ingress runtime")
 	}
 	return nil
@@ -95,7 +100,7 @@ func (n NginxRuntime) Activate(ctx context.Context, candidate Candidate) error {
 	if err = replaceSymlink(n.Root, path); err != nil {
 		return err
 	}
-	return n.reload(ctx)
+	return n.reload()
 }
 
 func (n NginxRuntime) Verify(ctx context.Context, candidate Candidate) error {
@@ -104,10 +109,10 @@ func (n NginxRuntime) Verify(ctx context.Context, candidate Candidate) error {
 
 func (n NginxRuntime) Rollback(ctx context.Context, candidate Candidate) error {
 	if candidate.PreviousGeneration == 0 {
-		if err := os.Remove(filepath.Join(n.Root, "current")); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove failed ingress activation: %w", err)
+		if err := replaceSymlink(n.Root, filepath.Join(n.Root, "bootstrap")); err != nil {
+			return err
 		}
-		return n.reload(ctx)
+		return n.reload()
 	}
 	path, err := n.generationPath(candidate.PreviousGeneration)
 	if err != nil {
@@ -116,7 +121,7 @@ func (n NginxRuntime) Rollback(ctx context.Context, candidate Candidate) error {
 	if err = replaceSymlink(n.Root, path); err != nil {
 		return err
 	}
-	return n.reload(ctx)
+	return n.reload()
 }
 
 func (n NginxRuntime) VerifyGeneration(ctx context.Context, generation int64) error {
@@ -131,6 +136,9 @@ func (n NginxRuntime) VerifyGeneration(ctx context.Context, generation int64) er
 	output, err := n.Run(ctx, "/usr/sbin/nginx", "-t", "-p", n.Root+"/", "-c", "current/nginx.conf")
 	if err != nil {
 		return fmt.Errorf("active nginx configuration failed verification: %s", boundedOutput(output))
+	}
+	if err = n.signal(0); err != nil {
+		return fmt.Errorf("managed nginx process is unavailable")
 	}
 	return nil
 }
@@ -149,12 +157,23 @@ func (n NginxRuntime) Cleanup(_ context.Context, candidate Candidate) error {
 	return nil
 }
 
-func (n NginxRuntime) reload(ctx context.Context) error {
-	output, err := n.Run(ctx, "/usr/bin/systemctl", "reload-or-restart", "kitpro-ingress.service")
-	if err != nil {
-		return fmt.Errorf("reload KITPro ingress: %s", boundedOutput(output))
+func (n NginxRuntime) reload() error {
+	if err := n.signal(syscall.SIGHUP); err != nil {
+		return fmt.Errorf("reload KITPro ingress: %w", err)
 	}
 	return nil
+}
+
+func (n NginxRuntime) signal(value syscall.Signal) error {
+	raw, err := os.ReadFile(filepath.Join(n.Root, "run", "nginx.pid"))
+	if err != nil {
+		return err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid < 2 {
+		return fmt.Errorf("invalid managed nginx PID")
+	}
+	return n.Signal(pid, value)
 }
 
 func replaceSymlink(root, target string) error {

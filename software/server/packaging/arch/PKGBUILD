@@ -5,7 +5,7 @@ pkgdesc='Local application manager for KITPro Server'
 arch=('x86_64')
 url='https://github.com/KITProHQ/kitpro'
 license=('Apache-2.0')
-depends=('apparmor' 'docker' 'systemd')
+depends=('apparmor' 'docker' 'nginx' 'systemd')
 makedepends=('go')
 install=kitpro-server.install
 backup=('etc/apparmor.d/usr.libexec.kitpro-helper')
@@ -30,11 +30,14 @@ build() {
 package() {
     local source_root="$srcdir/${pkgname}-${pkgver}/software/server"
     install -Dm0755 "$source_root/kitpro-api" "$pkgdir/usr/bin/kitpro-api"
+    ln -s kitpro-api "$pkgdir/usr/bin/kitpro-server"
     install -Dm0755 "$source_root/kitpro-helper" "$pkgdir/usr/libexec/kitpro-helper"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-api.service" "$pkgdir/usr/lib/systemd/system/kitpro-api.service"
+    install -Dm0644 "$source_root/packaging/systemd/kitpro-ingress.service" "$pkgdir/usr/lib/systemd/system/kitpro-ingress.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.service" "$pkgdir/usr/lib/systemd/system/kitpro-helper.service"
     install -Dm0644 "$source_root/packaging/systemd/kitpro-helper.socket" "$pkgdir/usr/lib/systemd/system/kitpro-helper.socket"
     install -Dm0644 "$source_root/packaging/tmpfiles/kitpro.conf" "$pkgdir/usr/lib/tmpfiles.d/kitpro.conf"
+    install -Dm0644 "$source_root/packaging/nginx/bootstrap.conf" "$pkgdir/usr/share/kitpro-server/ingress-bootstrap.conf"
     install -Dm0644 "$source_root/packaging/apparmor/kitpro-helper" "$pkgdir/etc/apparmor.d/usr.libexec.kitpro-helper"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.conf" "$pkgdir/usr/share/kitpro-server/kitpro-server.conf"
     install -Dm0644 "$source_root/packaging/arch/kitpro-server.sysusers" "$pkgdir/usr/lib/sysusers.d/kitpro-server.conf"

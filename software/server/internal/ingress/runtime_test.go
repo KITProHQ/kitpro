@@ -5,17 +5,26 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
 func TestNginxRuntimeUsesOnlyFixedCommandsAndAtomicGeneration(t *testing.T) {
 	root := t.TempDir()
 	var calls [][]string
+	if err := os.MkdirAll(filepath.Join(root, "run"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run", "nginx.pid"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var signals []syscall.Signal
 	runtime := NginxRuntime{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, append([]string{name}, args...))
 		return nil, nil
-	}}
+	}, Signal: func(_ int, signal syscall.Signal) error { signals = append(signals, signal); return nil }}
 	candidate := Candidate{Generation: 1, Configuration: []byte("events {}\nhttp {}\n")}
 	if err := runtime.Prepare(context.Background(), candidate); err != nil {
 		t.Fatal(err)
@@ -29,14 +38,14 @@ func TestNginxRuntimeUsesOnlyFixedCommandsAndAtomicGeneration(t *testing.T) {
 	if err := runtime.Verify(context.Background(), candidate); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 3 {
+	if len(calls) != 2 {
 		t.Fatalf("calls = %#v", calls)
 	}
 	if got := strings.Join(calls[0], " "); got != "/usr/sbin/nginx -t -p "+filepath.Join(root, "generations/1")+"/ -c nginx.conf" {
 		t.Fatalf("unexpected validation command %q", got)
 	}
-	if got := strings.Join(calls[1], " "); got != "/usr/bin/systemctl reload-or-restart kitpro-ingress.service" {
-		t.Fatalf("unexpected reload command %q", got)
+	if len(signals) != 2 || signals[0] != syscall.SIGHUP || signals[1] != 0 {
+		t.Fatalf("unexpected signals %#v", signals)
 	}
 	current, err := filepath.EvalSymlinks(filepath.Join(root, "current"))
 	if err != nil || current != filepath.Join(root, "generations/1") {
@@ -46,12 +55,23 @@ func TestNginxRuntimeUsesOnlyFixedCommandsAndAtomicGeneration(t *testing.T) {
 
 func TestNginxRuntimeRejectsOverwriteAndRollsBackLink(t *testing.T) {
 	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "run"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bootstrap"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run", "nginx.pid"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		t.Fatal(err)
+	}
 	failed := false
 	runtime := NginxRuntime{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "/usr/bin/systemctl" && failed {
-			return []byte("synthetic failure"), errors.New("exit")
-		}
 		return nil, nil
+	}, Signal: func(_ int, _ syscall.Signal) error {
+		if failed {
+			return errors.New("synthetic failure")
+		}
+		return nil
 	}}
 	first := Candidate{Generation: 1, Configuration: []byte("one")}
 	if err := runtime.Prepare(context.Background(), first); err != nil {
