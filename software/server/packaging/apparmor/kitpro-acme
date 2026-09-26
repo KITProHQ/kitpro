@@ -12,6 +12,8 @@
   /run/kitpro-ingress/acme.sock rw,
   /var/lib/kitpro-helper/acme/ rw,
   /var/lib/kitpro-helper/acme/** rwk,
+  /proc/*/cgroup r,
+  /proc/sys/net/core/somaxconn r,
   network unix stream,
   network inet stream,
   network inet6 stream,

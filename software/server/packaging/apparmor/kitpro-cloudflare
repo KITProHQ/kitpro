@@ -14,6 +14,8 @@
   /run/kitpro/cloudflare.sock rw,
   /var/lib/kitpro-helper/providers/cloudflare/ rw,
   /var/lib/kitpro-helper/providers/cloudflare/** rwk,
+  /proc/*/cgroup r,
+  /proc/sys/net/core/somaxconn r,
   /proc/*/fd/ r,
   /proc/*/fd/* r,
   network unix stream,

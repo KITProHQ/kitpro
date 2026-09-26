@@ -6,6 +6,7 @@
   capability chown,
   capability dac_read_search,
   /etc/passwd r,
+  /run/kitpro/helper-state.lock rwk,
   /run/kitpro/** rw,
   /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,

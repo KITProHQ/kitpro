@@ -70,6 +70,7 @@ grep -q '^AppArmorProfile=/usr/libexec/kitpro-acme$' "$unpack/data/usr/lib/syste
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-cloudflare$' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+grep -q '^RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK$' "$unpack/data/usr/lib/systemd/system/kitpro-api.service"
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"; then
     echo "helper gained an unapproved capability" >&2
     exit 1
@@ -98,6 +99,11 @@ if grep -Rq -- '--token ' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare
 fi
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+grep -Fqx '  /run/kitpro/helper-state.lock rwk,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+for profile in usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare; do
+    grep -Fqx '  /proc/*/cgroup r,' "$unpack/data/etc/apparmor.d/$profile"
+    grep -Fqx '  /proc/sys/net/core/somaxconn r,' "$unpack/data/etc/apparmor.d/$profile"
+done
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.host-backup-*/helper.db -> /var/lib/kitpro-helper/backups/.host-backup-*/.helper.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
