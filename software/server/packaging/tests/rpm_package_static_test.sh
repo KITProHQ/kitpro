@@ -12,6 +12,8 @@ bash -n "$packaging_dir/build-rpm.sh" "$uninstaller" "$podman_command"
 if command -v shellcheck >/dev/null 2>&1; then
     shellcheck "$packaging_dir/build-rpm.sh" "$uninstaller" "$podman_command"
 fi
+grep -q -- '--define "source_date_epoch_from_changelog 0"' "$packaging_dir/build-rpm.sh"
+grep -q -- '--define "use_source_date_epoch_as_buildtime 1"' "$packaging_dir/build-rpm.sh"
 
 grep -q '^Requires:       podman >= 5$' "$spec"
 grep -q '^%global debug_package %{nil}$' "$spec"

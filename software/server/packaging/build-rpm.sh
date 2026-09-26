@@ -36,7 +36,11 @@ sed -e "s|@VERSION@|$version|g" -e "s|@SOURCE_COMMIT@|$source_commit|g" -e "s|@B
     "$script_dir/rpm/kitpro-server.spec.in" > "$topdir/SPECS/kitpro-server.spec"
 
 export SOURCE_DATE_EPOCH=$source_epoch
-rpmbuild -ba --define "_topdir $topdir" "$topdir/SPECS/kitpro-server.spec"
+rpmbuild -ba \
+    --define "_topdir $topdir" \
+    --define "source_date_epoch_from_changelog 0" \
+    --define "use_source_date_epoch_as_buildtime 1" \
+    "$topdir/SPECS/kitpro-server.spec"
 
 mkdir -p "$output_dir"
 find "$topdir/RPMS" "$topdir/SRPMS" -type f -name '*.rpm' -exec install -m 0644 -t "$output_dir" {} +
