@@ -28,6 +28,7 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
 	"github.com/kitpro/kitpro/software/server/internal/helperops"
+	"github.com/kitpro/kitpro/software/server/internal/hostbackup"
 	"github.com/kitpro/kitpro/software/server/internal/lifecycle"
 	"github.com/kitpro/kitpro/software/server/internal/maintenance"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
@@ -65,6 +66,11 @@ func main() {
 	if handleMaintenance(os.Args[1:]) {
 		return
 	}
+	stateLock, err := acquireStateLock()
+	if err != nil {
+		fatal(err.Error())
+	}
+	defer stateLock.Close()
 	runtimeName, err := configuredRuntimeName()
 	if err != nil {
 		fatal(err.Error())
@@ -237,6 +243,23 @@ func handleMaintenance(args []string) bool {
 			fatal(err.Error())
 		}
 		slog.Info("database verification completed", "component", "helper", "event", "database_verification_completed", "result", "success")
+		return true
+	case "--restore-host-state":
+		if len(args) != 3 || args[2] != "--confirm-services-stopped" {
+			fatal("usage: kitpro-helper --restore-host-state ABSOLUTE_ARCHIVE --confirm-services-stopped")
+		}
+		if os.Geteuid() != 0 {
+			fatal("host-state restore requires local root authority")
+		}
+		stateLock, err := acquireStateLock()
+		if err != nil {
+			fatal("KITPro helper is active; stop control, helper, ingress, ACME, and Cloudflare services before restore")
+		}
+		defer stateLock.Close()
+		if err = hostbackup.Restore(context.Background(), hostbackup.RestoreOptions{Archive: args[1], StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")}); err != nil {
+			fatal(err.Error())
+		}
+		slog.Info("host state restored with ingress disabled", "component", "helper", "event", "host_state_restored", "result", "success")
 		return true
 	case "--resolve-operation":
 		if len(args) != 3 || args[2] != "--release-as-failed" {
@@ -559,11 +582,11 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "removed"}})
 		}
 	case "BackupHelperState":
-		path, err := backup.Vacuum(context.Background(), db, "/var/lib/kitpro-helper/backups", r.SemanticOperationID()+".db")
+		result, err := hostbackup.Create(context.Background(), hostbackup.CreateOptions{DB: db, Destination: env("KITPRO_HELPER_BACKUP_DIR", "/var/lib/kitpro-helper/backups"), Name: r.SemanticOperationID() + ".kitpro-host-state.tar.gz", StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")})
 		if err != nil {
 			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
 		} else {
-			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"path": path}})
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"path": result.Path, "sha256": result.SHA256, "contains_secrets": true, "remote_cloudflare_resources_included": false, "generated_ingress_runtime_included": false}})
 		}
 	case "CreateApplicationBackup":
 		result, err := createApplicationBackup(context.Background(), db, r)

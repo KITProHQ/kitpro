@@ -13,10 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/ingress"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/operations"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
+	"github.com/kitpro/kitpro/software/server/internal/readiness"
 )
 
 type ingressMutation struct {
@@ -33,6 +35,40 @@ type ingressMutation struct {
 
 func (a *app) ingressRoutes(w http.ResponseWriter, r *http.Request) {
 	store := ingress.Store{DB: a.db}
+	if r.Method == http.MethodPost && strings.Trim(r.URL.Path, "/") == "api/v1/ingress/reconcile" {
+		routes, err := store.ListRoutes(r.Context(), "")
+		if err != nil {
+			http.Error(w, "ingress state unavailable", http.StatusInternalServerError)
+			return
+		}
+		validated := 0
+		heldRoutes := []ingress.Route{}
+		for _, route := range routes {
+			var held int
+			_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM ingress_route_holds WHERE route_id=?`, route.ID).Scan(&held)
+			if route.DesiredState == ingress.Enabled && held > 0 {
+				validated++
+				heldRoutes = append(heldRoutes, route)
+				if a.observeRouteReadiness(r.Context(), route).State != "ready" {
+					http.Error(w, "ingress remains disabled because a backend is not ready", http.StatusConflict)
+					return
+				}
+			}
+		}
+		if _, err = a.db.ExecContext(r.Context(), `DELETE FROM ingress_route_holds WHERE reason='application-restore'`); err != nil {
+			http.Error(w, "ingress restore holds could not be released", http.StatusInternalServerError)
+			return
+		}
+		generation, err := a.applyIngress(r, store)
+		if err != nil {
+			_ = setRouteHolds(r.Context(), a.db, heldRoutes, true)
+			_, _ = a.applyIngress(r, store)
+			http.Error(w, "ingress reconciliation failed; bootstrap or previous generation remains active", http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"generation": generation, "routes_validated": validated})
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		installationID := strings.TrimSpace(r.URL.Query().Get("installation_id"))
@@ -127,6 +163,7 @@ func (a *app) ingressRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ingress candidate failed; previous routes remain active", http.StatusBadGateway)
 			return
 		}
+		_, _ = a.db.ExecContext(r.Context(), `DELETE FROM ingress_route_holds WHERE route_id=?`, routeID)
 		writeJSON(w, http.StatusOK, route)
 	default:
 		http.Error(w, "method denied", http.StatusMethodNotAllowed)
@@ -194,6 +231,13 @@ func (a *app) applyIngress(r *http.Request, store ingress.Store) (int64, error) 
 		if route.DesiredState != ingress.Enabled {
 			continue
 		}
+		var held int
+		if err = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM ingress_route_holds WHERE route_id=?`, route.ID).Scan(&held); err != nil {
+			return 0, err
+		}
+		if held > 0 {
+			continue
+		}
 		requestRoutes = append(requestRoutes, protocol.IngressRoute{RouteID: route.ID, InstallationID: route.InstallationID, ServiceID: route.ServiceID, Hostname: route.Hostname, ExposureMode: string(route.ExposureMode), UpstreamProtocol: route.UpstreamProtocol, TLSPolicy: string(route.TLSPolicy), CertificateID: route.CertificateID, ProviderID: route.ProviderID})
 		activeIDs = append(activeIDs, route.ID)
 	}
@@ -219,6 +263,93 @@ func (a *app) applyIngress(r *http.Request, store ingress.Store) (int64, error) 
 		return 0, err
 	}
 	return result.Generation, nil
+}
+
+func (a *app) quiesceIngressForRestore(r *http.Request, installationID string) ([]ingress.Route, error) {
+	store := ingress.Store{DB: a.db}
+	routes, err := store.ListRoutes(r.Context(), installationID)
+	if err != nil {
+		return nil, err
+	}
+	enabled := make([]ingress.Route, 0, len(routes))
+	for _, route := range routes {
+		if route.DesiredState == ingress.Enabled {
+			enabled = append(enabled, route)
+		}
+	}
+	if len(enabled) == 0 {
+		return enabled, nil
+	}
+	if err = setRouteHolds(r.Context(), a.db, enabled, true); err != nil {
+		return nil, err
+	}
+	if _, err = a.applyIngress(r, store); err == nil {
+		return enabled, nil
+	}
+	_ = setRouteHolds(r.Context(), a.db, enabled, false)
+	if _, recoveryErr := a.applyIngress(r, store); recoveryErr != nil {
+		return nil, fmt.Errorf("quiesce failed and working ingress recovery failed")
+	}
+	return nil, fmt.Errorf("quiesce ingress generation failed")
+}
+
+func (a *app) reactivateIngressAfterRestore(r *http.Request, routes []ingress.Route) error {
+	for _, route := range routes {
+		if a.observeRouteReadiness(r.Context(), route).State != "ready" {
+			return fmt.Errorf("restored backend readiness failed")
+		}
+	}
+	if err := setRouteHolds(r.Context(), a.db, routes, false); err != nil {
+		return err
+	}
+	store := ingress.Store{DB: a.db}
+	if _, err := a.applyIngress(r, store); err == nil {
+		return nil
+	}
+	_ = setRouteHolds(r.Context(), a.db, routes, true)
+	if _, recoveryErr := a.applyIngress(r, store); recoveryErr != nil {
+		return fmt.Errorf("ingress activation failed and safe disabled generation requires recovery")
+	}
+	return fmt.Errorf("ingress activation failed; routes remain disabled")
+}
+
+func (a *app) observeRouteReadiness(ctx context.Context, route ingress.Route) readiness.Observation {
+	observation := readiness.Observation{State: "failed", ReasonCode: "restore_binding_unavailable", Summary: "Managed application binding is unavailable", CheckedAt: time.Now().UTC()}
+	var applicationID string
+	if err := a.db.QueryRowContext(ctx, `SELECT application_id FROM installations WHERE installation_id=?`, route.InstallationID).Scan(&applicationID); err == nil {
+		if entry, ok := a.catalog[applicationID]; ok {
+			service, found := findService(entry.Manifest, route.ServiceID)
+			binding, bindingErr := exposure.Get(ctx, a.db, route.InstallationID, route.ServiceID)
+			if found && bindingErr == nil {
+				if a.probeReadiness != nil {
+					observation = a.probeReadiness(ctx, service.Readiness, binding.HostAddress, binding.HostPort)
+				} else {
+					observation = (readiness.Prober{}).Probe(ctx, service.Readiness, binding.HostAddress, binding.HostPort)
+				}
+			}
+		}
+	}
+	_, _ = a.db.ExecContext(ctx, `INSERT INTO readiness_observations(entity_type,entity_id,dimension,state,reason_code,summary,checked_at) VALUES('route',?,'application',?,?,?,?) ON CONFLICT(entity_type,entity_id,dimension) DO UPDATE SET state=excluded.state,reason_code=excluded.reason_code,summary=excluded.summary,checked_at=excluded.checked_at`, route.ID, observation.State, observation.ReasonCode, observation.Summary, observation.CheckedAt.Format(time.RFC3339Nano))
+	return observation
+}
+
+func setRouteHolds(ctx context.Context, db *sql.DB, routes []ingress.Route, held bool) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, route := range routes {
+		if held {
+			if _, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO ingress_route_holds(route_id,reason,created_at) VALUES(?,'application-restore',?)`, route.ID, now); err != nil {
+				return err
+			}
+		} else if _, err = tx.ExecContext(ctx, `DELETE FROM ingress_route_holds WHERE route_id=? AND reason='application-restore'`, route.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 type certificateImport struct {

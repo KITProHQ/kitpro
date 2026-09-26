@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 17
+	target := 18
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -660,6 +660,22 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=17"); err != nil {
+			return err
+		}
+	}
+	if n < 18 {
+		if !helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ingress_route_holds (
+				route_id TEXT PRIMARY KEY,
+				reason TEXT NOT NULL CHECK(reason IN ('application-restore')),
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(route_id) REFERENCES ingress_routes(route_id) ON DELETE CASCADE
+			);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=18"); err != nil {
 			return err
 		}
 	}

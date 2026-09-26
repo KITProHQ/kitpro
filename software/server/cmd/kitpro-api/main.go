@@ -15,11 +15,13 @@ import (
 	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
+	"github.com/kitpro/kitpro/software/server/internal/ingress"
 	"github.com/kitpro/kitpro/software/server/internal/maintenance"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/operations"
 	hostplatform "github.com/kitpro/kitpro/software/server/internal/platform"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
+	"github.com/kitpro/kitpro/software/server/internal/readiness"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 	"html/template"
 	"io"
@@ -67,6 +69,7 @@ type app struct {
 	// beforeControlProjection is a deterministic fault-injection seam. A nil
 	// hook has no production effect.
 	beforeControlProjection func() error
+	probeReadiness          func(context.Context, *manifest.ReadinessCheck, string, int) readiness.Observation
 }
 
 type internalDispatchKey struct{}
@@ -361,6 +364,19 @@ func handleMaintenance(args []string) bool {
 		}
 		slog.Info("database verification completed", "component", "api", "event", "database_verification_completed", "result", "success")
 		return true
+	case "--restore-database":
+		if len(args) != 3 || args[2] != "--confirm-services-stopped" {
+			fatalMaintenance("usage: kitpro-api --restore-database ABSOLUTE_BACKUP --confirm-services-stopped")
+		}
+		if os.Geteuid() != 0 {
+			fatalMaintenance("control database restore requires local root authority")
+		}
+		recovery, err := backup.RestoreAtomic(context.Background(), args[1], env("KITPRO_CONTROL_DB", "/var/lib/kitpro-api/control.db"))
+		if err != nil {
+			fatalMaintenance(err.Error())
+		}
+		slog.Info("control database restored", "component", "api", "event", "control_database_restored", "result", "success", "prior_database", recovery)
+		return true
 	case "admin":
 		if len(args) < 2 || args[1] != "reset-password" || len(args) > 3 {
 			fatalMaintenance("usage: kitpro-server admin reset-password [username]")
@@ -601,7 +617,7 @@ func (a *app) backup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "helper backup failed", 503)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]string{"control": cp, "helper": "completed"})
+	json.NewEncoder(w).Encode(map[string]any{"backup_id": id, "control_database": cp, "helper_state": resp.Result, "contains_secrets": true, "remote_cloudflare_resources_included": false})
 }
 
 // version exposes non-sensitive build and schema metadata to authenticated
@@ -2446,6 +2462,16 @@ func (a *app) applicationBackupOperation(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "operation state unavailable", http.StatusInternalServerError)
 		return
 	}
+	var quiesced []ingress.Route
+	if action == "restore" {
+		var err error
+		quiesced, err = a.quiesceIngressForRestore(r, installationID)
+		if err != nil {
+			_ = operations.Update(r.Context(), a.db, operationID, "failed", "restore blocked because ingress could not be safely quiesced")
+			http.Error(w, "KITPro could not safely disable ingress before restore", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	response, err := a.callHelperOperation(request)
 	if err == nil && !response.OK {
 		err = fmt.Errorf("helper rejected application backup operation")
@@ -2455,6 +2481,11 @@ func (a *app) applicationBackupOperation(w http.ResponseWriter, r *http.Request,
 		status, summary = "failed", "application backup operation failed"
 	} else if helperStatePending(response.State) {
 		status, summary = "accepted", "application backup operation continues in helper"
+	} else if action == "restore" && len(quiesced) > 0 {
+		if restoreErr := a.reactivateIngressAfterRestore(r, quiesced); restoreErr != nil {
+			err = restoreErr
+			status, summary = "failed", "application restored but ingress remains disabled pending readiness recovery"
+		}
 	}
 	_ = operations.Update(r.Context(), a.db, operationID, status, summary)
 	if err != nil {

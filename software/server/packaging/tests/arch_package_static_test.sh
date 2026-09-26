@@ -41,7 +41,8 @@ grep -q '/usr/libexec/kitpro-helper --verify-host-prerequisites' "$arch_dir/kitp
 grep -q 'restore_previous_services' "$arch_dir/kitpro-server.install"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$server_dir/packaging/apparmor/kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,' "$server_dir/packaging/apparmor/kitpro-helper"
-test "$(grep -Ec '^  link ' "$server_dir/packaging/apparmor/kitpro-helper")" -eq 2
+grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.host-backup-*/helper.db -> /var/lib/kitpro-helper/backups/.host-backup-*/.helper.db.partial-*,' "$server_dir/packaging/apparmor/kitpro-helper"
+test "$(grep -Ec '^  link ' "$server_dir/packaging/apparmor/kitpro-helper")" -eq 3
 if grep -Eq '^  (/var/lib/kitpro-helper/\*\*|/var/lib/kitpro-helper/backups/\*\*) [^,]*l[^,]*,$' "$server_dir/packaging/apparmor/kitpro-helper"; then
     printf 'helper gained broad hard-link authority\n' >&2
     exit 1

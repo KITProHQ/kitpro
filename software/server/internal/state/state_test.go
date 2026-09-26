@@ -177,14 +177,14 @@ func TestAlpha14SchemaDefaultsToNoIngressOrProviderExposure(t *testing.T) {
 				t.Fatal(err)
 			}
 			var version int
-			if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 17 {
+			if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 18 {
 				t.Fatalf("version=%d err=%v", version, err)
 			}
 			tables := []string{"ingress_generations"}
 			if helper {
 				tables = append(tables, "ingress_generation_routes", "certificate_material", "exposure_provider_credentials", "support_bundle_files", "cloudflare_provider_state", "cloudflare_provider_routes")
 			} else {
-				tables = append(tables, "ingress_routes", "certificates", "exposure_providers", "exposure_provider_routes", "setup_steps", "readiness_observations", "audit_events", "support_bundles")
+				tables = append(tables, "ingress_routes", "ingress_route_holds", "certificates", "exposure_providers", "exposure_provider_routes", "setup_steps", "readiness_observations", "audit_events", "support_bundles")
 			}
 			if helper {
 				var port int
@@ -226,7 +226,7 @@ func TestHelperV13AddsLifecycleReconciliationAndRestoreEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 17 {
+	if err = db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 18 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	for _, column := range []string{"topology_hash", "dependencies_json", "start_ordinal"} {
@@ -288,7 +288,7 @@ func TestHelperV10UpgradesInPlaceToMultiComponentEvidence(t *testing.T) {
 	if err = db.QueryRow(`SELECT dependencies_json,start_ordinal FROM runtime_components WHERE installation_id='inst-old'`).Scan(&dependencies, &ordinal); err != nil {
 		t.Fatal(err)
 	}
-	if version != 17 || topology != "" || dependencies != "[]" || ordinal != 0 {
+	if version != 18 || topology != "" || dependencies != "[]" || ordinal != 0 {
 		t.Fatalf("version=%d topology=%q dependencies=%q ordinal=%d", version, topology, dependencies, ordinal)
 	}
 }
@@ -327,7 +327,7 @@ func TestExactPublicAlpha11Schema7FixturesUpgradeWithoutDataLoss(t *testing.T) {
 	}
 	var version, generation int
 	var desired, exposureMode, username, rootID string
-	if err := control.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 17 {
+	if err := control.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 18 {
 		t.Fatalf("control version=%d err=%v", version, err)
 	}
 	if err := control.QueryRow(`SELECT desired_state,runtime_generation FROM installations WHERE installation_id='inst-paperless1'`).Scan(&desired, &generation); err != nil || desired != "running" || generation != 1 {
@@ -348,7 +348,7 @@ func TestExactPublicAlpha11Schema7FixturesUpgradeWithoutDataLoss(t *testing.T) {
 	if err := Migrate(context.Background(), helper, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := helper.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 17 {
+	if err := helper.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 18 {
 		t.Fatalf("helper version=%d err=%v", version, err)
 	}
 	var receiptHash, secret, binding, status string

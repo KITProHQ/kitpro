@@ -10,7 +10,10 @@ import (
 	"time"
 
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
+	"github.com/kitpro/kitpro/software/server/internal/ingress"
+	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
+	"github.com/kitpro/kitpro/software/server/internal/readiness"
 )
 
 func seedIngressInstallation(t *testing.T, a *app, installation, application string) {
@@ -222,5 +225,83 @@ func TestCloudflareRouteFailureRollsBackLocalIngress(t *testing.T) {
 	var count int
 	if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_routes`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed remote route left local ingress count=%d err=%v", count, err)
+	}
+}
+
+func TestRestoreQuiescesIngressAndReactivatesOnlyAfterReadiness(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		ready      bool
+		wantStatus int
+		wantState  string
+		wantApply  int
+	}{
+		{name: "ready backend", ready: true, wantStatus: http.StatusOK, wantState: "enabled", wantApply: 2},
+		{name: "failed backend", ready: false, wantStatus: http.StatusServiceUnavailable, wantState: "enabled", wantApply: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a, session, csrf := newTestApp(t)
+			seedIngressInstallation(t, a, "inst-restore01", "uptime-kuma")
+			if _, err := a.db.Exec(`UPDATE installations SET release_id='2.3.1' WHERE installation_id='inst-restore01'`); err != nil {
+				t.Fatal(err)
+			}
+			store := ingress.Store{DB: a.db}
+			route := ingress.Route{ID: "route-0123456789abcdef", InstallationID: "inst-restore01", ServiceID: "web", Hostname: "restore.example.test", ExposureMode: ingress.LAN, UpstreamProtocol: "http", TLSPolicy: ingress.TLSNone, DesiredState: ingress.Enabled}
+			if _, err := store.CreateRoute(context.Background(), route); err != nil {
+				t.Fatal(err)
+			}
+			applyCount := 0
+			var order []string
+			a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+				order = append(order, request.Operation)
+				if request.Operation == "ApplyIngressGeneration" {
+					applyCount++
+					return protocol.Response{OK: true, State: "succeeded", Result: map[string]any{"generation": applyCount, "previous_generation": applyCount - 1, "configuration_sha256": strings.Repeat("a", 64)}}, nil
+				}
+				if request.Operation == "RestoreApplicationBackup" {
+					return protocol.Response{OK: true, State: "succeeded", Result: map[string]any{"backup_id": request.BackupID, "status": "restored"}}, nil
+				}
+				t.Fatalf("unexpected helper operation %q", request.Operation)
+				return protocol.Response{}, nil
+			}
+			a.probeReadiness = func(context.Context, *manifest.ReadinessCheck, string, int) readiness.Observation {
+				state, code := "failed", "test_backend_failed"
+				if test.ready {
+					state, code = "ready", "test_backend_ready"
+				}
+				return readiness.Observation{State: state, ReasonCode: code, Summary: "test observation", CheckedAt: time.Now().UTC()}
+			}
+			recorder := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodPost, "/api/v1/installations/inst-restore01/restore", `{"backup_id":"op-0123456789abcdef0123456789abcdef"}`, session, csrf)
+			request.Header.Set("Content-Type", "application/json")
+			a.guard(a.installations)(recorder, request)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s order=%v", recorder.Code, recorder.Body.String(), order)
+			}
+			var desired string
+			if err := a.db.QueryRow(`SELECT desired_state FROM ingress_routes WHERE route_id=?`, route.ID).Scan(&desired); err != nil || desired != test.wantState || applyCount != test.wantApply {
+				t.Fatalf("desired=%q apply=%d order=%v err=%v", desired, applyCount, order, err)
+			}
+			var held int
+			if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_route_holds WHERE route_id=?`, route.ID).Scan(&held); err != nil || held != map[bool]int{true: 0, false: 1}[test.ready] {
+				t.Fatalf("restore hold=%d ready=%v err=%v", held, test.ready, err)
+			}
+			if len(order) < 2 || order[0] != "ApplyIngressGeneration" || order[1] != "RestoreApplicationBackup" {
+				t.Fatalf("unsafe restore order: %v", order)
+			}
+			if !test.ready {
+				a.probeReadiness = func(context.Context, *manifest.ReadinessCheck, string, int) readiness.Observation {
+					return readiness.Observation{State: "ready", ReasonCode: "test_backend_recovered", Summary: "test observation", CheckedAt: time.Now().UTC()}
+				}
+				recorder = httptest.NewRecorder()
+				a.guard(a.ingressRoutes)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/ingress/reconcile", `{}`, session, csrf))
+				if recorder.Code != http.StatusOK || applyCount != 2 {
+					t.Fatalf("reconcile status=%d body=%s apply=%d", recorder.Code, recorder.Body.String(), applyCount)
+				}
+				if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_route_holds WHERE route_id=?`, route.ID).Scan(&held); err != nil || held != 0 {
+					t.Fatalf("reconcile left restore hold=%d err=%v", held, err)
+				}
+			}
+		})
 	}
 }

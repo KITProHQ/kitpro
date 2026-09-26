@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
@@ -98,6 +101,84 @@ func Verify(ctx context.Context, path string) error {
 	}
 	defer db.Close()
 	return VerifyDatabase(ctx, db)
+}
+
+// RestoreAtomic installs a verified SQLite backup without an interval where a
+// pre-existing target is absent. The old database bytes are retained adjacent
+// to the target for operator recovery.
+func RestoreAtomic(ctx context.Context, source, target string) (string, error) {
+	if !filepath.IsAbs(source) || filepath.Clean(source) != source || !filepath.IsAbs(target) || filepath.Clean(target) != target || source == target {
+		return "", fmt.Errorf("invalid database restore path")
+	}
+	if err := Verify(ctx, source); err != nil {
+		return "", fmt.Errorf("source database verification failed: %w", err)
+	}
+	directory := filepath.Dir(target)
+	if err := os.MkdirAll(directory, 0750); err != nil {
+		return "", err
+	}
+	staging, err := os.OpenFile(filepath.Join(directory, "."+filepath.Base(target)+".restore-new"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return "", err
+	}
+	stagingPath := staging.Name()
+	defer os.Remove(stagingPath)
+	sourceFile, err := os.Open(source)
+	if err == nil {
+		_, err = io.Copy(staging, sourceFile)
+		_ = sourceFile.Close()
+	}
+	if err == nil {
+		err = staging.Sync()
+	}
+	if closeErr := staging.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", err
+	}
+	if err = Verify(ctx, stagingPath); err != nil {
+		return "", fmt.Errorf("staged database verification failed: %w", err)
+	}
+	if _, err = os.Lstat(target); os.IsNotExist(err) {
+		if err = os.Rename(stagingPath, target); err != nil {
+			return "", err
+		}
+		return "", syncDir(directory)
+	} else if err != nil {
+		return "", err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, sidecarErr := os.Lstat(target + suffix); sidecarErr == nil {
+			return "", fmt.Errorf("target database has active SQLite sidecar %s; stop services and checkpoint it before restore", suffix)
+		} else if !os.IsNotExist(sidecarErr) {
+			return "", sidecarErr
+		}
+	}
+	if err = unix.Renameat2(unix.AT_FDCWD, stagingPath, unix.AT_FDCWD, target, unix.RENAME_EXCHANGE); err != nil {
+		return "", fmt.Errorf("atomic database exchange failed: %w", err)
+	}
+	if err = Verify(ctx, target); err != nil {
+		_ = unix.Renameat2(unix.AT_FDCWD, stagingPath, unix.AT_FDCWD, target, unix.RENAME_EXCHANGE)
+		return "", fmt.Errorf("installed database verification failed: %w", err)
+	}
+	recovery := filepath.Join(directory, filepath.Base(target)+".pre-restore-"+time.Now().UTC().Format("20060102T150405.000000000Z"))
+	if err = os.Rename(stagingPath, recovery); err != nil {
+		return "", fmt.Errorf("database restored but prior database remains at %s: %w", stagingPath, err)
+	}
+	if err = syncDir(directory); err != nil {
+		return "", err
+	}
+	return recovery, nil
+}
+
+func syncDir(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 // VerifyWritableSnapshot verifies a private SQLite snapshot with write access

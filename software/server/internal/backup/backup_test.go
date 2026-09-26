@@ -86,6 +86,58 @@ func TestVacuumRejectsUnwritableBackupLocationWithoutChangingSource(t *testing.T
 	}
 }
 
+func TestRestoreAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	targetPath := filepath.Join(root, "control.db")
+	target, err := sql.Open("sqlite", targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = target.Exec(`CREATE TABLE value_state(value TEXT NOT NULL); INSERT INTO value_state VALUES('old')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = target.Close()
+	sourcePath := filepath.Join(root, "source.db")
+	source, err := sql.Open("sqlite", sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.Exec(`CREATE TABLE value_state(value TEXT NOT NULL); INSERT INTO value_state VALUES('new')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = source.Close()
+	recovery, err := RestoreAtomic(ctx, sourcePath, targetPath)
+	if err != nil || recovery == "" {
+		t.Fatalf("recovery=%q err=%v", recovery, err)
+	}
+	for path, expected := range map[string]string{targetPath: "new", recovery: "old"} {
+		db, openErr := sql.Open("sqlite", path)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		var value string
+		queryErr := db.QueryRow(`SELECT value FROM value_state`).Scan(&value)
+		_ = db.Close()
+		if queryErr != nil || value != expected {
+			t.Fatalf("database %s value=%q err=%v", path, value, queryErr)
+		}
+	}
+	corrupt := filepath.Join(root, "corrupt.db")
+	if err = os.WriteFile(corrupt, []byte("not sqlite"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = RestoreAtomic(ctx, corrupt, targetPath); err == nil {
+		t.Fatal("corrupt restore source accepted")
+	}
+	if err = os.WriteFile(targetPath+"-wal", []byte("active"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = RestoreAtomic(ctx, sourcePath, targetPath); err == nil || !strings.Contains(err.Error(), "active SQLite sidecar") {
+		t.Fatalf("active WAL restore error=%v", err)
+	}
+}
+
 func assertNoPartialBackups(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
