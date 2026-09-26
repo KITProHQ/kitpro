@@ -59,7 +59,14 @@ The package does not enable public or LAN access to the KITPro control plane.
 
 Configuration is in `/etc/default/kitpro-server`. Set
 `KITPRO_LAN_BIND_ADDRESS` only to a non-wildcard LAN address assigned to the
-server when catalog application LAN exposure is required.
+server when catalog application LAN exposure is required. After changing this
+value while no application mutation is active, restart both services so the
+API and privileged helper enforce the same address:
+
+```sh
+sudo systemctl restart kitpro-helper.service
+sudo systemctl restart kitpro-api.service
+```
 
 ## Filesystem layout
 

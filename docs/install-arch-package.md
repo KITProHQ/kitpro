@@ -79,8 +79,17 @@ metadata and should not be attached to a public issue.
 
 Arch package configuration is `/etc/conf.d/kitpro-server`. Set
 `KITPRO_LAN_BIND_ADDRESS` to one address actually assigned to the host before
-enabling LAN exposure for an application. KITPro never publishes the control
-plane or application services to wildcard addresses.
+enabling LAN exposure for an application. After changing this value while no
+application mutation is active, restart both services so the API and
+privileged helper enforce the same address:
+
+```sh
+sudo systemctl restart kitpro-helper.service
+sudo systemctl restart kitpro-api.service
+```
+
+KITPro never publishes the control plane or application services to wildcard
+addresses.
 
 ## Later updates and removal
 

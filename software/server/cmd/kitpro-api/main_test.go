@@ -827,6 +827,43 @@ func TestFailedInitialInstallCanRecreateAtGenerationOne(t *testing.T) {
 	}
 }
 
+func TestFailedInitialInstallPreservesExternalStorageForRecovery(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", localLANTestAddress(t))
+	calls := 0
+	var retry protocol.Request
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		calls++
+		if calls == 1 {
+			return protocol.Response{RequestID: request.ID, Error: "image acquisition failed"}, nil
+		}
+		retry = request
+		return protocol.Response{OK: true, RequestID: request.ID}, nil
+	}
+	install := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/v1/apps/syncthing/install", "storage_sync=storage-0123456789abcdef", session, csrf)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	a.guard(a.apps)(install, request)
+	if install.Code != http.StatusAccepted || !strings.Contains(install.Body.String(), `"status":"failed"`) {
+		t.Fatalf("install status=%d body=%s", install.Code, install.Body.String())
+	}
+	var installation, rootID string
+	if err := a.db.QueryRow(`SELECT installation_id FROM installations WHERE application_id='syncthing'`).Scan(&installation); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.db.QueryRow(`SELECT root_id FROM installation_storage_selections WHERE installation_id=? AND component_id='' AND slot_id='sync'`, installation).Scan(&rootID); err != nil || rootID != "storage-0123456789abcdef" {
+		t.Fatalf("preserved root=%q err=%v", rootID, err)
+	}
+	recreate := httptest.NewRecorder()
+	a.guard(a.installations)(recreate, authenticatedRequest(http.MethodPost, "/api/v1/installations/"+installation+"/recreate", "", session, csrf))
+	if recreate.Code != http.StatusAccepted || retry.RuntimeGeneration != 1 || retry.InstanceID != installation {
+		t.Fatalf("recreate status=%d request=%#v body=%s", recreate.Code, retry, recreate.Body.String())
+	}
+	if len(retry.ExternalStorage) != 1 || retry.ExternalStorage[0] != (protocol.ExternalStorageBinding{SlotID: "sync", RootID: "storage-0123456789abcdef"}) {
+		t.Fatalf("recreate lost external storage: %#v", retry.ExternalStorage)
+	}
+}
+
 func TestMultiContainerInstallUsesTopLevelRelease(t *testing.T) {
 	a, session, csrf := newTestApp(t)
 	var received protocol.Request

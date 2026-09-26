@@ -1027,6 +1027,23 @@ func operationSummary(record operations.Record) string {
 	return "The requested change completed successfully."
 }
 
+func persistStorageSelections(ctx context.Context, db *sql.DB, installationID string, request protocol.Request) {
+	for _, binding := range request.ExternalStorage {
+		if binding.RootID == "" {
+			continue
+		}
+		_, _ = db.ExecContext(ctx, `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,'',?,?)`, installationID, binding.SlotID, binding.RootID)
+	}
+	for _, component := range request.Components {
+		for _, binding := range component.ExternalStorage {
+			if binding.RootID == "" {
+				continue
+			}
+			_, _ = db.ExecContext(ctx, `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,?,?,?)`, installationID, component.ID, binding.SlotID, binding.RootID)
+		}
+	}
+}
+
 func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" && strings.Trim(r.URL.Path, "/") != "api/v1/operations" {
 		id := strings.TrimPrefix(r.URL.Path, "/api/v1/operations/")
@@ -1221,8 +1238,14 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 			}
 			q.Components = append(q.Components, pc)
 		}
+		helperRequest = q
+		if existing == "" {
+			// The operator's storage choice is recovery metadata, not trusted
+			// runtime ownership. Preserve it for same-installation recovery while
+			// the helper independently validates the root on every attempt.
+			persistStorageSelections(r.Context(), a.db, inst, helperRequest)
+		}
 		if e == nil {
-			helperRequest = q
 			var resp protocol.Response
 			resp, e = a.callHelperOperation(q)
 			helperResponse = resp
@@ -1254,14 +1277,7 @@ func (a *app) ops(w http.ResponseWriter, r *http.Request) {
 		status = "accepted"
 		summary = "privileged operation continues in helper"
 	} else {
-		for _, binding := range helperRequest.ExternalStorage {
-			_, _ = a.db.ExecContext(r.Context(), `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,'',?,?)`, inst, binding.SlotID, binding.RootID)
-		}
-		for _, component := range helperRequest.Components {
-			for _, binding := range component.ExternalStorage {
-				_, _ = a.db.ExecContext(r.Context(), `INSERT OR REPLACE INTO installation_storage_selections(installation_id,component_id,slot_id,root_id) VALUES(?,?,?,?)`, inst, component.ID, binding.SlotID, binding.RootID)
-			}
-		}
+		persistStorageSelections(r.Context(), a.db, inst, helperRequest)
 	}
 	if e == nil && !helperPending {
 		committed := committedLifecycleResult{Generation: gen, ReleaseID: plan.ReleaseID, RuntimeState: "running", Bindings: exposureBindings(helperRequest.Bindings)}
