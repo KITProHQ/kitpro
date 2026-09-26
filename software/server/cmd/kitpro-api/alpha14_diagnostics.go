@@ -67,7 +67,7 @@ func (a *app) generateSupportBundle(w http.ResponseWriter, r *http.Request) {
 		"ingress":          `SELECT route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,certificate_id,provider_id,desired_state,applied_generation,created_at,updated_at FROM ingress_routes ORDER BY hostname`,
 		"certificates":     `SELECT certificate_id,hostname,method,state,leaf_sha256,issuer,not_before,not_after,last_renewal_at,last_error_code,created_at,updated_at FROM certificates ORDER BY hostname`,
 		"providers":        `SELECT provider_id,provider_type,account_id,zone_id,tunnel_id,credential_sha256,desired_state,runtime_state,last_error_code,created_at,updated_at FROM exposure_providers ORDER BY provider_id`,
-		"operations":       `SELECT operation_id,operation_type,target_id,status,summary,created_at,updated_at FROM operations ORDER BY created_at DESC LIMIT 100`,
+		"operations":       `SELECT id AS operation_id,type AS operation_type,instance_id AS target_id,status,summary,requested_at AS created_at,requested_at AS updated_at FROM operations ORDER BY requested_at DESC LIMIT 100`,
 		"readiness":        `SELECT entity_type,entity_id,dimension,state,reason_code,summary,checked_at FROM readiness_observations ORDER BY entity_type,entity_id,dimension`,
 	}
 	for name, query := range queries {
