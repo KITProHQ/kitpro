@@ -1,5 +1,36 @@
 # Debian package assets
 
+## GitHub-safe publication staging
+
+Do not upload build output directly to GitHub Releases. GitHub normalizes `~`
+in asset names, which can leave checksum and release manifests referring to
+filenames that do not exist publicly.
+
+After builds and qualification are complete, create a new publication staging
+directory with the exact names that will be uploaded:
+
+```sh
+./packaging/stage-publication.sh \
+  --source-dir /path/to/final-artifacts \
+  --output-dir /path/to/publication-staging \
+  --release-manifest kitpro-server-VERSION-release-manifest.json \
+  --tag vVERSION \
+  --release-url https://github.com/KITProHQ/kitpro/releases/tag/vVERSION \
+  --source-commit COMMIT \
+  --source-tree TREE
+```
+
+The output directory must not already exist. The staging tool copies qualified
+artifacts without rebuilding them, replaces `~` with `.` only in public
+filenames, rejects normalized-name collisions, and regenerates adjacent
+checksums, the aggregate checksum manifest, and the release manifest from the
+staged filenames. Internal Debian and RPM version metadata is unchanged.
+
+Upload only the completed staging directory. Before publication, run
+`sha256sum -c` against its aggregate manifest and every adjacent checksum.
+After publication, download every release asset into a new empty directory and
+repeat those checks against the downloaded files.
+
 ## Rocky Linux 10 RPMs
 
 Build the experimental Rocky packages on Rocky Linux 10 with:
