@@ -9,16 +9,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/kitpro/kitpro/software/server/internal/auth"
 	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/ingress"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/operations"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/readiness"
+	"golang.org/x/sys/unix"
 )
 
 type ingressMutation struct {
@@ -780,6 +784,145 @@ func (a *app) runProviderMutation(w http.ResponseWriter, r *http.Request, operat
 	return true
 }
 
+type setupGuideStep struct {
+	ID, Title, Description, State, StateLabel, Summary string
+	Number                                             int
+}
+
+func (a *app) firstRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid setup action", http.StatusBadRequest)
+			return
+		}
+		step, choice := r.FormValue("step_id"), r.FormValue("choice")
+		switch {
+		case step == "access-mode" && (choice == "local" || choice == "lan"):
+			stateValue, reason := "complete", "access_mode_confirmed"
+			if !a.accessModeReady(choice) {
+				stateValue, reason = "attention", "listener_configuration_required"
+			}
+			if err := a.saveSetupStep(r.Context(), step, stateValue, map[string]any{"mode": choice, "reason_code": reason}); err != nil {
+				http.Error(w, "setup state unavailable", http.StatusInternalServerError)
+				return
+			}
+		case (step == "https" || step == "cloudflare") && choice == "skip":
+			if err := a.saveSetupStep(r.Context(), step, "skipped", map[string]any{"reason_code": "operator_deferred"}); err != nil {
+				http.Error(w, "setup state unavailable", http.StatusInternalServerError)
+				return
+			}
+		default:
+			http.Error(w, "unsupported setup action", http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, r, "/first-run", http.StatusSeeOther)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method denied", http.StatusMethodNotAllowed)
+		return
+	}
+	a.refreshSetupState(r.Context())
+	titles := map[string]string{"host-readiness": "Host readiness", "runtime": "Container runtime", "storage": "Storage", "network": "Local network", "docker-address-pool": "Docker address pool", "administrator": "Administrator", "access-mode": "Local or LAN access", "https": "Optional HTTPS", "cloudflare": "Optional Cloudflare", "first-application": "First application"}
+	descriptions := map[string]string{
+		"host-readiness":      "Checks the protected helper and base host integration.",
+		"runtime":             "Confirms the supported container runtime is responding.",
+		"storage":             "Registers an administrator-approved location for application data.",
+		"network":             "Detects a private IPv4 address without changing host networking.",
+		"docker-address-pool": "Checks capacity and conflicts. KITPro never rewrites Docker daemon configuration.",
+		"administrator":       "Uses the local administrator created during secure bootstrap.",
+		"access-mode":         "Records local-only or LAN intent and verifies the current control-service listener.",
+		"https":               "HTTPS is optional during setup and can use a provided or ACME certificate later.",
+		"cloudflare":          "Cloudflare Tunnel is optional. Local access remains independent.",
+		"first-application":   "Installs the first trusted catalog application through the normal lifecycle.",
+	}
+	steps := make([]setupGuideStep, 0, len(setupStepOrder))
+	completed := 0
+	for index, id := range setupStepOrder {
+		var stateValue, evidence string
+		if err := a.db.QueryRowContext(r.Context(), `SELECT state,evidence_json FROM setup_steps WHERE step_id=?`, id).Scan(&stateValue, &evidence); err != nil {
+			continue
+		}
+		var facts map[string]any
+		_ = json.Unmarshal([]byte(evidence), &facts)
+		reason, _ := facts["reason_code"].(string)
+		summary := setupReasonSummary(reason)
+		if stateValue == "complete" || stateValue == "skipped" {
+			completed++
+		}
+		steps = append(steps, setupGuideStep{ID: id, Number: index + 1, Title: titles[id], Description: descriptions[id], State: stateValue, StateLabel: strings.Title(strings.ReplaceAll(stateValue, "-", " ")), Summary: summary})
+	}
+	csrf := ""
+	if cookie, err := r.Cookie(auth.CSRFCookieName); err == nil {
+		csrf = cookie.Value
+	}
+	a.securityHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := a.setupTmpl.Execute(w, map[string]any{"Steps": steps, "Completed": completed, "Total": len(setupStepOrder), "Complete": completed == len(setupStepOrder), "CSRF": csrf}); err != nil {
+		slog.Default().Error("first-run page render failed", "event", "ui_render_failed", "error", err)
+	}
+}
+
+func (a *app) accessModeReady(choice string) bool {
+	host, _, err := net.SplitHostPort(a.listenAddress)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if choice == "local" {
+		return host == "localhost" || (ip != nil && ip.IsLoopback())
+	}
+	if host != "" && host != "0.0.0.0" && (ip == nil || !ip.IsPrivate()) {
+		return false
+	}
+	for allowed := range a.allowedHosts {
+		allowedHost, _, splitErr := net.SplitHostPort(allowed)
+		allowedIP := net.ParseIP(allowedHost)
+		if splitErr == nil && allowedHost != "localhost" {
+			if allowedIP == nil || (allowedIP.IsPrivate() && !allowedIP.IsLoopback()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *app) saveSetupStep(ctx context.Context, step, stateValue string, facts map[string]any) error {
+	evidence, err := json.Marshal(facts)
+	if err != nil || len(evidence) > 8192 || diagnosticsContainsSensitiveKey(facts) {
+		return fmt.Errorf("unsafe setup evidence")
+	}
+	digest := sha256.Sum256(evidence)
+	_, err = a.db.ExecContext(ctx, `UPDATE setup_steps SET state=?,input_sha256=?,evidence_json=?,updated_at=? WHERE step_id=?`, stateValue, hex.EncodeToString(digest[:]), string(evidence), time.Now().UTC().Format(time.RFC3339Nano), step)
+	return err
+}
+
+func setupReasonSummary(reason string) string {
+	if summary, ok := map[string]string{
+		"helper_ready":                    "Protected helper is ready.",
+		"helper_unavailable":              "Protected helper requires attention.",
+		"runtime_ready":                   "Container runtime is ready.",
+		"runtime_unavailable":             "Container runtime requires attention.",
+		"address_pool_ready":              "Docker network allocation is ready.",
+		"address_pool_attention":          "Docker address-pool configuration requires attention and may require a Docker restart.",
+		"storage_registered":              "Trusted storage is registered.",
+		"storage_not_registered":          "Register a trusted storage location to continue.",
+		"lan_address_detected":            "A private LAN address is available.",
+		"lan_address_unavailable":         "No private IPv4 LAN address was detected.",
+		"administrator_configured":        "Local administrator is configured.",
+		"access_mode_confirmed":           "The selected access mode matches the active listener.",
+		"listener_configuration_required": "The selected mode requires an explicit service-listener configuration change and restart.",
+		"certificate_configured":          "HTTPS certificate is configured.",
+		"provider_configured":             "Cloudflare provider is configured.",
+		"application_installed":           "An application is installed.",
+		"application_not_installed":       "Choose and install the first application.",
+		"operator_deferred":               "Deferred by the administrator; this can be configured later.",
+	}[reason]; ok {
+		return summary
+	}
+	return "Not completed yet."
+}
+
 func (a *app) setupState(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		var input struct {
@@ -787,18 +930,31 @@ func (a *app) setupState(w http.ResponseWriter, r *http.Request) {
 			State    string         `json:"state"`
 			Evidence map[string]any `json:"evidence"`
 		}
-		if decodeStrictJSON(r, 16*1024, &input) != nil || !validSetupStep(input.StepID) || (input.State != "complete" && input.State != "attention" && input.State != "skipped") {
+		if decodeStrictJSON(r, 16*1024, &input) != nil {
 			http.Error(w, "invalid setup update", 400)
 			return
 		}
-		evidence, err := json.Marshal(input.Evidence)
-		if err != nil || len(evidence) > 8192 || diagnosticsContainsSensitiveKey(input.Evidence) {
-			http.Error(w, "unsafe setup evidence", 400)
+		manual := input.StepID == "access-mode" && input.State == "complete"
+		optional := (input.StepID == "https" || input.StepID == "cloudflare") && input.State == "skipped"
+		if !manual && !optional {
+			http.Error(w, "invalid setup update", 400)
 			return
 		}
-		digest := sha256.Sum256(evidence)
-		_, err = a.db.ExecContext(r.Context(), `INSERT INTO setup_steps(step_id,state,input_sha256,evidence_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(step_id) DO UPDATE SET state=excluded.state,input_sha256=excluded.input_sha256,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at`, input.StepID, input.State, hex.EncodeToString(digest[:]), string(evidence), time.Now().UTC().Format(time.RFC3339Nano))
-		if err != nil {
+		if manual {
+			mode, _ := input.Evidence["mode"].(string)
+			if mode != "local" && mode != "lan" {
+				http.Error(w, "invalid access mode", 400)
+				return
+			}
+			input.Evidence = map[string]any{"mode": mode, "reason_code": "access_mode_confirmed"}
+			if !a.accessModeReady(mode) {
+				input.State = "attention"
+				input.Evidence["reason_code"] = "listener_configuration_required"
+			}
+		} else {
+			input.Evidence = map[string]any{"reason_code": "operator_deferred"}
+		}
+		if err := a.saveSetupStep(r.Context(), input.StepID, input.State, input.Evidence); err != nil {
 			http.Error(w, "setup state unavailable", 500)
 			return
 		}
@@ -809,7 +965,8 @@ func (a *app) setupState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method denied", http.StatusMethodNotAllowed)
 		return
 	}
-	rows, err := a.db.QueryContext(r.Context(), `SELECT step_id,state,evidence_json,updated_at FROM setup_steps ORDER BY step_id`)
+	a.refreshSetupState(r.Context())
+	rows, err := a.db.QueryContext(r.Context(), `SELECT step_id,state,evidence_json,updated_at FROM setup_steps ORDER BY CASE step_id WHEN 'host-readiness' THEN 1 WHEN 'runtime' THEN 2 WHEN 'storage' THEN 3 WHEN 'network' THEN 4 WHEN 'docker-address-pool' THEN 5 WHEN 'administrator' THEN 6 WHEN 'access-mode' THEN 7 WHEN 'https' THEN 8 WHEN 'cloudflare' THEN 9 WHEN 'first-application' THEN 10 ELSE 99 END`)
 	if err != nil {
 		http.Error(w, "setup state unavailable", 500)
 		return
@@ -829,6 +986,107 @@ func (a *app) setupState(w http.ResponseWriter, r *http.Request) {
 		steps = append(steps, map[string]any{"step_id": id, "state": stateValue, "evidence": safeEvidence, "updated_at": updated})
 	}
 	writeJSON(w, 200, map[string]any{"steps": steps, "resumable": true})
+}
+
+func (a *app) refreshSetupState(ctx context.Context) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	update := func(step, stateValue, reason string) {
+		evidence, _ := json.Marshal(map[string]string{"reason_code": reason})
+		digest := sha256.Sum256(evidence)
+		_, _ = a.db.ExecContext(ctx, `UPDATE setup_steps SET state=?,input_sha256=?,evidence_json=?,updated_at=? WHERE step_id=?`, stateValue, hex.EncodeToString(digest[:]), string(evidence), now, step)
+	}
+	helper, helperErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "Ping"})
+	helperReady := helperErr == nil && helper.OK
+	if helperReady {
+		update("host-readiness", "complete", "helper_ready")
+	} else {
+		update("host-readiness", "attention", "helper_unavailable")
+	}
+	runtimeResponse, runtimeErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectRuntime"})
+	if runtimeErr == nil && runtimeResponse.OK {
+		update("runtime", "complete", "runtime_ready")
+	} else {
+		update("runtime", "attention", "runtime_unavailable")
+	}
+	poolResponse, poolErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectDockerAddressPool"})
+	poolState := ""
+	if encoded, err := json.Marshal(poolResponse.Result); err == nil {
+		var pool map[string]any
+		_ = json.Unmarshal(encoded, &pool)
+		poolState, _ = pool["state"].(string)
+	}
+	if poolErr == nil && poolResponse.OK && (poolState == "ready" || poolState == "not-applicable") {
+		update("docker-address-pool", "complete", "address_pool_ready")
+	} else {
+		update("docker-address-pool", "attention", "address_pool_attention")
+	}
+	storage, storageErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "ListStorageRoots"})
+	if storageErr == nil && storage.OK && resultHasItems(storage.Result) {
+		update("storage", "complete", "storage_registered")
+	} else {
+		update("storage", "attention", "storage_not_registered")
+	}
+	if address := firstLANAddress(); address != "" {
+		update("network", "complete", "lan_address_detected")
+	} else {
+		update("network", "attention", "lan_address_unavailable")
+	}
+	if auth.HasAdmin(ctx, a.db) {
+		update("administrator", "complete", "administrator_configured")
+	}
+	var count int
+	if a.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificates WHERE state IN ('issued','active','expiring','renewal-pending')`).Scan(&count) == nil && count > 0 {
+		update("https", "complete", "certificate_configured")
+	}
+	if a.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM exposure_providers WHERE desired_state IN ('disabled','enabled')`).Scan(&count) == nil && count > 0 {
+		update("cloudflare", "complete", "provider_configured")
+	}
+	if a.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM installations`).Scan(&count) == nil && count > 0 {
+		update("first-application", "complete", "application_installed")
+	} else {
+		update("first-application", "pending", "application_not_installed")
+	}
+}
+
+func resultHasItems(value any) bool {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	var list []any
+	if json.Unmarshal(encoded, &list) == nil {
+		return len(list) > 0
+	}
+	var object map[string]any
+	if json.Unmarshal(encoded, &object) == nil {
+		for _, key := range []string{"roots", "items"} {
+			if items, ok := object[key].([]any); ok && len(items) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func firstLANAddress() string {
+	interfaces, _ := net.Interfaces()
+	for _, networkInterface := range interfaces {
+		if networkInterface.Flags&net.FlagUp == 0 || networkInterface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		name := strings.ToLower(networkInterface.Name)
+		if strings.HasPrefix(name, "docker") || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "veth") || strings.HasPrefix(name, "virbr") || strings.HasPrefix(name, "cni") || strings.HasPrefix(name, "podman") {
+			continue
+		}
+		addresses, _ := networkInterface.Addrs()
+		for _, address := range addresses {
+			host, _, _ := net.ParseCIDR(address.String())
+			if host != nil && host.To4() != nil && host.IsPrivate() {
+				return host.String()
+			}
+		}
+	}
+	return ""
 }
 
 var setupStepOrder = []string{"host-readiness", "runtime", "storage", "network", "docker-address-pool", "administrator", "access-mode", "https", "cloudflare", "first-application"}
@@ -875,30 +1133,80 @@ func (a *app) systemReadiness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type item struct {
-		Dimension string `json:"dimension"`
-		State     string `json:"state"`
-		Summary   string `json:"summary"`
+		Dimension  string `json:"dimension"`
+		State      string `json:"state"`
+		ReasonCode string `json:"reason_code"`
+		Summary    string `json:"summary"`
+		Details    any    `json:"details,omitempty"`
 	}
 	values := []item{}
 	helper, helperErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "Ping"})
 	if helperErr == nil && helper.OK {
-		values = append(values, item{"helper", "ready", "Privileged helper is responding"})
+		values = append(values, item{Dimension: "helper", State: "ready", ReasonCode: "helper_ready", Summary: "Privileged helper is responding"})
 	} else {
-		values = append(values, item{"helper", "failed", "Privileged helper is unavailable"})
+		values = append(values, item{Dimension: "helper", State: "failed", ReasonCode: "helper_unavailable", Summary: "Privileged helper is unavailable"})
 	}
 	runtimeResponse, runtimeErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectRuntime"})
 	if runtimeErr == nil && runtimeResponse.OK {
-		values = append(values, item{"runtime", "ready", "Container runtime is responding"})
+		values = append(values, item{Dimension: "runtime", State: "ready", ReasonCode: "runtime_ready", Summary: "Container runtime is responding"})
 	} else {
-		values = append(values, item{"runtime", "failed", "Container runtime is unavailable"})
+		values = append(values, item{Dimension: "runtime", State: "failed", ReasonCode: "runtime_unavailable", Summary: "Container runtime is unavailable"})
 	}
-	var routes, certificates, providers int
-	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM ingress_routes WHERE desired_state='enabled'`).Scan(&routes)
+	poolResponse, poolErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "InspectDockerAddressPool"})
+	pool := map[string]any{"state": "failed", "reason_code": "inspection_failed", "summary": "Docker address-pool readiness could not be inspected"}
+	if poolErr == nil && poolResponse.OK {
+		encoded, _ := json.Marshal(poolResponse.Result)
+		_ = json.Unmarshal(encoded, &pool)
+	}
+	poolState, _ := pool["state"].(string)
+	poolReason, _ := pool["reason_code"].(string)
+	poolSummary, _ := pool["summary"].(string)
+	values = append(values, item{Dimension: "docker-address-pool", State: poolState, ReasonCode: poolReason, Summary: poolSummary, Details: map[string]any{"current_pools": pool["current_pools"], "minimum_subnet_capacity": pool["minimum_subnet_capacity"], "requires_docker_restart": pool["requires_docker_restart"], "remediation": pool["remediation"]}})
+	storageResponse, storageErr := a.callHelper(protocol.Request{Version: 1, ID: operations.NewID(), Operation: "ListStorageRoots"})
+	storageReady := storageErr == nil && storageResponse.OK && resultHasItems(storageResponse.Result)
+	values = append(values, item{Dimension: "storage", State: map[bool]string{true: "ready", false: "attention"}[storageReady], ReasonCode: map[bool]string{true: "storage_registered", false: "storage_not_registered"}[storageReady], Summary: map[bool]string{true: "At least one trusted storage location is registered", false: "No trusted storage location is registered"}[storageReady]})
+	var filesystem unix.Statfs_t
+	if err := unix.Statfs("/srv/kitpro", &filesystem); err != nil {
+		values = append(values, item{Dimension: "disk-capacity", State: "failed", ReasonCode: "disk_unavailable", Summary: "KITPro storage capacity could not be inspected"})
+	} else {
+		available := uint64(filesystem.Bavail) * uint64(filesystem.Bsize)
+		stateValue := "ready"
+		if available < 5<<30 {
+			stateValue = "attention"
+		}
+		values = append(values, item{Dimension: "disk-capacity", State: stateValue, ReasonCode: map[bool]string{true: "disk_capacity_low", false: "disk_capacity_available"}[stateValue == "attention"], Summary: fmt.Sprintf("%d GiB available for KITPro-managed storage", available>>30), Details: map[string]any{"available_bytes": available}})
+	}
+	lan := firstLANAddress()
+	values = append(values, item{Dimension: "lan-address", State: map[bool]string{true: "ready", false: "attention"}[lan != ""], ReasonCode: map[bool]string{true: "lan_address_detected", false: "lan_address_unavailable"}[lan != ""], Summary: map[bool]string{true: "LAN address detected", false: "No private IPv4 LAN address was detected"}[lan != ""], Details: map[string]any{"address": lan}})
+	values = append(values, item{Dimension: "firewall", State: "unknown", ReasonCode: "firewall_not_inspected", Summary: "Host firewall state is not available through the constrained helper"})
+	var routes, held, certificates, certificateFailures, providers, providerFailures int
+	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM ingress_routes r WHERE desired_state='enabled' AND NOT EXISTS (SELECT 1 FROM ingress_route_holds h WHERE h.route_id=r.route_id)`).Scan(&routes)
+	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM ingress_route_holds`).Scan(&held)
 	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM certificates WHERE state IN ('issued','active','expiring','renewal-pending')`).Scan(&certificates)
+	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM certificates WHERE state IN ('renewal-failed','invalid')`).Scan(&certificateFailures)
 	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM exposure_providers WHERE desired_state='enabled'`).Scan(&providers)
-	values = append(values, item{"ingress", map[bool]string{true: "ready", false: "not-configured"}[routes > 0], map[bool]string{true: fmt.Sprintf("%d managed route(s)", routes), false: "No managed routes configured"}[routes > 0]})
-	values = append(values, item{"tls", map[bool]string{true: "ready", false: "not-configured"}[certificates > 0], map[bool]string{true: fmt.Sprintf("%d certificate(s) available", certificates), false: "HTTPS is not configured"}[certificates > 0]})
-	values = append(values, item{"provider", map[bool]string{true: "ready", false: "disabled"}[providers > 0], map[bool]string{true: "Optional exposure provider enabled", false: "Remote access is disabled"}[providers > 0]})
+	_ = a.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM exposure_providers WHERE desired_state='enabled' AND runtime_state NOT IN ('ready','connecting')`).Scan(&providerFailures)
+	ingressState, ingressReason, ingressSummary := "not-configured", "ingress_not_configured", "No managed routes are active"
+	if held > 0 {
+		ingressState, ingressReason, ingressSummary = "attention", "restore_hold_active", fmt.Sprintf("%d route(s) await restored backend readiness", held)
+	} else if routes > 0 {
+		ingressState, ingressReason, ingressSummary = "ready", "ingress_routes_active", fmt.Sprintf("%d managed route(s) active", routes)
+	}
+	values = append(values, item{Dimension: "ingress", State: ingressState, ReasonCode: ingressReason, Summary: ingressSummary})
+	tlsState, tlsReason, tlsSummary := "not-configured", "tls_not_configured", "HTTPS is not configured"
+	if certificateFailures > 0 {
+		tlsState, tlsReason, tlsSummary = "attention", "certificate_attention", fmt.Sprintf("%d certificate(s) require attention", certificateFailures)
+	} else if certificates > 0 {
+		tlsState, tlsReason, tlsSummary = "ready", "certificates_available", fmt.Sprintf("%d certificate(s) available", certificates)
+	}
+	values = append(values, item{Dimension: "https", State: tlsState, ReasonCode: tlsReason, Summary: tlsSummary})
+	providerState, providerReason, providerSummary := "disabled", "provider_disabled", "Remote access is disabled"
+	if providerFailures > 0 {
+		providerState, providerReason, providerSummary = "degraded", "provider_runtime_unavailable", "Cloudflare is enabled but its runtime requires attention"
+	} else if providers > 0 {
+		providerState, providerReason, providerSummary = "ready", "provider_enabled", "Cloudflare remote access is enabled"
+	}
+	values = append(values, item{Dimension: "cloudflare", State: providerState, ReasonCode: providerReason, Summary: providerSummary})
 	writeJSON(w, 200, map[string]any{"readiness": values})
 }
 

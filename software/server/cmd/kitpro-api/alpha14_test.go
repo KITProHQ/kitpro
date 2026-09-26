@@ -305,3 +305,76 @@ func TestRestoreQuiescesIngressAndReactivatesOnlyAfterReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestFirstRunIsAuthenticatedResumableAndDoesNotSimulateCriticalSteps(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	if err := initializeSetupState(context.Background(), a.db, true); err != nil {
+		t.Fatal(err)
+	}
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		switch request.Operation {
+		case "Ping", "InspectRuntime":
+			return protocol.Response{OK: true}, nil
+		case "InspectDockerAddressPool":
+			return protocol.Response{OK: true, Result: map[string]any{"state": "failed", "reason_code": "default_pool_missing", "summary": "Docker has no explicit default address pool", "current_pools": []any{}, "requires_docker_restart": true}}, nil
+		case "ListStorageRoots":
+			return protocol.Response{OK: true, Result: []any{}}, nil
+		default:
+			return protocol.Response{}, nil
+		}
+	}
+	recorder := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/first-run", "", session, csrf)
+	a.guard(a.firstRun)(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Step 10") || !strings.Contains(recorder.Body.String(), "Docker address pool") || !strings.Contains(recorder.Body.String(), "requires attention") {
+		t.Fatalf("first-run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	request = authenticatedRequest(http.MethodPost, "/first-run", "step_id=access-mode&choice=local&csrf_token="+csrf.Value, session, csrf)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	a.guard(a.firstRun)(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("access mode status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var stateValue string
+	if err := a.db.QueryRow(`SELECT state FROM setup_steps WHERE step_id='access-mode'`).Scan(&stateValue); err != nil || stateValue != "complete" {
+		t.Fatalf("access state=%q err=%v", stateValue, err)
+	}
+	recorder = httptest.NewRecorder()
+	a.guard(a.setupState)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/setup", `{"step_id":"host-readiness","state":"complete","evidence":{}}`, session, csrf))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("critical setup step was manually writable: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if err := a.db.QueryRow(`SELECT state FROM setup_steps WHERE step_id='docker-address-pool'`).Scan(&stateValue); err != nil || stateValue != "attention" {
+		t.Fatalf("Docker pool state=%q err=%v", stateValue, err)
+	}
+}
+
+func TestSystemReadinessReportsTypedDockerPoolAndRestoreHold(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedIngressInstallation(t, a, "inst-ready001", "uptime-kuma")
+	store := ingress.Store{DB: a.db}
+	route := ingress.Route{ID: "route-fedcba9876543210", InstallationID: "inst-ready001", ServiceID: "web", Hostname: "ready.example.test", ExposureMode: ingress.LAN, UpstreamProtocol: "http", TLSPolicy: ingress.TLSNone, DesiredState: ingress.Enabled}
+	if _, err := store.CreateRoute(context.Background(), route); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRouteHolds(context.Background(), a.db, []ingress.Route{route}, true); err != nil {
+		t.Fatal(err)
+	}
+	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
+		switch request.Operation {
+		case "Ping", "InspectRuntime":
+			return protocol.Response{OK: true}, nil
+		case "InspectDockerAddressPool":
+			return protocol.Response{OK: true, Result: map[string]any{"state": "failed", "reason_code": "address_pool_conflict", "summary": "Docker pool overlaps a host route", "current_pools": []map[string]any{{"base": "10.128.0.0/9", "size": 24}}, "minimum_subnet_capacity": 64, "requires_docker_restart": true, "remediation": "Update daemon configuration and restart Docker."}}, nil
+		case "ListStorageRoots":
+			return protocol.Response{OK: true, Result: []any{}}, nil
+		}
+		return protocol.Response{}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.systemReadiness)(recorder, authenticatedRequest(http.MethodGet, "/api/v1/system/readiness", "", session, csrf))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"dimension":"docker-address-pool"`) || !strings.Contains(recorder.Body.String(), `"reason_code":"address_pool_conflict"`) || !strings.Contains(recorder.Body.String(), `"reason_code":"restore_hold_active"`) {
+		t.Fatalf("readiness status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

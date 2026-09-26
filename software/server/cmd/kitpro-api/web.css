@@ -28,6 +28,14 @@
   --kit-mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
 }
 
+.setup-page { min-height: 100vh; background: var(--kit-bg); color: var(--kit-text); }
+.setup-shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 64px; }
+.setup-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.setup-header h1 { margin: 4px 0 10px; font-size: clamp(30px, 5vw, 48px); }
+.setup-header p { max-width: 720px; color: var(--kit-text-muted); }
+.setup-page .settings-panel { margin-bottom: 18px; }
+@media (max-width: 700px) { .setup-header { display: block; } .setup-header .button { margin-top: 16px; } }
+
 * { box-sizing: border-box; }
 html { background: var(--kit-bg); scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; background: var(--kit-bg); color: var(--kit-text); font: 15px/1.55 var(--kit-font); letter-spacing: -.008em; -webkit-font-smoothing: antialiased; }

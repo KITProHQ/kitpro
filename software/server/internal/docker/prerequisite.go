@@ -24,8 +24,8 @@ const MinimumAvailableNetworkSubnets uint64 = 64
 const addressPoolGuidance = `configure an operator-selected, non-overlapping Docker "default-address-pools" entry with at least 64 available IPv4 subnets of /24 or larger, restart Docker, and run kitpro-helper --verify-host-prerequisites again; Docker applies address-pool changes only to newly created networks`
 
 type DefaultAddressPool struct {
-	Base string
-	Size int
+	Base string `json:"base"`
+	Size int    `json:"size"`
 }
 
 type ExistingNetwork struct {
@@ -39,27 +39,61 @@ type HostRoute struct {
 	Prefix    netip.Prefix
 }
 
-// VerifyNetworkPrerequisites checks the daemon's explicit allocator policy and
-// obvious current host-route collisions. It does not modify Docker settings.
-func (c *Client) VerifyNetworkPrerequisites(ctx context.Context) error {
+type AddressPoolAssessment struct {
+	State                 string               `json:"state"`
+	ReasonCode            string               `json:"reason_code"`
+	Summary               string               `json:"summary"`
+	CurrentPools          []DefaultAddressPool `json:"current_pools"`
+	MinimumSubnetCapacity uint64               `json:"minimum_subnet_capacity"`
+	RequiresDockerRestart bool                 `json:"requires_docker_restart"`
+	Remediation           string               `json:"remediation"`
+}
+
+func (c *Client) AssessNetworkPrerequisites(ctx context.Context) AddressPoolAssessment {
+	result := AddressPoolAssessment{State: "failed", ReasonCode: "inspection_failed", Summary: "Docker address-pool readiness could not be inspected", MinimumSubnetCapacity: MinimumAvailableNetworkSubnets, Remediation: addressPoolGuidance}
 	info, err := c.Info()
 	if err != nil {
-		return prerequisiteError("inspect Docker daemon configuration: %v", err)
+		result.ReasonCode, result.Summary = "docker_unavailable", "Docker is unavailable"
+		return result
 	}
-	pools, err := parseDefaultAddressPools(info["DefaultAddressPools"])
+	result.CurrentPools, err = parseDefaultAddressPools(info["DefaultAddressPools"])
 	if err != nil {
-		return prerequisiteError("read Docker default address pools: %v", err)
+		result.ReasonCode, result.Summary = "invalid_pool_configuration", "Docker reported an invalid default address-pool configuration"
+		return result
 	}
 	networks, err := c.existingNetworks(ctx)
 	if err != nil {
-		return prerequisiteError("inspect existing Docker networks: %v", err)
+		return result
 	}
 	routes, err := readIPv4Routes("/proc/net/route")
 	if err != nil {
-		return prerequisiteError("inspect host IPv4 routes: %v", err)
+		return result
 	}
-	if err = ValidateNetworkPrerequisites(pools, networks, routes); err != nil {
-		return prerequisiteError("%v", err)
+	if err = ValidateNetworkPrerequisites(result.CurrentPools, networks, routes); err != nil {
+		result.RequiresDockerRestart = true
+		result.Summary = err.Error()
+		switch {
+		case len(result.CurrentPools) == 0:
+			result.ReasonCode = "default_pool_missing"
+		case strings.Contains(err.Error(), "overlap"):
+			result.ReasonCode = "address_pool_conflict"
+		case strings.Contains(err.Error(), "available network subnets"):
+			result.ReasonCode = "address_pool_capacity"
+		default:
+			result.ReasonCode = "invalid_pool_configuration"
+		}
+		return result
+	}
+	result.State, result.ReasonCode, result.Summary, result.Remediation = "ready", "address_pool_sufficient", "Docker has a non-overlapping default address pool with sufficient capacity", ""
+	return result
+}
+
+// VerifyNetworkPrerequisites checks the daemon's explicit allocator policy and
+// obvious current host-route collisions. It does not modify Docker settings.
+func (c *Client) VerifyNetworkPrerequisites(ctx context.Context) error {
+	assessment := c.AssessNetworkPrerequisites(ctx)
+	if assessment.State != "ready" {
+		return prerequisiteError("%s", assessment.Summary)
 	}
 	return nil
 }

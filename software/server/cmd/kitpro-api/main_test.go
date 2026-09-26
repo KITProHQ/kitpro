@@ -48,7 +48,7 @@ func newTestApp(t *testing.T) (*app, *http.Cookie, *http.Cookie) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app{db: db, supportRoot: filepath.Join(t.TempDir(), "support"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, allowedHosts: map[string]bool{"127.0.0.1:8080": true}, catalog: entries}
+	a := &app{db: db, supportRoot: filepath.Join(t.TempDir(), "support"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), setupTmpl: template.Must(template.New("setup-guide").Parse(setupGuidePage)), authCfg: auth.DefaultConfig, allowedHosts: map[string]bool{"127.0.0.1:8080": true}, catalog: entries, listenAddress: "127.0.0.1:8080"}
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
 		return protocol.Response{OK: true, RequestID: request.ID}, nil
 	}

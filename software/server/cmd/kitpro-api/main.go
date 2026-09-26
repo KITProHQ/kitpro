@@ -44,6 +44,9 @@ var page string
 //go:embed auth.html
 var authPage string
 
+//go:embed setup-guide.html
+var setupGuidePage string
+
 //go:embed web.css
 var webCSS string
 
@@ -58,6 +61,7 @@ type app struct {
 	helper        string
 	tmpl          *template.Template
 	authTmpl      *template.Template
+	setupTmpl     *template.Template
 	authCfg       auth.Config
 	secureCookies bool
 	allowedHosts  map[string]bool
@@ -70,6 +74,7 @@ type app struct {
 	// hook has no production effect.
 	beforeControlProjection func() error
 	probeReadiness          func(context.Context, *manifest.ReadinessCheck, string, int) readiness.Observation
+	listenAddress           string
 }
 
 type internalDispatchKey struct{}
@@ -178,7 +183,8 @@ func main() {
 			allowed[h] = true
 		}
 	}
-	a := &app{db: db, helper: env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock"), supportRoot: env("KITPRO_SUPPORT_ROOT", "/var/lib/kitpro-api/support"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), authCfg: auth.DefaultConfig, secureCookies: env("KITPRO_SECURE_COOKIES", "") == "1", allowedHosts: allowed}
+	listenAddress := env("KITPRO_API_ADDR", "127.0.0.1:8080")
+	a := &app{db: db, helper: env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock"), supportRoot: env("KITPRO_SUPPORT_ROOT", "/var/lib/kitpro-api/support"), tmpl: template.Must(template.New("page").Parse(page)), authTmpl: template.Must(template.New("auth").Parse(authPage)), setupTmpl: template.Must(template.New("setup-guide").Parse(setupGuidePage)), authCfg: auth.DefaultConfig, secureCookies: env("KITPRO_SECURE_COOKIES", "") == "1", allowedHosts: allowed, listenAddress: listenAddress}
 	a.catalog, e = catalog.Load()
 	if e != nil {
 		panic(e)
@@ -201,6 +207,7 @@ func main() {
 	http.HandleFunc("/login", a.login)
 	http.HandleFunc("/logout", a.guard(a.logout))
 	http.HandleFunc("/account/password", a.guard(a.password))
+	http.HandleFunc("/first-run", a.guard(a.firstRun))
 	http.HandleFunc("/", a.guard(a.home))
 	http.HandleFunc("/api/v1/operations", a.guard(a.ops))
 	http.HandleFunc("/api/v1/operations/", a.guard(a.ops))
@@ -223,7 +230,7 @@ func main() {
 	http.HandleFunc("/api/v1/exposure-providers/", a.guard(a.exposureProviders))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
 	go a.runACMERenewalScheduler()
-	http.ListenAndServe(env("KITPRO_API_ADDR", "127.0.0.1:8080"), nil)
+	http.ListenAndServe(listenAddress, nil)
 }
 
 type authPageData struct {
@@ -580,11 +587,20 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.setCookies(w, tok, csrf)
-		http.Redirect(w, r, "/", 303)
+		destination := "/"
+		if setupIncomplete(r.Context(), a.db) {
+			destination = "/first-run"
+		}
+		http.Redirect(w, r, destination, 303)
 		_ = csrf
 		return
 	}
 	a.renderAuth(w, http.StatusOK, loginPage(""))
+}
+
+func setupIncomplete(ctx context.Context, db *sql.DB) bool {
+	var count int
+	return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM setup_steps WHERE state NOT IN ('complete','skipped')`).Scan(&count) != nil || count > 0
 }
 
 func loginPage(message string) authPageData {

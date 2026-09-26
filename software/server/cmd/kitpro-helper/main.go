@@ -408,6 +408,13 @@ func serve(c net.Conn, api uint32, db *sql.DB, coordinator helperops.Coordinator
 				v["KitproRuntime"] = runtime.Name()
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: v})
 			}
+		case "InspectDockerAddressPool":
+			if runtimeName, _ := configuredRuntimeName(); runtimeName != "docker" {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"state": "not-applicable", "reason_code": "non-docker-runtime", "summary": "The selected container runtime does not use Docker default address pools"}})
+			} else {
+				assessment := docker.New().AssessNetworkPrerequisites(context.Background())
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: assessment})
+			}
 		case "GetHardwareInventory":
 			d := newContainerRuntime()
 			info, err := d.Info()
