@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	acmelifecycle "github.com/kitpro/kitpro/software/server/internal/acme"
@@ -37,7 +38,7 @@ func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Re
 	for _, candidate := range request.IngressRoutes {
 		var applicationID string
 		var generation int
-		if err = db.QueryRowContext(ctx, `SELECT application_id,runtime_generation FROM runtime_generations WHERE installation_id=? AND state='active' ORDER BY runtime_generation DESC LIMIT 1`, candidate.InstallationID).Scan(&applicationID, &generation); err != nil {
+		if err = db.QueryRowContext(ctx, `SELECT application_id,runtime_generation FROM runtime_generations WHERE installation_id=? AND status='active' ORDER BY runtime_generation DESC LIMIT 1`, candidate.InstallationID).Scan(&applicationID, &generation); err != nil {
 			return nil, fmt.Errorf("route target is not an active managed installation")
 		}
 		entry, ok := entries[applicationID]
@@ -76,7 +77,8 @@ func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Re
 	}
 	manager := ingress.Manager{Runtime: ingressRuntime()}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err = db.ExecContext(ctx, `INSERT INTO ingress_generations(generation,operation_id,configuration_sha256,status,previous_generation,created_at,updated_at,failure_code) VALUES(?,?,?,'prepared',?,?,?,'')`, generation, request.OperationID, "", nullableInt64(previous), now, now); err != nil {
+	generationPath := filepath.Join("/var/lib/kitpro-helper/ingress/generations", fmt.Sprintf("%d", generation))
+	if _, err = db.ExecContext(ctx, `INSERT INTO ingress_generations(generation,operation_id,configuration_sha256,status,previous_generation,generation_path,created_at,failure_code,evidence_json) VALUES(?,?,?,'prepared',?,?,?,'','{}')`, generation, request.OperationID, "", nullableInt64(previous), generationPath, now); err != nil {
 		return nil, err
 	}
 	result, err := manager.Apply(ctx, generation, previous, configuration)
@@ -92,7 +94,7 @@ func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Re
 				status = "rolled_back"
 			}
 		}
-		_, _ = db.ExecContext(ctx, `UPDATE ingress_generations SET configuration_sha256=?,status=?,updated_at=?,failure_code=? WHERE generation=?`, result.SHA256, status, time.Now().UTC().Format(time.RFC3339Nano), code, generation)
+		_, _ = db.ExecContext(ctx, `UPDATE ingress_generations SET configuration_sha256=?,status=?,failure_code=? WHERE generation=?`, result.SHA256, status, code, generation)
 		return nil, err
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -101,11 +103,11 @@ func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Re
 	}
 	defer tx.Rollback()
 	if previous > 0 {
-		if _, err = tx.ExecContext(ctx, `UPDATE ingress_generations SET status='rolled_back',updated_at=? WHERE generation=?`, now, previous); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE ingress_generations SET status='rolled_back' WHERE generation=?`, previous); err != nil {
 			return nil, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ingress_generations SET configuration_sha256=?,status='active',updated_at=? WHERE generation=?`, result.SHA256, now, generation); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE ingress_generations SET configuration_sha256=?,status='active',validated_at=?,activated_at=? WHERE generation=?`, result.SHA256, now, now, generation); err != nil {
 		return nil, err
 	}
 	for _, route := range applied {
