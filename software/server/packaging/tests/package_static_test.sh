@@ -54,7 +54,8 @@ grep -q '^  deny network inet6,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpr
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
-test "$(grep -Ec '^  link ' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper")" -eq 1
+grep -Fqx '  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
+test "$(grep -Ec '^  link ' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper")" -eq 2
 if grep -Eq '^  (/var/lib/kitpro-helper/\*\*|/var/lib/kitpro-helper/backups/\*\*) [^,]*l[^,]*,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"; then
     echo "helper gained broad hard-link authority" >&2
     exit 1
