@@ -163,6 +163,9 @@ func main() {
 	if e = auth.Init(context.Background(), db); e != nil {
 		panic(e)
 	}
+	if e = initializeSetupState(context.Background(), db, auth.HasAdmin(context.Background(), db)); e != nil {
+		panic(e)
+	}
 	if _, e = operations.RecoverAccepted(context.Background(), db); e != nil {
 		panic(e)
 	}
@@ -519,6 +522,10 @@ func (a *app) setup(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		if e := auth.Setup(r.Context(), a.db, r.FormValue("username"), r.FormValue("password")); e != nil {
 			a.renderAuth(w, http.StatusBadRequest, setupPage("Setup could not be completed. Choose a username and a password of at least 12 characters."))
+			return
+		}
+		if e := initializeSetupState(r.Context(), a.db, true); e != nil {
+			http.Error(w, "setup state unavailable", http.StatusInternalServerError)
 			return
 		}
 		slog.Default().Info("setup completed", "event", "setup_completed", "username", r.FormValue("username"))

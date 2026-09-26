@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -278,6 +281,30 @@ func (a *app) exposureProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) setupState(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var input struct {
+			StepID   string         `json:"step_id"`
+			State    string         `json:"state"`
+			Evidence map[string]any `json:"evidence"`
+		}
+		if decodeStrictJSON(r, 16*1024, &input) != nil || !validSetupStep(input.StepID) || (input.State != "complete" && input.State != "attention" && input.State != "skipped") {
+			http.Error(w, "invalid setup update", 400)
+			return
+		}
+		evidence, err := json.Marshal(input.Evidence)
+		if err != nil || len(evidence) > 8192 || diagnosticsContainsSensitiveKey(input.Evidence) {
+			http.Error(w, "unsafe setup evidence", 400)
+			return
+		}
+		digest := sha256.Sum256(evidence)
+		_, err = a.db.ExecContext(r.Context(), `INSERT INTO setup_steps(step_id,state,input_sha256,evidence_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(step_id) DO UPDATE SET state=excluded.state,input_sha256=excluded.input_sha256,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at`, input.StepID, input.State, hex.EncodeToString(digest[:]), string(evidence), time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			http.Error(w, "setup state unavailable", 500)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"step_id": input.StepID, "state": input.State})
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method denied", http.StatusMethodNotAllowed)
 		return
@@ -302,6 +329,44 @@ func (a *app) setupState(w http.ResponseWriter, r *http.Request) {
 		steps = append(steps, map[string]any{"step_id": id, "state": stateValue, "evidence": safeEvidence, "updated_at": updated})
 	}
 	writeJSON(w, 200, map[string]any{"steps": steps, "resumable": true})
+}
+
+var setupStepOrder = []string{"host-readiness", "runtime", "storage", "network", "docker-address-pool", "administrator", "access-mode", "https", "cloudflare", "first-application"}
+
+func initializeSetupState(ctx context.Context, db *sql.DB, administratorComplete bool) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, step := range setupStepOrder {
+		stateValue := "pending"
+		if step == "administrator" && administratorComplete {
+			stateValue = "complete"
+		}
+		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO setup_steps(step_id,state,input_sha256,evidence_json,updated_at) VALUES(?,?,'','{}',?)`, step, stateValue, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validSetupStep(value string) bool {
+	for _, step := range setupStepOrder {
+		if step == value {
+			return true
+		}
+	}
+	return false
+}
+
+func diagnosticsContainsSensitiveKey(value map[string]any) bool {
+	for key, child := range value {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "credential") || strings.Contains(lower, "cookie") || strings.Contains(lower, "session") || strings.Contains(lower, "key") {
+			return true
+		}
+		if nested, ok := child.(map[string]any); ok && diagnosticsContainsSensitiveKey(nested) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) systemReadiness(w http.ResponseWriter, r *http.Request) {
