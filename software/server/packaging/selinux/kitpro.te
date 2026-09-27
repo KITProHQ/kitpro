@@ -5,9 +5,17 @@ policy_module(kitpro, 1.2.0)
 gen_require(`
     type container_file_t;
     type httpd_t;
+    type init_t;
+    type var_lib_t;
     type var_run_t;
     attribute unreserved_port_type;
 ')
+
+type kitpro_ingress_pid_t;
+files_type(kitpro_ingress_pid_t)
+allow httpd_t kitpro_ingress_pid_t:file manage_file_perms;
+type_transition httpd_t var_lib_t:file kitpro_ingress_pid_t "nginx.pid";
+allow init_t kitpro_ingress_pid_t:file { getattr open read };
 
 type kitpro_acme_t;
 type kitpro_acme_exec_t;

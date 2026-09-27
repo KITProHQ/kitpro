@@ -8,7 +8,6 @@
   /etc/passwd r,
   /run/kitpro/helper-state.lock rwk,
   /run/kitpro/** rw,
-  /run/kitpro-ingress/nginx.pid r,
   /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,
   /run/kitpro-ingress/acme.sock rw,

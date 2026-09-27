@@ -99,8 +99,8 @@ grep -q '^PrivateNetwork=yes$' "$unpack/data/usr/lib/systemd/system/kitpro-ingre
 grep -q '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 grep -q '^PathExists=/run/kitpro/ingress-reload.request$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"
-grep -Fxq 'PIDFile=/run/kitpro-ingress/nginx.pid' "$unpack/data/usr/lib/systemd/system/kitpro-ingress.service"
-grep -Fxq 'pid /run/kitpro-ingress/nginx.pid;' "$unpack/data/usr/share/kitpro-server/ingress-bootstrap.conf"
+grep -Fxq 'PIDFile=/var/lib/kitpro-helper/ingress/run/nginx.pid' "$unpack/data/usr/lib/systemd/system/kitpro-ingress.service"
+grep -Fxq 'pid run/nginx.pid;' "$unpack/data/usr/share/kitpro-server/ingress-bootstrap.conf"
 for lifecycle in \
     "$unpack/control/postinst" \
     "$server_dir/packaging/arch/kitpro-server.install" \
@@ -146,7 +146,6 @@ grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libex
 grep -Fqx '  /etc/group r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  /etc/nsswitch.conf r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  /run/kitpro/helper-state.lock rwk,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
-grep -Fqx '  /run/kitpro-ingress/nginx.pid r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 for profile in usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare; do
     grep -Fqx '  /proc/*/cgroup r,' "$unpack/data/etc/apparmor.d/$profile"
     grep -Fqx '  /proc/*/mountinfo r,' "$unpack/data/etc/apparmor.d/$profile"

@@ -1,6 +1,6 @@
 /srv/kitpro/apps(/.*)?    gen_context(system_u:object_r:container_file_t,s0)
 /var/lib/kitpro-helper/ingress/logs(/.*)?    gen_context(system_u:object_r:httpd_log_t,s0)
-/run/kitpro-ingress/nginx\.pid    --    gen_context(system_u:object_r:httpd_var_run_t,s0)
+/var/lib/kitpro-helper/ingress/run/nginx\.pid    --    gen_context(system_u:object_r:kitpro_ingress_pid_t,s0)
 /usr/libexec/kitpro-acme    --    gen_context(system_u:object_r:kitpro_acme_exec_t,s0)
 /var/lib/kitpro-helper/acme(/.*)?    gen_context(system_u:object_r:kitpro_acme_state_t,s0)
 /run/kitpro/acme-client\.sock    -s    gen_context(system_u:object_r:kitpro_acme_runtime_t,s0)
