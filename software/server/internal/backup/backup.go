@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -140,13 +141,35 @@ func RestoreAtomic(ctx context.Context, source, target string) (string, error) {
 	if err = Verify(ctx, stagingPath); err != nil {
 		return "", fmt.Errorf("staged database verification failed: %w", err)
 	}
-	if _, err = os.Lstat(target); os.IsNotExist(err) {
+	targetInfo, err := os.Lstat(target)
+	if os.IsNotExist(err) {
 		if err = os.Rename(stagingPath, target); err != nil {
 			return "", err
 		}
 		return "", syncDir(directory)
 	} else if err != nil {
 		return "", err
+	}
+	if !targetInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("target database is not a regular file")
+	}
+	targetStat, ok := targetInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", fmt.Errorf("target database ownership is unavailable")
+	}
+	if err = os.Chown(stagingPath, int(targetStat.Uid), int(targetStat.Gid)); err != nil {
+		return "", fmt.Errorf("preserve target database ownership: %w", err)
+	}
+	if err = os.Chmod(stagingPath, targetInfo.Mode().Perm()); err != nil {
+		return "", fmt.Errorf("preserve target database mode: %w", err)
+	}
+	metadataFile, metadataErr := os.Open(stagingPath)
+	if metadataErr == nil {
+		metadataErr = metadataFile.Sync()
+		_ = metadataFile.Close()
+	}
+	if metadataErr != nil {
+		return "", fmt.Errorf("sync target database metadata: %w", metadataErr)
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
 		if _, sidecarErr := os.Lstat(target + suffix); sidecarErr == nil {

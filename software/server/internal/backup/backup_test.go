@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/kitpro/kitpro/software/server/internal/state"
@@ -98,6 +99,13 @@ func TestRestoreAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = target.Close()
+	if err = os.Chmod(targetPath, 0640); err != nil {
+		t.Fatal(err)
+	}
+	targetInfoBefore, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sourcePath := filepath.Join(root, "source.db")
 	source, err := sql.Open("sqlite", sourcePath)
 	if err != nil {
@@ -110,6 +118,18 @@ func TestRestoreAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
 	recovery, err := RestoreAtomic(ctx, sourcePath, targetPath)
 	if err != nil || recovery == "" {
 		t.Fatalf("recovery=%q err=%v", recovery, err)
+	}
+	targetInfoAfter, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetInfoAfter.Mode().Perm() != targetInfoBefore.Mode().Perm() {
+		t.Fatalf("restored target mode = %04o, want preserved %04o", targetInfoAfter.Mode().Perm(), targetInfoBefore.Mode().Perm())
+	}
+	targetStatBefore, beforeOK := targetInfoBefore.Sys().(*syscall.Stat_t)
+	targetStatAfter, afterOK := targetInfoAfter.Sys().(*syscall.Stat_t)
+	if !beforeOK || !afterOK || targetStatBefore.Uid != targetStatAfter.Uid || targetStatBefore.Gid != targetStatAfter.Gid {
+		t.Fatalf("restored target ownership was not preserved")
 	}
 	for path, expected := range map[string]string{targetPath: "new", recovery: "old"} {
 		db, openErr := sql.Open("sqlite", path)
