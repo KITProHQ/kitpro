@@ -55,11 +55,17 @@ if grep -q '^AmbientCapabilities=' "$cloudflare_unit"; then
     exit 1
 fi
 grep -q 'kitpro_acme_exec_t' "$packaging_dir/selinux/kitpro.fc"
+grep -q '^init_nnp_daemon_domain(kitpro_acme_t)$' "$packaging_dir/selinux/kitpro.te"
 grep -q '^files_type(kitpro_acme_runtime_t)$' "$packaging_dir/selinux/kitpro.te"
+grep -Fq 'files_pid_filetrans(kitpro_acme_t, kitpro_acme_runtime_t, sock_file, "acme-client.sock")' "$packaging_dir/selinux/kitpro.te"
+grep -Fq 'files_pid_filetrans(kitpro_acme_t, kitpro_acme_runtime_t, sock_file, "acme.sock")' "$packaging_dir/selinux/kitpro.te"
 grep -q 'corenet_tcp_connect_http_port(kitpro_acme_t)' "$packaging_dir/selinux/kitpro.te"
+grep -q '^allow kitpro_acme_t self:capability chown;$' "$packaging_dir/selinux/kitpro.te"
 grep -q 'kitpro_cloudflare_exec_t' "$packaging_dir/selinux/kitpro.fc"
+grep -q '^init_nnp_daemon_domain(kitpro_cloudflare_t)$' "$packaging_dir/selinux/kitpro.te"
 grep -q 'kitpro_cloudflare_state_t' "$packaging_dir/selinux/kitpro.fc"
 grep -q '^files_type(kitpro_cloudflare_runtime_t)$' "$packaging_dir/selinux/kitpro.te"
+grep -Fq 'files_pid_filetrans(kitpro_cloudflare_t, kitpro_cloudflare_runtime_t, sock_file, "cloudflare.sock")' "$packaging_dir/selinux/kitpro.te"
 grep -q 'attribute unreserved_port_type;' "$packaging_dir/selinux/kitpro.te"
 grep -q 'allow kitpro_cloudflare_t unreserved_port_type:udp_socket { recv_msg send_msg };' "$packaging_dir/selinux/kitpro.te"
 grep -q 'allow kitpro_cloudflare_t self:capability { setgid setuid };' "$packaging_dir/selinux/kitpro.te"
@@ -78,6 +84,9 @@ if grep -q -- '--pipe' "$podman_command"; then
 fi
 grep -q -- '/usr/bin/podman "\$@"' "$podman_command"
 grep -q 'container_file_t' "$packaging_dir/selinux/kitpro.fc"
+grep -Fq '/var/lib/kitpro-helper/ingress/logs(/.*)?    gen_context(system_u:object_r:httpd_log_t,s0)' "$packaging_dir/selinux/kitpro.fc"
+grep -Fq '/run/kitpro-ingress/nginx\.pid    --    gen_context(system_u:object_r:httpd_var_run_t,s0)' "$packaging_dir/selinux/kitpro.fc"
+grep -Fq 'restorecon -RF /run/kitpro /run/kitpro-ingress ' "$spec"
 grep -q -- '--acknowledge-destroy-data' "$uninstaller"
 
 if grep -q 'files_runtime_file' "$packaging_dir/selinux/kitpro.te"; then

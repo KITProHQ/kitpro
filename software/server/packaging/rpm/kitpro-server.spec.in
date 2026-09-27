@@ -131,7 +131,7 @@ systemd-tmpfiles --create %{_tmpfilesdir}/kitpro.conf
 install -m 0640 -o root -g root %{_datadir}/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new
 mv -fT /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
 [ -e /var/lib/kitpro-helper/ingress/current ] || ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
-restorecon -RF /run/kitpro /var/lib/kitpro-api /var/lib/kitpro-helper /var/log/kitpro /srv/kitpro %{_sysconfdir}/kitpro-server || true
+restorecon -RF /run/kitpro /run/kitpro-ingress /var/lib/kitpro-api /var/lib/kitpro-helper /var/log/kitpro /srv/kitpro %{_sysconfdir}/kitpro-server || true
 . %{_sysconfdir}/sysconfig/kitpro-server
 export KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}
 export KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}
