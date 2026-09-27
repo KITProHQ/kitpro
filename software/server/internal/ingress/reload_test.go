@@ -31,3 +31,14 @@ func TestReloadBridgeRequiresMatchingAcknowledgement(t *testing.T) {
 	}
 	<-done
 }
+
+func TestReloadBridgeHonorsCallerDeadline(t *testing.T) {
+	directory := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := requestReload(ctx, filepath.Join(directory, "request"), filepath.Join(directory, "complete"))
+	if err == nil || time.Since(started) > time.Second {
+		t.Fatalf("bounded reload err=%v elapsed=%s", err, time.Since(started))
+	}
+}

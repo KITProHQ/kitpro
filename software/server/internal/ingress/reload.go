@@ -13,6 +13,7 @@ import (
 const (
 	defaultReloadRequest  = "/run/kitpro/ingress-reload.request"
 	defaultReloadComplete = "/run/kitpro/ingress-reload.complete"
+	defaultReloadTimeout  = 15 * time.Second
 )
 
 type ReloadBridge struct{}
@@ -22,6 +23,8 @@ func (b ReloadBridge) Request(ctx context.Context) error {
 }
 
 func requestReload(ctx context.Context, requestPath, completePath string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultReloadTimeout)
+	defer cancel()
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return errors.New("create ingress reload request")
@@ -47,6 +50,7 @@ func requestReload(ctx context.Context, requestPath, completePath string) error 
 		case <-ticker.C:
 			acknowledgement, err := os.ReadFile(completePath)
 			if err == nil && strings.TrimSpace(string(acknowledgement)) == token {
+				_ = os.Remove(completePath)
 				return nil
 			}
 		}

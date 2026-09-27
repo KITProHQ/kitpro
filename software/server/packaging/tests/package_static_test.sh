@@ -96,9 +96,9 @@ grep -Fqx '  /sys/fs/cgroup/system.slice/kitpro-ingress-validator.service/cpu.ma
 grep -q '^PrivateNetwork=yes$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 grep -q '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
-grep -q '^PathChanged=/run/kitpro/ingress-reload.request$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"
+grep -q '^PathExists=/run/kitpro/ingress-reload.request$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"
 grep -Fqx 'ExecStart=/usr/bin/systemctl reload kitpro-ingress.service' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
-grep -Fqx 'ExecStartPost=/usr/bin/cp -- /run/kitpro/ingress-reload.request /run/kitpro/ingress-reload.complete' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
+grep -Fqx 'ExecStartPost=/usr/bin/mv -T -- /run/kitpro/ingress-reload.request /run/kitpro/ingress-reload.complete' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
 grep -q '^CapabilityBoundingSet=$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
 if grep -q '^  signal ' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"; then

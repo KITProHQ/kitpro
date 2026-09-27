@@ -6,7 +6,7 @@ After=kitpro-ingress.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/systemctl reload kitpro-ingress.service
-ExecStartPost=/usr/bin/cp -- /run/kitpro/ingress-reload.request /run/kitpro/ingress-reload.complete
+ExecStartPost=/usr/bin/mv -T -- /run/kitpro/ingress-reload.request /run/kitpro/ingress-reload.complete
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
