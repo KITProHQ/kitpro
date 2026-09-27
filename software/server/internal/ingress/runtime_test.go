@@ -142,3 +142,13 @@ func TestNginxRuntimeReloadsAndVerifiesCurrentCertificateConfiguration(t *testin
 		t.Fatalf("calls=%d reloads=%d process_checks=%d", calls, reloads, processChecks)
 	}
 }
+
+func TestVerifyManagedNginxReadsConfiguredPIDPath(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "nginx.pid")
+	if err := os.WriteFile(pidPath, []byte("not-a-pid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyManagedNginx(pidPath); err == nil || err.Error() != "invalid managed nginx PID" {
+		t.Fatalf("unexpected result: %v", err)
+	}
+}

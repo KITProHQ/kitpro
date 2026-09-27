@@ -25,7 +25,7 @@ func NewNginxRuntime() NginxRuntime {
 		Root:          defaultIngressRoot,
 		Check:         (ValidatorClient{}).Check,
 		Reload:        (ReloadBridge{}).Request,
-		VerifyProcess: func() error { return verifyManagedNginx(defaultIngressRoot) },
+		VerifyProcess: func() error { return verifyManagedNginx(nginxPIDPath) },
 	}
 }
 
@@ -178,8 +178,8 @@ func (n NginxRuntime) reload(ctx context.Context) error {
 	return nil
 }
 
-func verifyManagedNginx(root string) error {
-	raw, err := os.ReadFile(filepath.Join(root, "run", "nginx.pid"))
+func verifyManagedNginx(pidPath string) error {
+	raw, err := os.ReadFile(pidPath)
 	if err != nil {
 		return err
 	}

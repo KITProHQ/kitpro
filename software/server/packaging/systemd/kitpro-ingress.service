@@ -5,7 +5,7 @@ Wants=network-online.target kitpro-acme.service
 
 [Service]
 Type=forking
-PIDFile=/var/lib/kitpro-helper/ingress/run/nginx.pid
+PIDFile=/run/kitpro-ingress/nginx.pid
 ExecStartPre=/usr/sbin/nginx -t -p /var/lib/kitpro-helper/ingress/ -c current/nginx.conf
 ExecStart=/usr/sbin/nginx -p /var/lib/kitpro-helper/ingress/ -c current/nginx.conf
 ExecReload=/bin/kill -HUP $MAINPID

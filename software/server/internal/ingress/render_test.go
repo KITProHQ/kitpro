@@ -19,7 +19,7 @@ func TestRenderNginxIsDeterministicAndConstrained(t *testing.T) {
 		t.Fatalf("render is not deterministic: %v", err)
 	}
 	text := string(first)
-	for _, required := range []string{"server_name a.example.internal", "proxy_pass http://127.0.0.1:20000", "X-Forwarded-For $remote_addr", "ssl_reject_handshake on", "location ^~ /.well-known/acme-challenge/", "proxy_pass http://unix:/run/kitpro-ingress/acme.sock:", "proxy_set_header Host $host", "client_body_temp_path temp-client-body", "proxy_temp_path temp-proxy", "fastcgi_temp_path temp-fastcgi", "uwsgi_temp_path temp-uwsgi", "scgi_temp_path temp-scgi"} {
+	for _, required := range []string{"pid /run/kitpro-ingress/nginx.pid;", "server_name a.example.internal", "proxy_pass http://127.0.0.1:20000", "X-Forwarded-For $remote_addr", "ssl_reject_handshake on", "location ^~ /.well-known/acme-challenge/", "proxy_pass http://unix:/run/kitpro-ingress/acme.sock:", "proxy_set_header Host $host", "client_body_temp_path temp-client-body", "proxy_temp_path temp-proxy", "fastcgi_temp_path temp-fastcgi", "uwsgi_temp_path temp-uwsgi", "scgi_temp_path temp-scgi"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("generated config missing %q", required)
 		}

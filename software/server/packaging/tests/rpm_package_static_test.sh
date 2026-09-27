@@ -65,6 +65,8 @@ grep -q 'allow kitpro_cloudflare_t unreserved_port_type:udp_socket { recv_msg se
 grep -q 'allow kitpro_cloudflare_t self:capability { setgid setuid };' "$packaging_dir/selinux/kitpro.te"
 grep -q 'kitpro-cloudflared' "$packaging_dir/rpm/kitpro-server.sysusers"
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$packaging_dir/tmpfiles/kitpro.conf"
+grep -Fxq 'PIDFile=/run/kitpro-ingress/nginx.pid' "$packaging_dir/systemd/kitpro-ingress.service"
+grep -Fxq 'pid /run/kitpro-ingress/nginx.pid;' "$packaging_dir/nginx/bootstrap.conf"
 grep -q -- '--property=CapabilityBoundingSet=CAP_SYS_ADMIN' "$podman_command"
 grep -q -- "SystemCallFilter=open_tree fsopen fsconfig fsmount move_mount mount_setattr mount umount2" "$podman_command"
 grep -Fq "valid_container_ref='^(kitpro-[a-z0-9-]{3,220}|[a-f0-9]{64})$'" "$podman_command"
