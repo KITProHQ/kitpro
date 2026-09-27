@@ -100,6 +100,66 @@ func TestCreateAndRestoreSensitiveHostStateFailClosed(t *testing.T) {
 	}
 }
 
+func TestCreateCompletesItsOwnOperationInRestoredSnapshot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	for _, path := range []string{"backups", "ingress/bootstrap"} {
+		if err := os.MkdirAll(filepath.Join(root, path), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "ingress/bootstrap/nginx.conf"), []byte("bootstrap"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "ingress/bootstrap"), filepath.Join(root, "ingress/current")); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, "helper.db")
+	db, err := state.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	operationID := "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err = db.Exec(`INSERT INTO helper_operations(operation_id,request_hash,request_json,protocol_version,operation_revision,operation_kind,installation_id,caller_uid,state,current_phase,outcome_confidence,recovery_disposition,fencing_token,accepted_at,started_at,updated_at)
+		VALUES(?,?,'{}',2,1,'BackupHelperState','helper-state',1000,'executing','dispatching','not_dispatched','retry_after_validation',1,'now','now','now')`, operationID, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO installation_leases(installation_id,operation_id,fencing_token,state,acquired_at,updated_at,recovery_required) VALUES('helper-state',?,1,'held','now','now',0)`, operationID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Create(context.Background(), CreateOptions{DB: db, Destination: filepath.Join(root, "backups"), Name: operationID + ".kitpro-host-state.tar.gz", OperationID: operationID, StateRoot: root, Now: time.Unix(2, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = Restore(context.Background(), RestoreOptions{Archive: result.Path, StateRoot: root}); err != nil {
+		t.Fatal(err)
+	}
+	db, err = state.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var operationState, phase, confidence, disposition, leaseState string
+	var recoveryRequired int
+	if err = db.QueryRow(`SELECT state,current_phase,outcome_confidence,recovery_disposition FROM helper_operations WHERE operation_id=?`, operationID).Scan(&operationState, &phase, &confidence, &disposition); err != nil {
+		t.Fatal(err)
+	}
+	if operationState != "succeeded" || phase != "completed" || confidence != "confirmed_applied" || disposition != "completed" {
+		t.Fatalf("restored backup operation = %q %q %q %q", operationState, phase, confidence, disposition)
+	}
+	if err = db.QueryRow(`SELECT state,recovery_required FROM installation_leases WHERE installation_id='helper-state'`).Scan(&leaseState, &recoveryRequired); err != nil {
+		t.Fatal(err)
+	}
+	if leaseState != "released" || recoveryRequired != 0 {
+		t.Fatalf("restored backup lease = %q recovery=%d", leaseState, recoveryRequired)
+	}
+}
+
 func TestInterruptedRestoreRecoversPreRestoreState(t *testing.T) {
 	root, databasePath, result := fixture(t)
 	db, err := state.Open(databasePath)

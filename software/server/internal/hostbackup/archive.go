@@ -55,6 +55,7 @@ type CreateOptions struct {
 	DB          *sql.DB
 	Destination string
 	Name        string
+	OperationID string
 	StateRoot   string
 	Now         time.Time
 }
@@ -96,9 +97,18 @@ func Create(ctx context.Context, options CreateOptions) (Result, error) {
 		return Result{}, err
 	}
 	defer os.RemoveAll(workspace)
+	now := options.Now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	databasePath, err := controlbackup.Vacuum(ctx, options.DB, workspace, "helper.db")
 	if err != nil {
 		return Result{}, err
+	}
+	if options.OperationID != "" {
+		if err = completeBackupOperationSnapshot(ctx, databasePath, options.OperationID, now); err != nil {
+			return Result{}, err
+		}
 	}
 	files := []sourceFile{{archive: "helper.db", path: databasePath}}
 	for _, source := range []struct {
@@ -119,10 +129,6 @@ func Create(ctx context.Context, options CreateOptions) (Result, error) {
 	var schema int
 	if err = options.DB.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&schema); err != nil {
 		return Result{}, err
-	}
-	now := options.Now.UTC()
-	if now.IsZero() {
-		now = time.Now().UTC()
 	}
 	manifest := Manifest{Format: Format, FormatVersion: FormatVersion, CreatedAt: now, HelperSchemaVersion: schema, CertificatePrivateKeysIncluded: true, CloudflareCredentialsIncluded: true, RemoteCloudflareStateIncluded: false, GeneratedIngressRuntimeIncluded: false}
 	for index := range files {
@@ -163,6 +169,45 @@ func Create(ctx context.Context, options CreateOptions) (Result, error) {
 	}
 	digest, err := hashFile(finalPath)
 	return Result{Path: finalPath, SHA256: digest, Manifest: manifest}, err
+}
+
+func completeBackupOperationSnapshot(ctx context.Context, databasePath, operationID string, completedAt time.Time) error {
+	db, err := sql.Open("sqlite", "file:"+databasePath+"?mode=rw&_pragma=foreign_keys(1)&_pragma=busy_timeout(250)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	timestamp := completedAt.Format(time.RFC3339Nano)
+	result, err := tx.ExecContext(ctx, `UPDATE helper_operations
+		SET state='succeeded',current_phase='completed',outcome_confidence='confirmed_applied',recovery_disposition='completed',updated_at=?,completed_at=?,result_json='',error_code='',error_detail=''
+		WHERE operation_id=? AND operation_kind='BackupHelperState' AND state IN ('accepted','executing','reconciling')`, timestamp, timestamp, operationID)
+	if err != nil {
+		return err
+	}
+	if changed, rowsErr := result.RowsAffected(); rowsErr != nil || changed != 1 {
+		return fmt.Errorf("host-state backup operation is not active in snapshot")
+	}
+	result, err = tx.ExecContext(ctx, `UPDATE installation_leases SET state='released',updated_at=?,recovery_required=0
+		WHERE installation_id='helper-state' AND operation_id=? AND state='held'`, timestamp, operationID)
+	if err != nil {
+		return err
+	}
+	if changed, rowsErr := result.RowsAffected(); rowsErr != nil || changed != 1 {
+		return fmt.Errorf("host-state backup lease is not active in snapshot")
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO helper_operation_events(operation_id,installation_id,fencing_token,event_kind,phase,facts_json,created_at)
+		SELECT operation_id,installation_id,fencing_token,'operation_completed','completed','{}',? FROM helper_operations WHERE operation_id=?`, timestamp, operationID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return controlbackup.Verify(ctx, databasePath)
 }
 
 func collect(prefix, root string) ([]sourceFile, error) {

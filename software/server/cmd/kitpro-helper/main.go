@@ -589,7 +589,7 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "removed"}})
 		}
 	case "BackupHelperState":
-		result, err := hostbackup.Create(context.Background(), hostbackup.CreateOptions{DB: db, Destination: env("KITPRO_HELPER_BACKUP_DIR", "/var/lib/kitpro-helper/backups"), Name: r.SemanticOperationID() + ".kitpro-host-state.tar.gz", StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")})
+		result, err := hostbackup.Create(context.Background(), hostbackup.CreateOptions{DB: db, Destination: env("KITPRO_HELPER_BACKUP_DIR", "/var/lib/kitpro-helper/backups"), Name: r.SemanticOperationID() + ".kitpro-host-state.tar.gz", OperationID: r.SemanticOperationID(), StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")})
 		if err != nil {
 			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
 		} else {
