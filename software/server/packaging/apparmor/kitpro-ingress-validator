@@ -4,6 +4,7 @@
   #include <abstractions/base>
   /usr/libexec/kitpro-ingress-validator rix,
   /usr/sbin/nginx ix,
+  /usr/bin/nginx ix,
   capability net_bind_service,
   /etc/group r,
   /etc/nsswitch.conf r,
@@ -17,8 +18,6 @@
   network unix stream,
   network inet stream,
   network inet6 stream,
-  deny /bin/** x,
-  deny /usr/bin/** x,
   deny /home/** r,
   deny /root/** r,
 }

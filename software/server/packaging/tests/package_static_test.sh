@@ -89,6 +89,8 @@ grep -q '^  deny network inet,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro
 grep -q '^  deny network inet6,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '/usr/libexec/kitpro-ingress-validator flags=(attach_disconnected) {' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  /usr/sbin/nginx ix,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
+grep -Fqx '  /usr/bin/nginx ix,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
+test "$(grep -Ec ' (rix|ix),$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator")" -eq 3
 grep -Fqx '  capability net_bind_service,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  network inet stream,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  network inet6 stream,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
