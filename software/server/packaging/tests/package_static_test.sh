@@ -101,6 +101,15 @@ grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$unpack/data/usr/lib/syste
 grep -q '^PathExists=/run/kitpro/ingress-reload.request$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"
 grep -Fxq 'PIDFile=/var/lib/kitpro-helper/ingress/run/nginx.pid' "$unpack/data/usr/lib/systemd/system/kitpro-ingress.service"
 grep -Fxq 'pid run/nginx.pid;' "$unpack/data/usr/share/kitpro-server/ingress-bootstrap.conf"
+grep -Fxq 'After=network-online.target' "$unpack/data/usr/lib/systemd/system/kitpro-ingress.service"
+if grep -Eq '^After=.*kitpro-acme\.service' "$unpack/data/usr/lib/systemd/system/kitpro-ingress.service"; then
+    echo "managed ingress creates a boot ordering cycle through the ACME service" >&2
+    exit 1
+fi
+if grep -Eq '^After=.*kitpro-ingress\.service' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"; then
+    echo "managed ingress path watcher creates a boot ordering cycle through paths.target" >&2
+    exit 1
+fi
 for lifecycle in \
     "$unpack/control/postinst" \
     "$server_dir/packaging/arch/kitpro-server.install" \

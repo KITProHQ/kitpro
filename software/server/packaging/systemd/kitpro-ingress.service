@@ -1,6 +1,6 @@
 [Unit]
 Description=KITPro managed ingress
-After=network-online.target kitpro-acme.service
+After=network-online.target
 Wants=network-online.target kitpro-acme.service
 
 [Service]

@@ -1,6 +1,5 @@
 [Unit]
 Description=KITPro managed ingress reload requests
-After=kitpro-ingress.service
 
 [Path]
 PathExists=/run/kitpro/ingress-reload.request
