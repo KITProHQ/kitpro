@@ -75,9 +75,8 @@ configure_package() {
     fi
     systemd-sysusers /usr/lib/sysusers.d/kitpro-server.conf
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
-    if [[ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf ]]; then
-        install -m 0640 -o root -g root /usr/share/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
-    fi
+    install -m 0640 -o root -g root /usr/share/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new
+    mv -fT /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
     [[ -e /var/lib/kitpro-helper/ingress/current ]] || ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
     apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-helper
     apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-acme

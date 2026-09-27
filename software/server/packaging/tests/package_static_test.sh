@@ -101,6 +101,19 @@ grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$unpack/data/usr/lib/syste
 grep -q '^PathExists=/run/kitpro/ingress-reload.request$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"
 grep -Fxq 'PIDFile=/run/kitpro-ingress/nginx.pid' "$unpack/data/usr/lib/systemd/system/kitpro-ingress.service"
 grep -Fxq 'pid /run/kitpro-ingress/nginx.pid;' "$unpack/data/usr/share/kitpro-server/ingress-bootstrap.conf"
+for lifecycle in \
+    "$unpack/control/postinst" \
+    "$server_dir/packaging/arch/kitpro-server.install" \
+    "$server_dir/packaging/rpm/kitpro-server.spec.in"
+do
+    grep -Fq 'ingress/bootstrap/.nginx.conf.new' "$lifecycle"
+    grep -Fq 'mv -fT /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf' "$lifecycle"
+    if grep -Fq 'if [ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf' "$lifecycle" || \
+       grep -Fq 'if [[ ! -e /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf' "$lifecycle"; then
+        echo "package lifecycle preserves a stale managed ingress bootstrap" >&2
+        exit 1
+    fi
+done
 grep -Fqx 'ExecStart=/usr/bin/systemctl reload kitpro-ingress.service' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
 grep -Fqx 'ExecStartPost=/usr/bin/mv -T -- /run/kitpro/ingress-reload.request /run/kitpro/ingress-reload.complete' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
 grep -q '^CapabilityBoundingSet=$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
