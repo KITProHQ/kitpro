@@ -142,6 +142,10 @@ for backup_dir in "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"; do
 done
 runuser -u kitpro-api -- %{_bindir}/kitpro-api --migrate-only
 %{_libexecdir}/kitpro-helper --migrate-only
+chown kitpro-api:kitpro-api "$KITPRO_CONTROL_DB"
+chmod 0600 "$KITPRO_CONTROL_DB"
+chown root:root "$KITPRO_HELPER_DB"
+chmod 0600 "$KITPRO_HELPER_DB"
 %{_sbindir}/kitpro-server-uninstall --restore
 systemctl daemon-reload
 systemctl enable --now kitpro-ingress-validator.service kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service kitpro-ingress-reload.path

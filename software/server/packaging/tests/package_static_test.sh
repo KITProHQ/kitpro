@@ -78,6 +78,10 @@ grep -q '^AppArmorProfile=/usr/libexec/kitpro-cloudflare$' "$unpack/data/usr/lib
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-ingress-validator$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
+grep -Fq 'chown kitpro-api:kitpro-api "$KITPRO_CONTROL_DB"' "$unpack/control/postinst"
+grep -Fq 'chmod 0600 "$KITPRO_CONTROL_DB"' "$unpack/control/postinst"
+grep -Fq 'chown root:root "$KITPRO_HELPER_DB"' "$unpack/control/postinst"
+grep -Fq 'chmod 0600 "$KITPRO_HELPER_DB"' "$unpack/control/postinst"
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK$' "$unpack/data/usr/lib/systemd/system/kitpro-api.service"
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"; then

@@ -241,6 +241,10 @@ done
 
 runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
 /usr/libexec/kitpro-helper --migrate-only
+chown kitpro-api:kitpro-api "$KITPRO_CONTROL_DB"
+chmod 0600 "$KITPRO_CONTROL_DB"
+chown root:root "$KITPRO_HELPER_DB"
+chmod 0600 "$KITPRO_HELPER_DB"
 
 deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service >/dev/null || true
 deb-systemd-helper enable kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service >/dev/null
