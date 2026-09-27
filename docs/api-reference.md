@@ -26,7 +26,7 @@ application secret through those endpoints.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/v1/version` | Authenticated KITPro and platform build metadata |
-| GET | `/api/v1/catalog` | Trusted application catalog and release metadata |
+| GET | `/api/v1/apps` | Trusted application catalog and release metadata |
 | GET | `/api/v1/installations` | Installed application identities and desired state |
 | GET | `/api/v1/installations/{id}/services` | Declared services and safe access state |
 | GET | `/api/v1/installations/{id}/reconciliation` | Last helper reconciliation result for the installation |
