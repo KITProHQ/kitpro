@@ -360,6 +360,9 @@ func TestFirstRunIsAuthenticatedResumableAndDoesNotSimulateCriticalSteps(t *test
 	recorder := httptest.NewRecorder()
 	request := authenticatedRequest(http.MethodGet, "/first-run", "", session, csrf)
 	a.guard(a.firstRun)(recorder, request)
+	if got := recorder.Header().Get("Referrer-Policy"); got != "same-origin" {
+		t.Fatalf("first-run forms need a same-origin Origin header; referrer policy=%q", got)
+	}
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Step 10") || !strings.Contains(recorder.Body.String(), "Docker address pool") || !strings.Contains(recorder.Body.String(), "requires attention") {
 		t.Fatalf("first-run status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -369,6 +372,16 @@ func TestFirstRunIsAuthenticatedResumableAndDoesNotSimulateCriticalSteps(t *test
 	a.guard(a.firstRun)(recorder, request)
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("access mode status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, origin := range []string{"null", "https://foreign.example", ""} {
+		recorder = httptest.NewRecorder()
+		request = authenticatedRequest(http.MethodPost, "/first-run", "step_id=access-mode&choice=local&csrf_token="+csrf.Value, session, csrf)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", origin)
+		a.guard(a.firstRun)(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("unsafe form origin %q accepted: status=%d", origin, recorder.Code)
+		}
 	}
 	var stateValue string
 	if err := a.db.QueryRow(`SELECT state FROM setup_steps WHERE step_id='access-mode'`).Scan(&stateValue); err != nil || stateValue != "complete" {

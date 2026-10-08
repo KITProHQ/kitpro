@@ -245,7 +245,8 @@ type authPageData struct {
 func (a *app) securityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// Preserve Origin on same-origin form POSTs while withholding cross-origin referrers.
+	w.Header().Set("Referrer-Policy", "same-origin")
 }
 
 func (a *app) asset(contentType, body string) http.HandlerFunc {
