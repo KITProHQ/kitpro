@@ -425,3 +425,31 @@ func TestSystemReadinessReportsTypedDockerPoolAndRestoreHold(t *testing.T) {
 		t.Fatalf("readiness status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestRestoredIngressHoldRejectsStoppedBackendBeforeHelperMutation(t *testing.T) {
+	a, session, csrf := newTestApp(t)
+	seedIngressInstallation(t, a, "inst-held01", "uptime-kuma")
+	route := ingress.Route{ID: "route-0123456789abcdef", InstallationID: "inst-held01", ServiceID: "web", Hostname: "held.example.test", ExposureMode: ingress.LAN, UpstreamProtocol: "http", TLSPolicy: ingress.TLSNone, DesiredState: ingress.Enabled}
+	if _, err := (ingress.Store{DB: a.db}).CreateRoute(context.Background(), route); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRouteHolds(context.Background(), a.db, []ingress.Route{route}, true); err != nil {
+		t.Fatal(err)
+	}
+	a.probeReadiness = func(context.Context, *manifest.ReadinessCheck, string, int) readiness.Observation {
+		return readiness.Observation{State: "failed", ReasonCode: "backend_stopped"}
+	}
+	a.helperCall = func(protocol.Request) (protocol.Response, error) {
+		t.Fatal("held backend reached helper mutation")
+		return protocol.Response{}, nil
+	}
+	recorder := httptest.NewRecorder()
+	a.guard(a.ingressRoutes)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/ingress/reconcile", "{}", session, csrf))
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var held int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_route_holds`).Scan(&held); err != nil || held != 1 {
+		t.Fatalf("held=%d err=%v", held, err)
+	}
+}

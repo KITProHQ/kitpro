@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -219,4 +220,31 @@ func syncDirectory(path string) error {
 	}
 	defer directory.Close()
 	return directory.Sync()
+}
+
+// NextUnusedGeneration preserves immutable runtime files left by a newer database
+// timeline when an older host backup is restored.
+func NextUnusedGeneration(root string, minimum int64) (int64, error) {
+	if minimum < 1 {
+		return 0, fmt.Errorf("invalid ingress generation")
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "generations"))
+	if os.IsNotExist(err) {
+		return minimum, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	next := minimum
+	for _, entry := range entries {
+		n, parseErr := strconv.ParseInt(entry.Name(), 10, 64)
+		if parseErr != nil || n < next {
+			continue
+		}
+		if n == math.MaxInt64 {
+			return 0, fmt.Errorf("ingress generation exhausted")
+		}
+		next = n + 1
+	}
+	return next, nil
 }

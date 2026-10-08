@@ -104,10 +104,10 @@ func Verify(ctx context.Context, path string) error {
 	return VerifyDatabase(ctx, db)
 }
 
-// RestoreAtomic installs a verified SQLite backup without an interval where a
+// RestoreControlAtomic installs a verified SQLite backup without an interval where a
 // pre-existing target is absent. The old database bytes are retained adjacent
 // to the target for operator recovery.
-func RestoreAtomic(ctx context.Context, source, target string) (string, error) {
+func RestoreControlAtomic(ctx context.Context, source, target string) (string, error) {
 	if !filepath.IsAbs(source) || filepath.Clean(source) != source || !filepath.IsAbs(target) || filepath.Clean(target) != target || source == target {
 		return "", fmt.Errorf("invalid database restore path")
 	}
@@ -137,6 +137,9 @@ func RestoreAtomic(ctx context.Context, source, target string) (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	if err = holdRestoredControlIngress(ctx, stagingPath); err != nil {
+		return "", fmt.Errorf("prepare restored ingress: %w", err)
 	}
 	if err = Verify(ctx, stagingPath); err != nil {
 		return "", fmt.Errorf("staged database verification failed: %w", err)
@@ -308,4 +311,31 @@ func verifyPageAccounting(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("database has unaccounted pages")
 	}
 	return nil
+}
+
+// Restored routes retain operator intent but cannot activate before backend readiness.
+// Prepare only the private staging database, never the archived source or live target.
+func holdRestoredControlIngress(ctx context.Context, path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=rw&_pragma=foreign_keys(1)&_pragma=busy_timeout(250)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var exists int
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ingress_routes'`).Scan(&exists); err != nil || exists == 0 {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ingress_route_holds(route_id,reason,created_at) SELECT route_id,'application-restore',? FROM ingress_routes WHERE desired_state='enabled'`, now); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE ingress_generations SET status='rolled_back',failure_code='restore_requires_reactivation',updated_at=? WHERE status='active'`, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -87,7 +87,7 @@ func TestVacuumRejectsUnwritableBackupLocationWithoutChangingSource(t *testing.T
 	}
 }
 
-func TestRestoreAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
+func TestRestoreControlAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	targetPath := filepath.Join(root, "control.db")
@@ -115,7 +115,7 @@ func TestRestoreAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = source.Close()
-	recovery, err := RestoreAtomic(ctx, sourcePath, targetPath)
+	recovery, err := RestoreControlAtomic(ctx, sourcePath, targetPath)
 	if err != nil || recovery == "" {
 		t.Fatalf("recovery=%q err=%v", recovery, err)
 	}
@@ -147,13 +147,13 @@ func TestRestoreAtomicVerifiesSourceAndPreservesPriorDatabase(t *testing.T) {
 	if err = os.WriteFile(corrupt, []byte("not sqlite"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = RestoreAtomic(ctx, corrupt, targetPath); err == nil {
+	if _, err = RestoreControlAtomic(ctx, corrupt, targetPath); err == nil {
 		t.Fatal("corrupt restore source accepted")
 	}
 	if err = os.WriteFile(targetPath+"-wal", []byte("active"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = RestoreAtomic(ctx, sourcePath, targetPath); err == nil || !strings.Contains(err.Error(), "active SQLite sidecar") {
+	if _, err = RestoreControlAtomic(ctx, sourcePath, targetPath); err == nil || !strings.Contains(err.Error(), "active SQLite sidecar") {
 		t.Fatalf("active WAL restore error=%v", err)
 	}
 }
@@ -171,5 +171,48 @@ func assertNoPartialBackups(t *testing.T, dir string) {
 		if strings.Contains(entry.Name(), ".partial-") {
 			t.Fatalf("partial backup remains: %s", entry.Name())
 		}
+	}
+}
+
+func TestRestoreControlHoldsIngressWithoutChangingBackup(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath, targetPath := filepath.Join(dir, "source.db"), filepath.Join(dir, "target.db")
+	source, err := state.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = state.Migrate(ctx, source, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.Exec(`INSERT INTO installations(installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at) VALUES('inst-test','memos','0.30.0','running',1,'now','now'); INSERT INTO ingress_routes(route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,certificate_id,provider_id,desired_state,applied_generation,created_at,updated_at) VALUES('route-0123456789abcdef','inst-test','web','test.example.test','lan','http','none','','','enabled',5,'now','now'); INSERT INTO ingress_generations(generation,operation_id,configuration_sha256,status,created_at,updated_at) VALUES(5,'op-test','digest','active','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	source.Close()
+	before, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = RestoreControlAtomic(ctx, sourcePath, targetPath); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(sourcePath)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("archive source changed", err)
+	}
+	target, err := state.Open(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	var holds, active int
+	if err = target.QueryRow(`SELECT COUNT(*) FROM ingress_route_holds WHERE reason='application-restore'`).Scan(&holds); err != nil || holds != 1 {
+		t.Fatalf("holds=%d err=%v", holds, err)
+	}
+	if err = target.QueryRow(`SELECT COUNT(*) FROM ingress_generations WHERE status='active'`).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("active=%d err=%v", active, err)
+	}
+	if _, err = target.Exec(`INSERT INTO ingress_generations(generation,operation_id,configuration_sha256,status,created_at,updated_at) VALUES(8,'op-reactivate','digest','active','now','now')`); err != nil {
+		t.Fatalf("new timeline cannot activate: %v", err)
 	}
 }

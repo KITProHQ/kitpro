@@ -152,3 +152,29 @@ func TestVerifyManagedNginxReadsConfiguredPIDPath(t *testing.T) {
 		t.Fatalf("unexpected result: %v", err)
 	}
 }
+
+func TestNextUnusedGenerationAfterRestoringOlderDatabase(t *testing.T) {
+	root := t.TempDir()
+	if n, err := NextUnusedGeneration(root, 6); err != nil || n != 6 {
+		t.Fatalf("empty: %d %v", n, err)
+	}
+	for _, name := range []string{"5", "6", "12"} {
+		p := filepath.Join(root, "generations", name)
+		if err := os.MkdirAll(p, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "nginx.conf"), []byte("preserved"), 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := NextUnusedGeneration(root, 6); err != nil || n != 13 {
+		t.Fatalf("restored timeline: %d %v", n, err)
+	}
+	if n, err := NextUnusedGeneration(root, 20); err != nil || n != 20 {
+		t.Fatalf("newer database: %d %v", n, err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "generations", "6", "nginx.conf"))
+	if err != nil || string(b) != "preserved" {
+		t.Fatal("existing runtime changed", err)
+	}
+}

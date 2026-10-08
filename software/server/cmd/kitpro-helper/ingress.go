@@ -75,6 +75,10 @@ func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Re
 	if err = db.QueryRowContext(ctx, `SELECT COALESCE(MAX(generation),0) FROM ingress_generations WHERE status='active'`).Scan(&previous); err != nil {
 		return nil, err
 	}
+	generation, err = ingress.NextUnusedGeneration("/var/lib/kitpro-helper/ingress", generation)
+	if err != nil {
+		return nil, err
+	}
 	manager := ingress.Manager{Runtime: ingressRuntime()}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	generationPath := filepath.Join("/var/lib/kitpro-helper/ingress/generations", fmt.Sprintf("%d", generation))

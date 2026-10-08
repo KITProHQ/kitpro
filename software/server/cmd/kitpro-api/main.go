@@ -379,7 +379,7 @@ func handleMaintenance(args []string) bool {
 		if os.Geteuid() != 0 {
 			fatalMaintenance("control database restore requires local root authority")
 		}
-		recovery, err := backup.RestoreAtomic(context.Background(), args[1], env("KITPRO_CONTROL_DB", "/var/lib/kitpro-api/control.db"))
+		recovery, err := backup.RestoreControlAtomic(context.Background(), args[1], env("KITPRO_CONTROL_DB", "/var/lib/kitpro-api/control.db"))
 		if err != nil {
 			fatalMaintenance(err.Error())
 		}
