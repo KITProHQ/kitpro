@@ -58,9 +58,15 @@ func TestRenderNginxAddsTLSAndCloudflareListeners(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(config)
-	for _, required := range []string{"listen 443 ssl", "return 308 https://$host$request_uri", "/cert-0123456789abcdef/privkey.pem", "listen 127.0.0.1:18080"} {
+	for _, required := range []string{"listen 443 ssl", "return 308 https://$host$request_uri", "/cert-0123456789abcdef/privkey.pem", "listen 127.0.0.1:18080", "listen 127.0.0.1:18080 default_server"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("generated config missing %q", required)
 		}
+	}
+	tunnelServer := text[strings.Index(text, "server_name tunnel.example.com"):]
+	challenge := strings.Index(tunnelServer, "location ^~ /.well-known/acme-challenge/")
+	application := strings.Index(tunnelServer, "proxy_pass http://127.0.0.1:20001")
+	if challenge == -1 || application == -1 || challenge > application {
+		t.Fatal("Cloudflare hostname does not route ACME HTTP-01 before the application backend")
 	}
 }

@@ -38,6 +38,12 @@ func RenderNginx(routes []AppliedRoute, options RenderOptions) ([]byte, error) {
 	out.WriteString("    location / { return 444; }\n  }\n")
 	out.WriteString("  server { listen 443 ssl default_server; ssl_reject_handshake on; server_name _; }\n")
 	for _, route := range routes {
+		if route.ExposureMode == CloudflareTunnel {
+			out.WriteString("  server { listen 127.0.0.1:" + strconv.Itoa(cloudflareOriginPort) + " default_server; server_name _; location / { return 444; } }\n")
+			break
+		}
+	}
+	for _, route := range routes {
 		listen := "80"
 		if route.ExposureMode == CloudflareTunnel {
 			listen = "127.0.0.1:" + strconv.Itoa(cloudflareOriginPort)
@@ -54,6 +60,9 @@ func RenderNginx(routes []AppliedRoute, options RenderOptions) ([]byte, error) {
 			out.WriteString("    ssl_certificate " + filepath.Join(certRoot, "fullchain.pem") + ";\n")
 			out.WriteString("    ssl_certificate_key " + filepath.Join(certRoot, "privkey.pem") + ";\n")
 			out.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_tickets off;\n")
+		}
+		if route.ExposureMode == CloudflareTunnel {
+			writeACMEChallengeLocation(&out)
 		}
 		out.WriteString("    location / {\n")
 		out.WriteString("      proxy_pass " + route.UpstreamProtocol + "://" + route.Backend.Address + ":" + strconv.Itoa(route.Backend.Port) + ";\n")
