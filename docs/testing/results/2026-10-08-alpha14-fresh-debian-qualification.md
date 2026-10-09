@@ -53,8 +53,11 @@ the current source and have regression coverage:
   exchange, and allocated new ingress generations beyond existing disk
   history.
 
-No additional product defect was found while qualifying the exact `94397d0`
-candidate, so no further product commit or package rebuild was required.
+No additional product defect was found during the original qualification of the
+exact `94397d0` candidate. A later correction to the external-gate architecture
+identified a Cloudflare-origin defect; its fix and affected-gate evidence are
+recorded below without rewriting the identity of the original fresh-install
+candidate.
 
 ## Fresh host identity and baseline
 
@@ -184,6 +187,51 @@ failure behavior, API projection, and diagnostics redaction. The packaged
 Cloudflare service was active after reboot even though provider readiness was
 correctly `disabled/provider_disabled`.
 
+## Cloudflare-first ACME correction and affected candidate
+
+This qualification environment is behind an ISP that blocks inbound TCP/80.
+Direct public HTTP-01 access to VM 500 is neither available nor required, and
+its absence is not an infrastructure misconfiguration. The required external
+sequence is Cloudflare Tunnel first, followed by public HTTP and ACME HTTP-01
+through the tunnel to KITPro's managed ingress challenge handler. Router port
+forwarding and direct public exposure of VM 500 are outside this qualification
+path.
+
+Implementation review reproduced a product defect in the original renderer.
+Cloudflare routes target KITPro's loopback origin at `127.0.0.1:18080`, but the
+hostname server on that listener sent the ACME challenge path to the application
+backend. The listener also had no explicit rejecting default server, allowing
+nginx to select the first configured tunnel hostname for an unmatched Host.
+
+Commit `4b12da0a807bce03d287e078b8c3aebb756486c5` adds the existing bounded
+ACME challenge location to each authorized Cloudflare hostname and adds a
+single default server on the loopback tunnel listener that returns 444. The
+regression failed before the fix and passed afterward. Full Go tests, Go vet,
+UI tests, and Debian, Arch, and RPM package static tests passed.
+
+The affected Debian candidate was rebuilt from the clean fix commit and
+installed over the earlier alpha.14 candidate on VM 500:
+
+| Property | Value |
+| --- | --- |
+| Filename | `kitpro-server_0.1.0~alpha14_amd64.deb` |
+| SHA-256 | `9b7251196954d8e115d386697e998c4dab45af771342ee375d1e77a2c612dd12` |
+| Source commit | `4b12da0a807bce03d287e078b8c3aebb756486c5` |
+| Source tree | `ec291fc436ab2ed8783fcb6e13da4e2e088ce3d5` |
+| Clean-source marker | `source_tree_dirty=false` |
+
+An isolated live nginx instance on VM 500 validated the fixed generated
+configuration without changing active ingress: the authorized tunnel hostname
+reached its intended backend with HTTP 200, a nonexistent ACME token reached
+the challenge handler and returned 404, and an unknown Host was rejected with
+nginx's 444 behavior. The installed candidate then passed service, database,
+AppArmor, active HTTPS, unknown-Host, Docker-pool, application-runtime, failed
+unit, ordering-cycle, and secret-log checks.
+
+This is local proof of the corrected origin contract. It is not live proof of
+Cloudflare edge routing or Let's Encrypt staging. Those gates still require the
+authorized disposable resources below.
+
 ## Administrator recovery and diagnostics
 
 The packaged recovery command rejected non-root SSH execution. The established
@@ -271,21 +319,25 @@ The following Debian-local gates are complete:
 - backup and offline restore;
 - reboot and recovery.
 
-Two external-resource gates remain `BLOCKED_EXTERNAL_TEST_RESOURCES`:
+Two external-resource gates remain `BLOCKED_EXTERNAL_TEST_RESOURCES` and must
+run in this order:
 
-1. Live Let's Encrypt staging issuance and renewal need an explicitly
-   authorized public hostname with reachable TCP/80.
-2. Live Cloudflare lifecycle qualification needs explicitly authorized scoped
-   credentials and test resources.
+1. Live Cloudflare lifecycle qualification needs explicitly authorized scoped
+   credentials, zone/account metadata, a disposable hostname, and a disposable
+   tunnel or permission to create and delete one.
+2. After that tunnel publishes KITPro's loopback HTTP origin, live Let's Encrypt
+   staging issuance and renewal need the same authorized hostname, contact
+   email, and subscriber-terms authorization. HTTP-01 must traverse Cloudflare
+   Tunnel; direct inbound TCP/80 to VM 500 is not part of the gate.
 
 The post-qualification local resource discovery was repeated before stopping:
 
 - KITPro's ignored `.env` contains only the established Proxmox API and guest
   privilege inputs. It does not provide an ACME hostname, contact email,
-  HTTP-01 routing declaration, or authorization to accept the staging
-  subscriber terms.
+  Cloudflare tunnel routing declaration, or authorization to accept the
+  staging subscriber terms.
 - No local ACME client state or explicitly authorized non-production FQDN was
-  present, so public DNS, TCP/80, HTTP-01 issuance, and renewal could not be
+  present, so public DNS, tunneled HTTP-01 issuance, and renewal could not be
   exercised safely.
 - No valid scoped Cloudflare token file, insufficient-scope token file,
   replacement token file, account/zone/test-host metadata, or disposable
