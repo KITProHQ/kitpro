@@ -2,132 +2,283 @@
 
 Date: 2026-10-08
 
-Status: `FRESH_DEBIAN_PASS_EXTERNAL_GATES_OPEN`
+Status: `FRESH_DEBIAN_PASS / BLOCKED_EXTERNAL_TEST_RESOURCES`
 
-This record qualifies the fresh Debian path below, including the full first-run
-workflow. It does not declare alpha.14 release readiness, qualify other platforms
-or an alpha.13 upgrade, or authorize final release staging.
+VM 500 is the authoritative Debian qualification host for this record. Its
+Debian operating system was wiped and reinstalled clean before alpha.14
+qualification began. There was no preexisting KITPro installation, Docker
+runtime, managed state, or unrelated workload on that fresh baseline. The
+current KITPro state was created by this qualification run.
+
+A snapshot is recovery tooling, not proof of whether an operating system was
+freshly installed. The fresh baseline was established by the rebuild and guest
+inspection. A convenience snapshot named `clean-os-alpha14-20261008` was also
+created before qualification mutations; its presence or absence would not
+change the fresh-install conclusion.
+
+This record qualifies Debian-local alpha.14 behavior. It does not declare final
+release readiness, qualify other operating systems, or authorize publication
+staging.
 
 ## Source and candidate identity
 
-The initial checkout was clean on `develop/0.1.0-alpha.14`, at
-`2f3900ac85e3d579fb71456e8e36dee86f8f7a39`, tree
-`b447f3b2895c3d1a605e28e9729c541d037286fe`.
+Before qualification the checkout was clean on
+`develop/0.1.0-alpha.14`, at
+`94397d06aefbc8e6cdbf302697dc5d91ff716dcb`, with tree
+`7f73852045f8cedaa1d93275f70d84118fde6992`.
 
-Two defects found during live qualification were reproduced, covered by regression
-tests, and committed locally:
+The qualification package was rebuilt locally from that exact clean source:
 
-- `72f8c3b7e5d43db1e6b577133eb2fcb1da6d02e8`: use the same-origin referrer policy
-  so browser first-run forms retain their origin. Null, missing, and foreign
-  origins remain rejected.
-- `d24a0bba414caceece70a624e57de43d85769056`: place restored routes on hold and
-  invalidate archived active ingress metadata before exchanging the control
-  database; select new ingress generations beyond existing disk history.
-  Previously, restore could reuse a generation directory and activate a route
-  before its restored backend was ready.
-
-The passing qualification-only package is `kitpro-server_0.1.0~alpha14_amd64.deb`:
-
-- Source commit: `d24a0bba414caceece70a624e57de43d85769056`.
-- SHA-256: `2a10f809e0f5aee92664bccd5b5960a45ec27b39c5934f10f0531bebe1772ffe`.
-- Package version/architecture: `0.1.0~alpha14`, `amd64`.
-- Build metadata: `source_tree_dirty=false`; both extracted binaries embed the
-  exact source commit above.
-- Local path: `/tmp/kitpro-alpha14-20261008/candidate-d24a0bb/kitpro-server_0.1.0~alpha14_amd64.deb`.
-
-Evidence from candidates built at `2f3900a` and `72f8c3b` is superseded. Each
-replacement was installed after restoring this run's clean OS snapshot; the
-passing installation was genuinely fresh. A later documentation-only commit does
-not change the identity of these tested bytes.
-
-## Verified baseline
-
-The initially restored guest at `10.10.10.112` contained an older alpha.14
-installation and 31 containers. It was rejected as a fresh-install baseline and
-was not cleaned or modified. The operator subsequently supplied `10.10.10.114`.
-Guest-agent network data and SMBIOS identity established that it is VM 500.
-
-| Property | Observed baseline |
+| Property | Value |
 | --- | --- |
-| Proxmox endpoint/node | `10.10.40.50:8006`, `hermes` |
-| VM ID/name/role | 500 / Debian-13.7.0 / KITPro Debian release-test VM |
-| SMBIOS UUID | `25f40ea4-0365-4ad3-a763-0d0d35b96b20` |
+| Filename | `kitpro-server_0.1.0~alpha14_amd64.deb` |
+| Local path | `/tmp/kitpro-alpha14-20261008/candidate-94397d0/kitpro-server_0.1.0~alpha14_amd64.deb` |
+| SHA-256 | `19e3e2b3b5e4f87a4dfca1431810cd3345ced22d623723f86b6aaf7b0e7ae9df` |
+| Version/architecture | `0.1.0~alpha14` / `amd64` |
+| Embedded source commit | `94397d06aefbc8e6cdbf302697dc5d91ff716dcb` |
+| Clean-source marker | `source_tree_dirty=false` |
+| Build time | `2026-10-08T21:37:56Z` |
+
+Both extracted binaries and the installed API reported the expected commit.
+This is a qualification candidate, not a final release artifact.
+
+Earlier live qualification exposed two defects that are already included in
+the current source and have regression coverage:
+
+- `72f8c3b7e5d43db1e6b577133eb2fcb1da6d02e8` retained the same-origin
+  referrer needed by browser first-run forms while continuing to reject null,
+  missing, and foreign origins.
+- `d24a0bba414caceece70a624e57de43d85769056` held restored routes inactive,
+  invalidated archived active ingress metadata before control-database
+  exchange, and allocated new ingress generations beyond existing disk
+  history.
+
+No additional product defect was found while qualifying the exact `94397d0`
+candidate, so no further product commit or package rebuild was required.
+
+## Fresh host identity and baseline
+
+Proxmox API inventory and guest-agent inspection agreed on the following
+identity:
+
+| Property | Observed state |
+| --- | --- |
+| Proxmox endpoint/node | `10.10.40.50:8006` / `hermes` |
+| VM ID/name | 500 / `Debian-13.7.0` |
 | Hostname | `debian` |
+| Guest address | `10.10.10.114/24`, gateway `10.10.10.1` |
+| MAC/network | `BC:24:11:53:7E:3D`, `vmbr0`, VLAN tag 10 |
+| SMBIOS UUID | `25f40ea4-0365-4ad3-a763-0d0d35b96b20` |
 | Machine ID | `23c90d5cfb074f9ea5264e70c2f54290` |
-| OS/kernel | Debian 13.7 / `6.12.111+deb13-amd64` |
-| Network | ens18, `BC:24:11:53:7E:3D`, DHCP `10.10.10.114/24`, gateway `10.10.10.1`, vmbr0 VLAN 10 |
-| Resources | 2 cores, 4092 MiB RAM, 80 GiB disk; ext4 root 74 GiB, initially 69 GiB free |
-| Initial state | Booted, zero failed units; no KITPro, nginx, Docker, managed state, or workloads |
-| Initial snapshots | No saved snapshots; synthetic current entry only |
-| Qualification snapshot | `clean-os-alpha14-20261008`, created before mutation |
+| OS/kernel | Debian GNU/Linux 13.7 / `6.12.111+deb13-amd64` |
+| Resources | 2 cores, 4092 MiB RAM, 80 GiB virtual disk |
+| Baseline storage | ext4 root 74 GiB, initially about 69 GiB free |
+| Baseline services | zero failed units; AppArmor enabled |
+| Baseline workload | no KITPro package, Docker, nginx, KITPro state, containers, or unrelated workload |
 
-The VM description's reserved `.200` address is stale relative to observed DHCP;
-no network configuration was rewritten. Existing Athena SSH identity and repository
-Proxmox credentials were used. This fresh OS lacks sudo; existing guest-agent
-privilege supplied administrative execution without root SSH or new privilege
-configuration. The obsolete snapshot-chain blocker did not apply.
+The VM description's older reserved-address note did not match observed DHCP;
+no guest networking was rewritten. Access used the established Athena SSH
+identity and repository Proxmox credentials. The clean Debian image did not
+include `sudo`; privileged guest work used the existing Proxmox guest-agent
+path without root SSH or passwordless-sudo configuration.
 
-## Passing live gates
+## Package, runtime, and host-security result
 
-| Gate | Evidence |
-| --- | --- |
-| Fresh package installation | Dependencies installed through the existing disposable-VM preparation helper; package installation, embedded identity, database initialization, ownership, and modes verified. Docker CE 29.8.2 / containerd 2.3.6. |
-| Service startup/security | API, helper socket/service, managed nginx and Docker operational; KITPro and Docker AppArmor profiles enforcing; zero failed units and no PID-1 ordering-cycle messages. |
-| Ten-step first run | Host, runtime, storage, network, pool, administrator, local access, optional HTTPS, optional Cloudflare, and first application exercised. Browser refresh, interrupted service restart/resume, and reboot persistence passed. Critical steps reject manual completion. HTTPS initially skipped, later becomes complete when a certificate exists; Cloudflare remains explicitly skipped. |
-| Docker pool | Missing-pool preflight rejected installation readiness. Administrator explicitly configured `172.30.0.0/16`, child `/24` (256 nominal networks; required minimum 64), validated and restarted Docker. KITPro left configuration unchanged. Temporary conflicting route produced `address_pool_conflict`, current-pool details, remediation, and restart guidance in readiness/UI; removing that test route restored readiness. |
-| First application | Memos 0.30.0 installed through the normal browser catalog. Trusted storage registration, initial internal binding, desired/runtime state, typed readiness, restart, stop/start, and normal transition to loopback binding verified. Active generation 2 listens only on `127.0.0.1:20000`; generation 1 is retained and stopped. |
-| HTTP ingress | No default route; explicit enablement; HTTP 200; unknown Host rejected; backend inaccessible directly from LAN; stopped backend gives 502; route deletion removes access; recreation and nginx reload succeed. |
-| Provided HTTPS | Locally generated qualification certificate imported through the normal provided-certificate API. Hostname/SNI and certificate trust checked for `memos.alpha14.test`; HTTPS 200 survives restore and reboot. This is not ACME evidence. |
-| Administrator recovery | Packaged reset command denies non-root execution; root reset accepts the new password, rejects the old password, revokes two existing sessions including the browser, and does not echo plaintext. |
-| Support bundle | Live bundle mode 0600 and hash verified; scans exclude known passwords/session/CSRF values, helper secret values, private-key markers, auth headers, and Cloudflare-token patterns. A temporary synthetic sensitive operation makes generation fail closed with no artifact; fixture removed. |
-| Host backup/restore | Packaged control and helper restore succeed while services are stopped. Both databases retain restrictive mode 0600 and correct ownership; integrity checks pass. Restored ingress remains disabled with `restore_hold_active`; reconciliation returns 409 while backend is stopped. Hold survives reboot. After normal application start and consistent reconciliation, explicit ingress reconciliation activates generation 7, preserving existing generation directories. |
-| Subsequent backup | Synchronous backup succeeds after restore/reactivation; archive checksum, mode 0600, and control database integrity verified. |
-| Final reboot | API/helper/nginx/Docker operational; Memos running and consistent; all ten steps complete/skipped; ingress and HTTPS ready; unknown Host rejected; database integrity/ownership/permissions preserved; AppArmor enforcing; failed units 0; genuine ordering cycles 0; service-log secret scan passes. |
+- The exact candidate installed successfully from the restored clean OS
+  snapshot, with package dependencies satisfied.
+- Docker CE 29.9.0, containerd 2.4.1, and Compose 5.6.0 were installed by the
+  existing disposable-host preparation path.
+- `kitpro-api.service`, `kitpro-helper.socket`, `kitpro-ingress.service`,
+  `kitpro-acme.service`, `kitpro-cloudflare.service`, and
+  `kitpro-ingress-validator.service` started and survived reboot.
+- The control and helper databases initialized, passed SQLite integrity checks,
+  retained the expected owners, and remained mode `0600`.
+- The final boot had zero failed units and no PID-1 ordering-cycle message.
+- Service logs contained no tested password, authorization, cookie, CSRF, or
+  private-key material.
+- AppArmor remained enabled and enforcing for the KITPro helper, ACME,
+  Cloudflare, ingress validator, and `docker-default` profiles. Application
+  lifecycle, certificates, diagnostics, backup, restore, ingress, and reboot
+  were exercised without an AppArmor denial.
+- Final root usage was 1.9 GiB of 74 GiB, with 68 GiB available.
 
-A post-start assertion immediately after restore did not pass; its response was
-not retained. No duplicate start was submitted. After the held-state reboot,
-reconciliation explicitly reported `consistent`, `running`, and recommended
-`none`. Final reactivation and a further reboot independently passed. Readiness
-reports firewall `unknown` / `firewall_not_inspected`, which accurately describes
-the constrained helper's inspection boundary; Cloudflare is disabled by choice.
+## Ten-step first run and Docker address pool
 
-## Artifact and state references
+All ten durable first-run steps were exercised: host readiness, runtime,
+storage, network, Docker address pool, administrator, local access mode, HTTPS,
+optional Cloudflare, and first application. Critical steps rejected attempts to
+mark them complete without their real prerequisites. Browser interruption and
+refresh, API/helper restart, and a real VM reboot preserved the state. The final
+state was nine complete steps plus Cloudflare explicitly skipped. Local and LAN
+operation continued without Cloudflare.
 
-- Installation: `inst-6dd3a6c099acee22`.
-- Restored route: `route-f26f66089e994cde`; certificate: `cert-3aeafde5aa866af2`.
-- Support bundle: `bundle-857b99fcbe9b72fc.tar.gz`, SHA-256
-  `d10fe7336149a3bea6044276ecf769e93b65a72e93fa7776b34c2ede2553355f`.
-- Restore source backup: `op-9ad5173e7f76d90a8080fb0f6712745c`; helper archive
-  SHA-256 `be4ffc8adde7d19f708b377efe570634be71220027bce252879d5e2a585dd60a`.
-- Subsequent backup: `op-de6b2ae0003924c0384578570dd37027`; helper archive
-  SHA-256 `c87f95213e2911309ea077d94ad54b3a733cfef0621f2ab92f6ca446ca8a3229`.
-- Final boot ID: `e9e14620-5fef-439c-9277-01fa87e3483d`.
-- Docker configuration SHA-256 throughout installation and recovery:
-  `0e5b569da4495769a28de13132eacce16da26b464c76ec03054126963a4805f3`.
-- Local execution evidence: `/tmp/kitpro-alpha14-20261008/`; temporary evidence
-  paths are not durable release artifacts. Secret-bearing backups remain on the
-  disposable guest; no backup contents are included in this record.
+The missing-pool prerequisite initially blocked readiness. The operator then
+explicitly configured `172.30.0.0/16` with `/24` child networks, providing 256
+nominal networks against the 64-network requirement, and restarted Docker.
+KITPro did not rewrite `/etc/docker/daemon.json`; its SHA-256 remained
+`0e5b569da4495769a28de13132eacce16da26b464c76ec03054126963a4805f3`.
+A temporary conflicting route produced `address_pool_conflict`, current-pool
+details, remediation, and `requires_docker_restart=true`. Removing the fixture
+returned readiness to `address_pool_sufficient`.
 
-## Regression validation and remaining blockers
+## Application lifecycle and managed ingress
 
-The complete Go suite passed with permission for its local test listeners.
-Browser/web tests, Debian static package checks, incoming pre-install tests,
-and fail-closed upgrade tests passed. New regression tests cover browser origin
-policy, staged restore holds/source preservation, active generation invalidation,
-existing generation history, and rejection of restored stopped backends before
-helper mutation.
+Memos 0.30.0 installation `inst-123ed256328609bc` passed generated storage,
+secret generation, initial internal-only binding, desired/runtime state, typed
+readiness, stop, start, restart, and recreation. The active runtime is
+generation 3 on loopback port 20000; the verified previous generation is
+retained stopped as designed.
 
-The remaining external gates for this continuation are:
+A second Memos installation, `inst-48a9c7677070b608`, was used to prove routing
+isolation. Each hostname routed only to its own installation; stopping either
+backend produced 502 for that host while the other continued to return 200.
+The second route was removed and its active runtime was removed while stored
+application data and the normal retained prior generation were preserved.
+Final reconciliation reports the primary installation `consistent/running` and
+the second `consistent/runtime_removed`.
 
-1. Controlled Let's Encrypt staging issuance and renewal, requiring an authorized
-   public test hostname and working challenge reachability.
-2. Authorized Cloudflare live lifecycle qualification, requiring scoped provider
-   credentials and explicitly authorized test resources.
+Managed nginx passed:
 
-Neither resource set was supplied during this run. Provided-certificate HTTPS
-and Cloudflare skipping do not satisfy those gates. Other-platform and alpha.13
-upgrade evidence must be assessed separately; this record makes no new claim
-about them. No final release artifacts were rebuilt or staged. Nothing was
-pushed, tagged, published, or uploaded to a release/distribution service, and no
-production deployment occurred. Candidate transfers and installation were limited
-to the authorized disposable VM.
+- no route merely because an application was installed;
+- explicit enablement and route removal;
+- strict hostname validation, duplicate rejection, and unknown-Host rejection;
+- backend isolation and no cross-installation routing;
+- stopped-backend 502 and recovery after start;
+- candidate validation, reload, route generation, and reboot persistence.
+
+For failure injection, an invalid generation 999 failed `nginx -t`. Temporarily
+pointing `current` at that candidate and signaling nginx left its master alive
+and the previous configuration serving. The symlink was restored, reload
+succeeded, HTTPS remained available, and the qualification-only invalid
+directory was removed. Restore later held ingress until valid target state and
+activated generation 8 only after explicit reconciliation.
+
+## Provided-certificate HTTPS
+
+The provided-certificate path created certificate
+`cert-5f878a9ae7b76851` for `memos.alpha14.test` and route
+`route-cde24d7e0f5a69e5`. Hostname validation, PEM validation, key matching,
+certificate/hostname matching, atomic activation, and HTTPS 200 passed.
+Malformed PEM, a mismatched key, an invalid hostname, and a hostname/certificate
+mismatch were rejected while the known-good certificate remained active.
+
+The full chain and private key are root-owned mode `0600`. APIs expose
+metadata only. The private key was absent from tested service logs and support
+bundles. After the final reboot, HTTPS still returned 200 and an unknown host
+was rejected.
+
+## ACME and Cloudflare local regression
+
+The ACME scheduler was active after reboot. Local API checks rejected an
+unapproved directory and invalid hostname. A controlled failed issuance for
+`acme.alpha14.test` recorded `issuance_failed` without a leaf certificate while
+the known-good provided certificate and HTTPS route remained active. Focused
+ACME tests passed directory allowlisting, scheduler and renewal transitions,
+failed issuance/renewal behavior, and known-good certificate retention. The
+Let's Encrypt directory allowlist was not weakened.
+
+Cloudflare remained disabled with no configured provider. Setup could skip it,
+local operation continued, and no credentials were invented or used. Focused
+tests passed write-only credential handling, enable/disable state transitions,
+failure behavior, API projection, and diagnostics redaction. The packaged
+Cloudflare service was active after reboot even though provider readiness was
+correctly `disabled/provider_disabled`.
+
+## Administrator recovery and diagnostics
+
+The packaged recovery command rejected non-root SSH execution. The established
+privileged guest path reset the administrator password, revoked two active
+sessions, invalidated the old browser/API sessions, rejected the old password,
+and accepted the new password. Session state was updated; neither password was
+present in service logs or any control/helper database value.
+
+The final post-reboot support bundle was
+`bundle-50904ba1f1c3e455.tar.gz`, SHA-256
+`6928700e0ddae6587550d214855a8965e1b03f5c014d3d423d4f8e789056cc3d`.
+It was mode `0600` and contained the expected safe policy, runtime, and
+readiness information. Scans excluded known application/helper secrets,
+passwords, Cloudflare tokens, authorization headers, cookies, CSRF material,
+and private-key markers. A temporary synthetic sensitive operation caused
+bundle generation to fail closed with HTTP 500 and no completed artifact; the
+fixture was removed.
+
+## Backup, offline restore, and reboot
+
+Backup `op-af4d2cf1fd7747f8384c6fec26c7c04a` produced a mode-`0600`
+control database and helper archive. The helper archive SHA-256 was
+`e86bd3ce3ba92379132bdae5cd611cbdd30abb0d488cc5c15f349bb831017b12`.
+Integrity and contents checks covered the control database, helper database,
+ingress metadata, provided-certificate files, ACME local state, Cloudflare local
+credential state as designed, and setup state. Metadata explicitly reports
+`remote_cloudflare_resources_included=false`.
+
+The offline restore stopped the relevant services, checkpointed SQLite WAL,
+verified the archive, restored both databases with correct ownership and mode
+`0600`, and retained restrictive secret-file permissions. A durable restore
+journal and rolled-back generation records were present. Ingress entered
+`restore_hold_active`, remained unavailable before backend reconciliation, and
+activated only after the restored application was consistent. The restored host
+then produced subsequent backup `op-02de410766751c934957d4f4c81e12ae`;
+its helper archive SHA-256 was
+`94274a0dda31c7a58450b21d45c2d9ad8d30ded5eac27c3fa23c5f8ccf4ed5fe`.
+
+A real Proxmox reboot produced boot ID
+`cf653531-1291-43d8-84df-5ebc0627bb9e`. The VM retained the same UUID, MAC,
+VLAN, address, package identity, databases, application state, setup state,
+certificate, route, Docker pool, and AppArmor policy. Zero failed units, no
+genuine ordering cycle, primary application readiness, generation 8 ingress,
+HTTPS, diagnostics generation, and secret scans all passed after reboot.
+
+Interrupted-restore behavior and journal recovery were rerun in focused
+automated regression. A second live process kill was not introduced after the
+successful offline restore because the deterministic test-hook coverage proves
+the interruption boundary without leaving the authoritative guest in ambiguous
+state. Helper and API restart, stopped backend, invalid certificate replacement,
+invalid nginx candidate, and nginx activation failure were all injected live.
+
+## Repository regression
+
+The following passed against the exact source checkout:
+
+- `go test ./...` (outside the restricted sandbox so loopback test servers could
+  bind);
+- `go vet ./...`;
+- `node --test cmd/kitpro-api/web_test.mjs`;
+- Debian, Arch, and RPM package static tests;
+- Debian incoming pre-install tests using the published alpha.12 binaries;
+- Debian and Arch fail-closed upgrade-gate tests;
+- fresh focused ACME, Cloudflare, diagnostics, host-backup, backup,
+  authentication, certificate, ingress, API, and helper tests;
+- `git diff --check`.
+
+The first sandboxed Go run and two package-test attempts could not create local
+listeners or their default `/var/tmp` Go cache. They passed unchanged when run
+with the required loopback permission and a writable qualification cache under
+`/tmp`; these were runner restrictions, not product failures.
+
+## Result and external blockers
+
+The following Debian-local gates are complete:
+
+- Debian 13 fresh installation;
+- ten-step first run;
+- AppArmor live enforcement;
+- application lifecycle;
+- managed ingress and cross-installation isolation;
+- provided-certificate HTTPS;
+- administrator recovery;
+- diagnostics and redaction;
+- backup and offline restore;
+- reboot and recovery.
+
+Two external-resource gates remain `BLOCKED_EXTERNAL_TEST_RESOURCES`:
+
+1. Live Let's Encrypt staging issuance and renewal need an explicitly
+   authorized public hostname with reachable TCP/80.
+2. Live Cloudflare lifecycle qualification needs explicitly authorized scoped
+   credentials and test resources.
+
+Those missing resources do not invalidate the successful fresh-Debian
+qualification. No final release artifact was frozen, and publication staging
+was not run. Nothing was pushed, tagged, published, uploaded, or deployed to a
+production system.
