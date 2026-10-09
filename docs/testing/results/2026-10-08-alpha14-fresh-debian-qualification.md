@@ -278,6 +278,26 @@ Two external-resource gates remain `BLOCKED_EXTERNAL_TEST_RESOURCES`:
 2. Live Cloudflare lifecycle qualification needs explicitly authorized scoped
    credentials and test resources.
 
+The post-qualification local resource discovery was repeated before stopping:
+
+- KITPro's ignored `.env` contains only the established Proxmox API and guest
+  privilege inputs. It does not provide an ACME hostname, contact email,
+  HTTP-01 routing declaration, or authorization to accept the staging
+  subscriber terms.
+- No local ACME client state or explicitly authorized non-production FQDN was
+  present, so public DNS, TCP/80, HTTP-01 issuance, and renewal could not be
+  exercised safely.
+- No valid scoped Cloudflare token file, insufficient-scope token file,
+  replacement token file, account/zone/test-host metadata, or disposable
+  tunnel authorization was present.
+- A separate homelab environment contains production home-tunnel credential
+  material and a repository example contains a placeholder token. Neither is
+  an authorized disposable alpha.14 test resource, and neither was read into
+  KITPro or used for an API call.
+
+No ACME account, order, challenge, certificate, DNS record, Cloudflare route,
+or tunnel was created, modified, or deleted during this discovery pass.
+
 Those missing resources do not invalidate the successful fresh-Debian
 qualification. No final release artifact was frozen, and publication staging
 was not run. Nothing was pushed, tagged, published, uploaded, or deployed to a
