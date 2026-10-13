@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	controlbackup "github.com/kitpro/kitpro/software/server/internal/backup"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 )
 
@@ -76,6 +77,14 @@ func TestCreateAndRestoreSensitiveHostStateFailClosed(t *testing.T) {
 	}
 	if err := Restore(context.Background(), RestoreOptions{Archive: result.Path, StateRoot: root}); err != nil {
 		t.Fatal(err)
+	}
+	if err := controlbackup.Verify(context.Background(), databasePath); err != nil {
+		t.Fatalf("restored helper database is not independently valid: %v", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(databasePath + suffix); !os.IsNotExist(err) {
+			t.Fatalf("restored helper database retained sidecar %s: %v", suffix, err)
+		}
 	}
 	if value, err := os.ReadFile(filepath.Join(root, "acme/account.key")); err != nil || string(value) != "acme-account-private-key" {
 		t.Fatalf("restored ACME key=%q err=%v", value, err)

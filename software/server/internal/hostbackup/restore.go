@@ -264,11 +264,13 @@ func markIngressForReactivation(ctx context.Context, databasePath string) error 
 	if err != nil {
 		return err
 	}
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	if _, err = db.ExecContext(ctx, `UPDATE ingress_generations SET status='rolled_back',failure_code='restore_requires_reactivation' WHERE status='active'`); err != nil {
+		_ = db.Close()
 		return err
 	}
-	return controlbackup.VerifyDatabase(ctx, db)
+	return sealStandaloneDatabase(ctx, db, databasePath)
 }
 
 func deactivateIngressRuntime(root string) error {

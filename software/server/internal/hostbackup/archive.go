@@ -177,6 +177,7 @@ func completeBackupOperationSnapshot(ctx context.Context, databasePath, operatio
 	if err != nil {
 		return err
 	}
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -206,6 +207,34 @@ func completeBackupOperationSnapshot(ctx context.Context, databasePath, operatio
 		return err
 	}
 	if err = tx.Commit(); err != nil {
+		_ = db.Close()
+		return err
+	}
+	return sealStandaloneDatabase(ctx, db, databasePath)
+}
+
+// sealStandaloneDatabase promotes a verified, sidecar-free snapshot after a
+// staged database has been modified. Verifying an open WAL database is not
+// sufficient when only its main file will be archived or atomically moved.
+func sealStandaloneDatabase(ctx context.Context, db *sql.DB, databasePath string) error {
+	directory, name := filepath.Dir(databasePath), filepath.Base(databasePath)+".sealed"
+	sealedPath, err := controlbackup.Vacuum(ctx, db, directory, name)
+	closeErr := db.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if removeErr := os.Remove(databasePath + suffix); removeErr != nil && !os.IsNotExist(removeErr) {
+			return removeErr
+		}
+	}
+	if err = os.Rename(sealedPath, databasePath); err != nil {
+		return err
+	}
+	if err = syncDirectory(directory); err != nil {
 		return err
 	}
 	return controlbackup.Verify(ctx, databasePath)
