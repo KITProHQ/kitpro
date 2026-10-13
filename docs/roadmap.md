@@ -1,12 +1,12 @@
 # KITPro Server roadmap
 
-This roadmap separates the published alpha.13 baseline, local alpha.14 work,
+This roadmap separates the published alpha.13 baseline, current alpha.14 work,
 and future direction. It does not set delivery dates or turn direction into a
 commitment.
 
 ## Current state
 
-The published baseline is `v0.1.0-alpha.13`. The local alpha.14 branch adds
+The published baseline is `v0.1.0-alpha.13`. The current alpha.14 branch adds
 secure ingress and recovery features but is not a release candidate until its
 live qualification gates pass. KITPro Server coordinates a trusted application
 lifecycle on Debian 13, Ubuntu 26.04 LTS, and Arch Linux. The API records
@@ -42,7 +42,7 @@ Alpha.13 includes these foundations:
 
 ## Alpha.14 development
 
-The local branch adds these capabilities on top of alpha.13:
+The current development branch adds these capabilities on top of alpha.13:
 
 - managed nginx ingress with transactional generations;
 - provided and ACME HTTP-01 certificates with renewal state;

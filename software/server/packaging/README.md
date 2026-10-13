@@ -36,7 +36,7 @@ repeat those checks against the downloaded files.
 Build the experimental Rocky packages on Rocky Linux 10 with:
 
 ```sh
-./packaging/build-rpm.sh 0.1.0~alpha11
+./packaging/build-rpm.sh 0.1.0~alpha14
 ```
 
 The build emits `kitpro-server`, `kitpro-selinux`, and source RPMs. The main
@@ -54,12 +54,12 @@ Native Arch Linux packaging lives under `packaging/arch/`. Build it as an
 unprivileged user with:
 
 ```sh
-./packaging/build-arch-package.sh 0.1.0_alpha11
+./packaging/build-arch-package.sh 0.1.0_alpha14
 ```
 
 The builder creates a deterministic source archive, substitutes its checksum
 into the build-only PKGBUILD, invokes `makepkg`, and writes the package,
-the alpha.11 bootstrap upgrade wrapper, their SHA-256 files, and build metadata
+the alpha.14 bootstrap upgrade wrapper, their SHA-256 files, and build metadata
 under `dist/`. Outside a Git checkout,
 `KITPRO_SOURCE_COMMIT` and `SOURCE_DATE_EPOCH` are mandatory so source-tar
 builds remain attributable and reproducible. See
@@ -70,14 +70,14 @@ builds remain attributable and reproducible. See
 Build the Debian 13 and Ubuntu Server 26.04 LTS amd64 package with:
 
 ```sh
-./packaging/build-package.sh 0.1.0~alpha11
+./packaging/build-package.sh 0.1.0~alpha14
 ```
 
-The output is `dist/kitpro-server_0.1.0~alpha11_amd64.deb` plus SHA-256 and
+The output is `dist/kitpro-server_0.1.0~alpha14_amd64.deb` plus SHA-256 and
 build-metadata files. `SOURCE_DATE_EPOCH` may override the default source-commit
 timestamp. The build is static (`CGO_ENABLED=0`) and uses `-trimpath`.
 Generate the CycloneDX SBOM separately with
-`./packaging/generate-sbom.sh 0.1.0~alpha11`; the generator version is pinned in
+`./packaging/generate-sbom.sh 0.1.0~alpha14`; the generator version is pinned in
 that script and the SBOM receives its own adjacent checksum.
 
 Docker Engine is a pre-existing runtime prerequisite rather than a Debian

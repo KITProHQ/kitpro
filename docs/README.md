@@ -58,7 +58,8 @@ operation and recovery.
 ## API and release reference
 
 - [API reference](api-reference.md)
-- [Prepared alpha.13 release notes](release/0.1.0-alpha.13-release-notes.md)
+- [Frozen alpha.13 release notes](release/0.1.0-alpha.13-release-notes.md)
+- [Published alpha.13 release](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13)
 - [Alpha.14 release notes draft](release/0.1.0-alpha.14-release-notes.md)
 - [Upgrade published alpha.13 to alpha.14](release/upgrade-alpha13-to-alpha14.md)
 - [Alpha.13 platform qualification](testing/results/2026-09-26-alpha13-platform-qualification.md)

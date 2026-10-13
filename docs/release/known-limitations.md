@@ -1,6 +1,6 @@
 # Known alpha.14 limitations
 
-Status date: 2026-09-26. These limits apply to the local alpha.14 development
+Status date: 2026-10-12. These limits apply to the alpha.14 development
 state. Alpha.14 is not a release candidate until its live platform and final
 artifact gates pass.
 

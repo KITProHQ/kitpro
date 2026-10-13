@@ -111,8 +111,10 @@ KITPro is licensed under the [Apache License 2.0](LICENSE).
 
 ## Release provenance
 
-The alpha.13 release candidate includes SHA-256 checksums, a CycloneDX JSON SBOM, build
-metadata, a release manifest, and a frozen source revision. These artifacts let
+The published alpha.13 prerelease includes SHA-256 checksums, a CycloneDX JSON
+SBOM, build metadata, a release manifest, and a frozen source revision. Download
+them from the [v0.1.0-alpha.13 release](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
+These artifacts let
 an owner verify downloaded bytes, inspect packaged components, trace the
 release to reviewed source, and distinguish the official frozen files from an
 unverified replacement. They do not claim that every build is reproducible or

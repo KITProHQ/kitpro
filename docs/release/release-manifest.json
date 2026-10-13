@@ -1,23 +1,142 @@
 {
-  "kitpro_version": "0.1.0-alpha.12",
-  "source_commit": "ada9555ab680613f8b56f6f0762abce6f0955670",
-  "source_tree": "196206df49ec0f21df509c011f9c06f6c56ab788",
-  "release_url": "https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.12",
-  "supported_platforms": ["debian-13-amd64", "arch-x86_64-linux-lts"],
-  "experimental_platforms": ["rocky-linux-10", "podman"],
-  "schema_version": 13,
-  "catalog_schema_version": 2,
+  "kitpro_version": "0.1.0-alpha.13",
+  "release_status": "published-prerelease",
+  "source_commit": "1909eb9b7f6ef8979d993e2d655103512172e700",
+  "source_tree": "dc30d7af03cdc0db4ce3599428a0997ffce20dbb",
+  "release_url": "https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13",
+  "supported_platforms": [
+    "debian-13-amd64",
+    "ubuntu-26.04-amd64",
+    "arch-x86_64-linux-lts"
+  ],
+  "experimental_platforms": [
+    "rocky-linux-10-amd64",
+    "podman-5-quadlet"
+  ],
+  "experimental_limitations": [
+    "rocky-podman-staged-application-lifecycle-unavailable"
+  ],
+  "schema_version": 14,
+  "catalog_schema_versions": [
+    7,
+    8
+  ],
+  "visible_application_count": 20,
   "artifacts": [
-    {"path": "kitpro-server_0.1.0.alpha12_amd64.deb", "package_family": "deb", "architecture": "amd64", "size": 8392468, "sha256": "29541da98fdba7fed0c4f7facec66d936c2da2487b8fedb562e289655fa8ac25"},
-    {"path": "kitpro-debian-upgrade", "package_family": "deb-transition-wrapper", "architecture": "amd64", "size": 12033, "sha256": "8ddffc0070aec9576a7704a7b3f588ea7d0939dbed1c787a3c19ebcfd5489bb0"},
-    {"path": "kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst", "package_family": "pacman", "architecture": "x86_64", "size": 6178199, "sha256": "2fe6b51c370c2e9399da9291c31ad2af6bb09934c1a872f502db0c8c615d12f6"},
-    {"path": "kitpro-server-0.1.0_alpha12-1-upgrade.sh", "package_family": "pacman-transition-wrapper", "architecture": "x86_64", "size": 12627, "sha256": "0eab8578715fcaed71b27739036961e0e20fa48c5571a87e3351048513963f67"}
+    {
+      "filename": "kitpro-server_0.1.0.alpha13_amd64.deb",
+      "platform": "debian-13-and-ubuntu-26.04",
+      "type": "deb",
+      "sha256": "7114e17cfce4e2b87745f52efd1d4584336ac27390fe9c4e87561afda346ba2b",
+      "size_bytes": 8517192
+    },
+    {
+      "filename": "kitpro-debian-upgrade",
+      "platform": "debian-13-and-ubuntu-26.04",
+      "type": "upgrade-wrapper",
+      "sha256": "015c700718d6371b478b339d9a6bd5390b066ead124105e2837d449b98211286",
+      "size_bytes": 13219
+    },
+    {
+      "filename": "kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst",
+      "platform": "arch-linux",
+      "type": "package",
+      "sha256": "1ecd0a4be77fa9db943c93637a6472b97fcded0c43a6238e13ae5ef97727feec",
+      "size_bytes": 6292803
+    },
+    {
+      "filename": "kitpro-server-0.1.0_alpha13-1-upgrade.sh",
+      "platform": "arch-linux",
+      "type": "upgrade-wrapper",
+      "sha256": "f7c1303f122f6b1f87faedbd6e10732ea49cb9294778272e4f3926a4929234b3",
+      "size_bytes": 14769
+    },
+    {
+      "filename": "kitpro-selinux-0.1.0.alpha13-1.el10.x86_64.rpm",
+      "platform": "rocky-linux-10-experimental",
+      "type": "selinux-rpm",
+      "sha256": "410ee156e581de1a7d90701cbc4ac07dbb9076db7ef2e35d1efada12b8eb84e8",
+      "size_bytes": 18808
+    },
+    {
+      "filename": "kitpro-server-0.1.0.alpha13-1.el10.x86_64.rpm",
+      "platform": "rocky-linux-10-experimental",
+      "type": "binary-rpm",
+      "sha256": "d6cd7df4a48e06b82f7afe0ac39035a717b3a3d4bdf90fbc985d3ec89a74215c",
+      "size_bytes": 8784335
+    },
+    {
+      "filename": "kitpro-server-0.1.0.alpha13-1.el10.src.rpm",
+      "platform": "rocky-linux-10-experimental",
+      "type": "source-rpm",
+      "sha256": "1d89604ac0470fab7662efbad2db49577ee8cb7db9e8c3798bb013996dd8644c",
+      "size_bytes": 1730122
+    }
   ],
-  "sbom": {"path": "kitpro-server_0.1.0.alpha12_amd64.cdx.json", "size": 13678, "sha256": "2f365f08afeb81c693ae7b4b0af59452b1220f08c432aa47a99a02a805bf6f27"},
+  "sbom": {
+    "filename": "kitpro-server_0.1.0.alpha13_amd64.cdx.json",
+    "format": "CycloneDX JSON",
+    "sha256": "7aec434d29e8a898fbdc76e5884b8bb5346ef7b2c0509546423c2b003f0da3b0",
+    "size_bytes": 13678
+  },
   "build_metadata": [
-    {"path": "kitpro-server_0.1.0.alpha12_amd64.deb.build.json", "size": 390, "sha256": "a7ffbe35e4ddc448077ae4da3ff3a3fc57811525b7caeac16ed0081f16b0842f"},
-    {"path": "kitpro-server-0.1.0_alpha12-1-x86_64.pkg.tar.zst.build.json", "size": 392, "sha256": "0ced35a74321fc9786775a64b644b56abc018f1773a3635bd604e5e4e8fd1856"}
+    {
+      "filename": "kitpro-server_0.1.0.alpha13_amd64.deb.build.json",
+      "platform": "debian-13-and-ubuntu-26.04",
+      "sha256": "438cd77576dd1adaf50572da7ca67af68c76d90a1c025e4832fa2abb23d9b005",
+      "size_bytes": 390
+    },
+    {
+      "filename": "kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst.build.json",
+      "platform": "arch-linux",
+      "sha256": "e44c056cf4bca2ff92ff4dd45352ee09647c964bf6c25502968608fd351f60bd",
+      "size_bytes": 392
+    }
   ],
-  "checksums": {"path": "kitpro-alpha12-SHA256SUMS", "size": 764},
-  "build_policy": {"go": "go1.27.x", "cgo": false, "flags": ["-trimpath", "-buildvcs=false", "-s", "-w"], "source_date_epoch": "source commit timestamp"}
+  "checksums": {
+    "filename": "kitpro-server-0.1.0-alpha.13-SHA256SUMS",
+    "sha256": "4143fea7c97cf2797a6d09c36ec78566ece312689f0edda44a653527e0292e94",
+    "size_bytes": 1098
+  },
+  "tag": "v0.1.0-alpha.13",
+  "prerelease": true,
+  "published": true,
+  "published_asset_count": 21,
+  "published_asset_filenames": [
+    "kitpro-debian-upgrade",
+    "kitpro-debian-upgrade.sha256",
+    "kitpro-selinux-0.1.0.alpha13-1.el10.x86_64.rpm",
+    "kitpro-selinux-0.1.0.alpha13-1.el10.x86_64.rpm.sha256",
+    "kitpro-server-0.1.0-alpha.13-SHA256SUMS",
+    "kitpro-server-0.1.0-alpha.13-release-manifest.json",
+    "kitpro-server-0.1.0-alpha.13-release-manifest.json.sha256",
+    "kitpro-server-0.1.0.alpha13-1.el10.src.rpm",
+    "kitpro-server-0.1.0.alpha13-1.el10.src.rpm.sha256",
+    "kitpro-server-0.1.0.alpha13-1.el10.x86_64.rpm",
+    "kitpro-server-0.1.0.alpha13-1.el10.x86_64.rpm.sha256",
+    "kitpro-server-0.1.0_alpha13-1-upgrade.sh",
+    "kitpro-server-0.1.0_alpha13-1-upgrade.sh.sha256",
+    "kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst",
+    "kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst.build.json",
+    "kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst.sha256",
+    "kitpro-server_0.1.0.alpha13_amd64.cdx.json",
+    "kitpro-server_0.1.0.alpha13_amd64.cdx.json.sha256",
+    "kitpro-server_0.1.0.alpha13_amd64.deb",
+    "kitpro-server_0.1.0.alpha13_amd64.deb.build.json",
+    "kitpro-server_0.1.0.alpha13_amd64.deb.sha256"
+  ],
+  "adjacent_checksum_files": [
+    "kitpro-debian-upgrade.sha256",
+    "kitpro-selinux-0.1.0.alpha13-1.el10.x86_64.rpm.sha256",
+    "kitpro-server-0.1.0-alpha.13-release-manifest.json.sha256",
+    "kitpro-server-0.1.0.alpha13-1.el10.src.rpm.sha256",
+    "kitpro-server-0.1.0.alpha13-1.el10.x86_64.rpm.sha256",
+    "kitpro-server-0.1.0_alpha13-1-upgrade.sh.sha256",
+    "kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst.sha256",
+    "kitpro-server_0.1.0.alpha13_amd64.cdx.json.sha256",
+    "kitpro-server_0.1.0.alpha13_amd64.deb.sha256"
+  ],
+  "qualified_artifact_bytes_unchanged": true,
+  "publication_filename_rule": "GitHub publication assets use dot-normalized filenames without ~; internal Debian and RPM package versions remain unchanged.",
+  "future_release_process": "Stage GitHub-safe public filenames and filename-dependent manifests before upload; do not rely on GitHub filename normalization."
 }

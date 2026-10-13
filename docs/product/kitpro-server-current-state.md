@@ -1,11 +1,12 @@
 # KITPro Server current state
 
-Status date: 2026-09-26
+Status date: 2026-10-12
 
 This document defines the public capability boundary for KITPro Server
-`v0.1.0-alpha.13`. Alpha.13 is a release candidate until a human authorizes
-the tag and publication. Shorter pages should link here instead of creating a
-second definition of what the release can do.
+[`v0.1.0-alpha.13`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13),
+a published prerelease. Shorter pages should link here instead of creating a
+second definition of what the release can do. Alpha.14 development is not part
+of this shipped boundary.
 
 ## What alpha.13 is
 
@@ -56,7 +57,7 @@ Destructive application-data deletion is not a completed lifecycle.
 ### Runtime and reconciliation
 
 KITPro records desired state, observed runtime state, and reconciliation state
-separately. Alpha.12 can report whether a runtime is running, stopped, missing,
+separately. Alpha.13 can report whether a runtime is running, stopped, missing,
 removed, or unavailable. It can also report whether recorded ownership and
 runtime evidence are consistent, repairable, unknown, or action-required.
 

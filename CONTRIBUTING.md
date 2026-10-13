@@ -11,6 +11,11 @@ Changes must preserve the unprivileged API, constrained root helper,
 AppArmor/systemd hardening, installation-scoped storage, and fail-closed
 reconciliation boundaries.
 
+Release artifacts must pass the
+[GitHub-safe publication staging workflow](software/server/packaging/README.md#github-safe-publication-staging)
+before upload. Do not upload raw build output or rely on GitHub to normalize
+asset filenames.
+
 The project uses AI-assisted development tools for research, drafting, review,
 and implementation support. Maintainers remain responsible for technical
 direction, source review, testing, and release decisions. Contributions are

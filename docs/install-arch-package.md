@@ -30,12 +30,14 @@ supported.
 
 ## Install
 
-These commands are for a fresh alpha.13 installation.
+These commands are for a fresh alpha.13 installation. Download the package and
+checksum manifest from the published
+[`v0.1.0-alpha.13` prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
 
 Builds use `makepkg` as a non-root account. Install the resulting package with:
 
 ```sh
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo pacman -U ./kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst
 ```
 
@@ -52,7 +54,7 @@ The API listens on `127.0.0.1:8080` by default. Use an SSH tunnel and open
 Verify the alpha.13 package and its package-bound upgrade wrapper, then run:
 
 ```sh
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo ./kitpro-server-0.1.0_alpha13-1-upgrade.sh \
   ./kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst
 ```

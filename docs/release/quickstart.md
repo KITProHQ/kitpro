@@ -5,9 +5,8 @@ incomplete workflows may occur. Review the [current state](../product/kitpro-ser
 and [known limitations](known-limitations.md) before using it with important
 data.
 
-After publication, download the package and matching checksum file from the
-`v0.1.0-alpha.13` GitHub release. Until then, alpha.13 artifacts are release
-candidates and must not be presented as published downloads.
+Download the package and matching checksum file from the published
+[`v0.1.0-alpha.13` GitHub prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
 
 If this host runs alpha.12, use the documented alpha.13 upgrade path for
 [Debian or Ubuntu](../upgrade-uninstall-debian-package.md#upgrade-from-alpha12-to-alpha13)
@@ -19,7 +18,7 @@ Requirements: amd64, rootful Docker, systemd, enforcing AppArmor, and a Docker
 address pool that passes the [Supported-host prerequisite](../docker-address-pool-prerequisite.md).
 
 ```sh
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 sudo systemctl status kitpro-api kitpro-helper
 ```
@@ -36,7 +35,7 @@ review because Docker-published ports do not rely only on the normal UFW
 INPUT and OUTPUT paths.
 
 ```sh
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 sudo systemctl status kitpro-api kitpro-helper
 ```
@@ -49,7 +48,7 @@ Docker address pool. Partial upgrades are unsupported.
 
 ```sh
 sudo pacman -Syu
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo pacman -U ./kitpro-server-0.1.0_alpha13-1-x86_64.pkg.tar.zst
 sudo systemctl status kitpro-api kitpro-helper
 ```

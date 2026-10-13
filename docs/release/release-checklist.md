@@ -14,4 +14,6 @@
 - [x] Install the final artifacts on the qualification hosts and rerun affected source-identity and recovery checks.
 - [x] Complete the final release manifest and checksum manifest outside the frozen source tree.
 - [x] Confirm a clean branch with no stale version strings or secret material.
-- [ ] Obtain human authorization before push, tag, GitHub release creation, or artifact publication.
+- [x] Obtain human authorization before push, tag, GitHub release creation, or
+  artifact publication. The authorized prerelease is published at
+  [`v0.1.0-alpha.13`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).

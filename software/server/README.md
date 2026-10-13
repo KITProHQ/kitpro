@@ -4,6 +4,10 @@ KITPro Server is a Go control plane and narrowly privileged helper for trusted s
 
 ## Supported production boundary
 
+The current published prerelease is
+[`v0.1.0-alpha.13`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
+The current development line is `v0.1.0-alpha.14`; it is not published.
+
 - Debian 13 amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Ubuntu 26.04 LTS amd64: `.deb`, rootful Docker, enforcing AppArmor.
 - Arch Linux x86_64: native package, `linux-lts`, fully updated official repositories, rootful Docker, enforcing AppArmor.
@@ -36,17 +40,19 @@ gofmt -l .
 ./packaging/tests/arch_package_static_test.sh
 ```
 
-Build packages with the version documented in the release manifest:
+Build current alpha.14 development packages with:
 
 ```sh
-./packaging/build-package.sh 0.1.0~alpha13
-./packaging/build-arch-package.sh 0.1.0_alpha13
+./packaging/build-package.sh 0.1.0~alpha14
+./packaging/build-arch-package.sh 0.1.0_alpha14
 ```
 
-Do not infer publication from a source version. Alpha.13 packages become
-official only after the release tag and GitHub release are published. Until
-then, use the [latest published prerelease](https://github.com/KITProHQ/kitpro/releases/latest)
-for public artifacts.
+Do not infer publication from a source version. Alpha.14 build output remains
+development material until a release tag and GitHub release are published. Use
+the [published alpha.13 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13)
+for public artifacts. Future release assets must pass the
+[GitHub-safe publication staging workflow](packaging/README.md#github-safe-publication-staging)
+before upload.
 
 ## Contributor references
 

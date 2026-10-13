@@ -1,9 +1,9 @@
 # Install KITPro Server on Debian 13 or Ubuntu 26.04 LTS
 
 KITPro Server alpha.13 supports Debian 13 and Ubuntu Server 26.04 LTS on amd64
-with the same qualified `.deb`. Rocky Linux 10 remains Experimental. After
-publication, use the filename and checksum from the
-[alpha.13 release](https://github.com/KITProHQ/kitpro/releases).
+with the same qualified `.deb`. Rocky Linux 10 remains Experimental. Use the
+filename and checksum from the published
+[alpha.13 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
 
 > KITPro Server is active alpha software. Breaking changes and incomplete
 > workflows may occur. Review the [alpha.13 current state](product/kitpro-server-current-state.md)
@@ -34,7 +34,7 @@ alpha.12, use the [alpha.12 to alpha.13 transition](upgrade-uninstall-debian-pac
 Verify the adjacent checksum, then install the local artifact:
 
 ```sh
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 ```
 

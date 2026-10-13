@@ -11,7 +11,7 @@ Use `apt install` so the package manager resolves the local artifact and runs
 the incoming maintainer scripts:
 
 ```sh
-sha256sum -c kitpro-alpha13-SHA256SUMS --ignore-missing
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
 sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
 ```
 

@@ -2,9 +2,9 @@
 
 ## Decision
 
-**ALPHA.13 RELEASE CANDIDATE QUALIFIED** for the Supported environments below,
-subject to the limitations in this document. Tagging and publication still
-require explicit human authorization.
+**ALPHA.13 PUBLISHED PRERELEASE** for the Supported environments below, subject
+to the limitations in this document. The qualified release is published as
+[`v0.1.0-alpha.13`](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
 
 ## Objective criteria
 
