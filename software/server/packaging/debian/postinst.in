@@ -174,6 +174,24 @@ case ${1:-} in
         ;;
 esac
 
+# Cloudflare Tunnel was present only in unpublished alpha.14 candidates. A
+# same-version qualification upgrade can therefore retain dpkg/systemd/AppArmor
+# state even though the scope-corrected package no longer ships the runtime.
+# Retire that executable state without deleting inert provider data that an
+# older qualification database or archive may still reference.
+deb-systemd-invoke stop kitpro-cloudflare.service >/dev/null 2>&1 || true
+deb-systemd-helper disable kitpro-cloudflare.service >/dev/null 2>&1 || true
+deb-systemd-helper purge kitpro-cloudflare.service >/dev/null 2>&1 || true
+apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-cloudflare >/dev/null 2>&1 || true
+rm -f -- /etc/apparmor.d/usr.libexec.kitpro-cloudflare
+if getent passwd kitpro-cloudflared >/dev/null; then
+    deluser --system kitpro-cloudflared >/dev/null
+fi
+if getent group kitpro-cloudflared >/dev/null; then
+    delgroup --system kitpro-cloudflared >/dev/null
+fi
+systemctl daemon-reload
+
 if ! getent group kitpro-api >/dev/null; then
     addgroup --system kitpro-api >/dev/null
 fi
