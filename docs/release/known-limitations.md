@@ -27,12 +27,14 @@ artifact gates pass.
   register a domain, or provide a general reverse proxy.
 - Managed ACME uses HTTP-01 with allowlisted Let's Encrypt directories. DNS-01,
   wildcard certificates, arbitrary ACME directories, and other public CAs are
-  not supported.
-- Cloudflare Tunnel requires an existing account, zone, tunnel, and scoped API
-  token. KITPro does not create a Cloudflare account or zone. Local backups do
-  not copy remote Cloudflare resources.
-- Certificate private keys, ACME account material, and Cloudflare credentials
-  use root-owned restrictive local storage. They are not encrypted at rest.
+  not supported. The public hostname must resolve correctly and inbound TCP/80
+  must reach KITPro managed ingress. KITPro does not configure routers or
+  firewalls and cannot bypass an ISP port block.
+- Cloudflare Tunnel is not an alpha.14 capability. Environments without public
+  TCP/80 must use an administrator-provided certificate or another external
+  certificate strategy.
+- Certificate private keys and ACME account material use root-owned
+  restrictive local storage. They are not encrypted at rest.
 
 ## Hardware acceleration
 
@@ -64,8 +66,8 @@ artifact gates pass.
   backup.
 - Imported external data is reference-only. KITPro records the trusted binding but does not copy NAS, media, music, audiobook, or SFTPGo external file content.
 - Backup destinations are local and archives are not encrypted by KITPro.
-  Host-state archives contain certificate private keys, ACME account material,
-  and Cloudflare credentials. Scheduling, retention, object storage, bare-host
+  Host-state archives contain certificate private keys and ACME account
+  material. Scheduling, retention, object storage, bare-host
   recovery, and general host-to-host restore are not implemented.
 - Generated application secrets are stored as root-bound plaintext in the
   helper database and in restrictive local application backups. KITPro does
@@ -101,7 +103,7 @@ artifact gates pass.
 - The archived original File Browser is not supported. SFTPGo is the maintained, first-run-authenticated read-write catalog choice.
 - LocalAI is excluded because its official image can fetch an unsigned mutable backend during model installation; pinning only the outer image does not provide end-to-end provenance.
 - Clustering, high availability, and automatic failover are not implemented.
-- Certificate, Cloudflare, host-backup, and advanced ingress recovery remain
+- Certificate, host-backup, and advanced ingress recovery remain
   authenticated API or command-line workflows. The first-run page reports
   their state but does not expose every mutation.
 - Destructive application-data deletion is not a completed lifecycle.

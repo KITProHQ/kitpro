@@ -49,8 +49,8 @@ the [application catalog](docs/application-catalog.md).
 
 KITPro Server is active alpha software. Breaking changes and incomplete
 workflows may occur. The alpha.14 development branch adds opt-in managed nginx
-ingress, application-aware readiness, ACME HTTP-01 certificates, and
-Cloudflare Tunnel. Alpha.14 does not provide imported-storage backup, general
+ingress, application-aware readiness, provided certificates, and ACME HTTP-01
+where public TCP/80 reaches the host. Alpha.14 does not provide imported-storage backup, general
 host-to-host restore, automatic rollback of irreversible upstream schema
 changes, destructive application-data deletion, clustering, automatic
 failover, router or firewall automation, domain registration, or a

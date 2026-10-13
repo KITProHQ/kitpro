@@ -4,9 +4,11 @@ Date: 2026-09-26
 
 Status: `ALPHA14_BLOCKED_PLATFORM_QUALIFICATION`
 
-Update (2026-10-08): [fresh Debian qualification passed](2026-10-08-alpha14-fresh-debian-qualification.md)
-after two local fixes. ACME staging and Cloudflare live gates remain open. The
-observations below are historical and retain their original scope.
+Update (2026-10-12): [fresh Debian qualification passed](2026-10-08-alpha14-fresh-debian-qualification.md)
+after two local fixes. Cloudflare Tunnel has since been intentionally removed
+from alpha.14 scope. Direct ACME staging still needs a separate disposable host
+with public TCP/80 if that live gate remains mandatory. The observations below
+are historical and retain their original scope.
 
 This record covers the local alpha.14 continuation after commit `c6f904c`. It
 does not qualify a release candidate and does not replace the historical

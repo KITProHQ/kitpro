@@ -18,14 +18,12 @@ does not edit `/etc/docker/daemon.json` or restart Docker.
 2. Sign in. KITPro sends an incomplete installation to `/first-run`.
 3. Resolve each **Attention** result. The page rechecks the helper, container
    runtime, trusted storage, LAN address, Docker address pool, certificates,
-   Cloudflare provider, and installed applications against current state.
+   and installed applications against current state.
 4. Select **Local only** or **LAN**. KITPro records the selection only when the
    active service listener matches it. Change the service listener and restart
    the control service when the page reports a mismatch.
 5. Configure HTTPS, or defer it. Deferring HTTPS does not enable HTTP ingress.
-6. Configure Cloudflare Tunnel, or defer it. Cloudflare remains optional and
-   independent from local access.
-7. Install the first application through the normal catalog lifecycle.
+6. Install the first application through the normal catalog lifecycle.
 
 Critical steps cannot be marked complete by a browser request. The page derives
 their state from the host, helper, runtime, storage, and application records.
@@ -36,7 +34,7 @@ registration.
 
 `GET /api/v1/system/readiness` reports separate dimensions for the helper,
 runtime, Docker address pool, storage, disk capacity, LAN address, detectable
-firewall state, ingress, HTTPS, and Cloudflare. A disabled optional service is
+firewall state, ingress, and HTTPS. A disabled optional service is
 not the same state as a failed service.
 
 For Docker remediation, follow the

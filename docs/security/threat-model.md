@@ -598,9 +598,9 @@ cannot traverse it. KITPro does not claim encryption at rest. Host root and an
 attacker who compromises the privileged helper remain able to read these
 values.
 
-Alpha.14 also stores certificate private keys, ACME account material, and
-Cloudflare credentials in root-owned restrictive files. Host-state backups
-include those values and therefore share their confidentiality boundary.
+Alpha.14 also stores certificate private keys and ACME account material in
+root-owned restrictive files. Host-state backups include those values and
+therefore share their confidentiality boundary.
 Ordinary projections and support bundles exclude them. KITPro does not claim
 encryption at rest for this material.
 
@@ -760,24 +760,6 @@ activate only after certificate validation and nginx candidate validation. A
 failed renewal records `renewal-failed` and leaves the current certificate in
 place.
 
-### Cloudflare Tunnel
-
-Token leakage, excessive permissions, route ownership confusion, unintended
-remote deletion, and provider outage are the main provider threats.
-
-The provider accepts a scoped API token and validates its access to the exact
-account, zone, and tunnel. The token is write-only, root-owned, mode `0600`,
-and absent from projections, logs, audits, errors, and diagnostics. A dedicated
-runtime receives the tunnel token through a protected file descriptor rather
-than its process arguments.
-
-Remote requests use fixed Cloudflare origins and typed resource identifiers.
-Route creation rejects a conflicting DNS owner. Token replacement cannot
-change the account, zone, or tunnel identity. Disablement and local unlink do
-not delete remote resources. Remote route or tunnel deletion requires an
-explicit remote confirmation. Provider failure affects provider readiness only
-and does not remove local ingress.
-
 ### First-run setup
 
 First-visitor takeover, a lingering unauthenticated bootstrap route, and forged
@@ -785,7 +767,7 @@ or replayed completion are the main setup threats.
 
 The one-time setup route closes after a local administrator exists. The guided
 flow requires that authenticated administrator. Critical steps derive their
-state from live helper, runtime, storage, network, certificate, provider, and
+state from live helper, runtime, storage, network, certificate, and
 application state. A client can record only the access-mode choice or defer an
 optional step. Durable setup state survives refresh, service restart, and
 reboot without reopening bootstrap registration.
@@ -809,10 +791,9 @@ redaction scan. Bundle generation fails when the scan finds a private-key
 marker or a supplied synthetic secret.
 
 A host backup has a different confidentiality boundary. It deliberately
-contains certificate private keys, ACME account material, and Cloudflare
-credentials so local security state can be restored. The archive is root-owned
-and mode `0600`, but KITPro does not encrypt it. The manifest identifies those
-secret classes and states that remote Cloudflare resources are not included.
+contains certificate private keys and ACME account material so local security
+state can be restored. The archive is root-owned and mode `0600`, but KITPro
+does not encrypt it. The manifest identifies those secret classes.
 
 ## 21. Questions remaining
 

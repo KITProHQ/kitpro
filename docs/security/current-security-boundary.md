@@ -36,8 +36,7 @@ KITPro Server is an authenticated local control plane, not a general Docker fron
   change. A failed replacement retains the last known-good certificate.
   Private keys remain root-owned, mode `0600`, and excluded from normal
   projections and diagnostics.
-- Cloudflare Tunnel is optional. Its credential is write-only and root-owned.
-  Local disablement or unlink does not delete remote resources, and a provider
-  outage does not disable local ingress.
+- Alpha.14 has no tunnel-provider credential or runtime boundary. Optional
+  exposure providers are deferred future work.
 
 These controls reduce the damage available to a compromised API or application, but they do not make containers, Docker, the Linux kernel, or upstream application code invulnerable. A host administrator with root or Docker-group access remains root-equivalent. See the full [threat model](threat-model.md), [security invariants](invariants.md), and [known limitations](../release/known-limitations.md).

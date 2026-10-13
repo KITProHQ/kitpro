@@ -46,7 +46,6 @@ The current development branch adds these capabilities on top of alpha.13:
 
 - managed nginx ingress with transactional generations;
 - provided and ACME HTTP-01 certificates with renewal state;
-- optional Cloudflare Tunnel with write-only credentials;
 - application readiness checks for catalog releases that define them;
 - durable first-run and typed system readiness state;
 - host-state backup and fail-closed ingress restore ordering;
@@ -90,6 +89,7 @@ These items are direction, not shipped capability:
 - broader hardware and application coverage;
 - public TLS and domain integration;
 - additional supported operating systems and container runtimes;
+- optional exposure providers such as tunnels and DNS-01 integrations;
 - optional remote operations that do not make local use depend on a KITPro
   cloud service; and
 - KITPro-owned deterministic IPAM and subnet allocation, if a future design

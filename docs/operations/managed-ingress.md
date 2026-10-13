@@ -13,8 +13,6 @@ an eligible HTTP service.
   and certificate.
 - Use managed ACME when the hostname and HTTP-01 prerequisites are under your
   control.
-- Use Cloudflare Tunnel for optional remote access. Cloudflare is not required
-  for LAN ingress.
 
 KITPro accepts only catalog-authorized HTTP or HTTPS services. It rejects an
 invalid hostname, a duplicate hostname, a wildcard hostname, a non-loopback
@@ -48,35 +46,14 @@ The renewal scheduler checks certificates every 12 hours. Certificate state is
 last renewal, next renewal, and a bounded error code. A failed or invalid
 replacement leaves the last known-good certificate active.
 
-Public CA access is an operational dependency for issuance and renewal. Use
-the staging directory to validate DNS and HTTP-01 routing before production
-issuance.
+Public CA access and public inbound TCP/80 are operational dependencies for
+issuance and renewal. KITPro does not modify a router or firewall and cannot
+bypass an ISP block. A failed HTTP-01 attempt reports a bounded error and tells
+the administrator to verify public DNS and TCP/80 reachability. Use the staging
+directory to validate that path before production issuance.
 
-## Configure Cloudflare Tunnel
-
-Create a Cloudflare API token with only the account tunnel read and edit
-permissions and the zone DNS read and edit permissions required for the chosen
-account, zone, and tunnel. Submit the account ID, zone ID, tunnel ID, and token
-to the authenticated provider endpoint.
-
-KITPro validates the token and its access to those exact resources. It stores
-the token in root-owned mode-`0600` state. The token is write-only after
-submission. Replacing the token cannot change the associated account, zone, or
-tunnel identity.
-
-Enable the provider to start `cloudflared`. Add a Cloudflare ingress route by
-creating a managed route with `cloudflare-tunnel` exposure. Provider or API
-failure changes Cloudflare health but does not remove local ingress.
-
-The lifecycle operations have different effects:
-
-- Disable stops local tunnel use and retains the provider record.
-- Unlink removes local integration state without deleting remote resources.
-- Remove a remote hostname route requires an explicit remote confirmation.
-- Delete the remote tunnel requires an explicit remote confirmation.
-
-Package removal does not delete Cloudflare resources. Inspect the Cloudflare
-account after an interrupted remote operation before retrying it.
+When public TCP/80 is unavailable, import a certificate obtained through an
+external client, DNS-01 workflow, or upstream reverse proxy instead.
 
 ## Recover a failed generation
 

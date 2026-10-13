@@ -2,8 +2,8 @@
 
 KITPro Server is a public alpha. The published alpha.13 prerelease is the
 upgrade baseline for the current alpha.14 development branch. Alpha.14 adds opt-in
-managed nginx ingress, provided and ACME certificates, optional Cloudflare
-Tunnel, durable first-run state, typed system readiness, host-state backup and
+managed nginx ingress, provided and ACME certificates, durable first-run
+state, typed system readiness, host-state backup and
 restore semantics, administrator recovery, and redacted support bundles.
 
 Debian 13, Ubuntu 26.04 LTS, and Arch Linux are Supported. Rocky Linux 10 and

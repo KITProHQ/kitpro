@@ -1,6 +1,6 @@
 # Alpha.14 secure access architecture
 
-- Status: Frozen for implementation
+- Status: Updated for the alpha.14 scope correction
 - Release: `0.1.0-alpha.14`
 - Source baseline: `v0.1.0-alpha.13` plus `b693722ef93bdebb90fcbb440fdddf9d30fba648`
 - Frozen: 2026-09-26
@@ -8,6 +8,11 @@
 This document is the implementation contract for alpha.14. It extends the
 existing catalog, service-binding, generation, helper-operation, backup, and
 authentication models. It does not create a second application lifecycle.
+
+Cloudflare Tunnel was evaluated during development but is outside the
+alpha.14 product boundary. Tunnel and DNS-01 providers remain possible future
+work. The generic nginx Host-isolation and ACME challenge-routing fixes found
+during that evaluation remain part of this architecture.
 
 ## User-facing operations
 
@@ -17,15 +22,14 @@ The browser and CLI work with KITPro concepts:
 create route(installation, service, hostname, exposure, tls policy)
 enable route(route id)
 disable route(route id)
-inspect readiness(host, installation, route, certificate, provider)
-configure provider(provider type, non-secret metadata, write-only credential)
+inspect readiness(host, installation, route, certificate)
 resume setup(step input)
 generate support bundle()
 reset administrator password locally(new password)
 ```
 
 Callers never submit proxy directives, filesystem paths, commands, systemd
-unit names, ACME commands, or Cloudflare API URLs.
+unit names, or ACME commands.
 
 ## Existing boundaries retained
 
@@ -39,8 +43,7 @@ unit names, ACME commands, or Cloudflare API URLs.
   not create a route.
 - Docker remains supported on Debian, Ubuntu, and Arch. Rocky remains an
   experimental Podman and Quadlet adapter.
-- Existing alpha.13 installations migrate with ingress, TLS, and Cloudflare
-  disabled.
+- Existing alpha.13 installations migrate with ingress and TLS disabled.
 
 ## Domain model
 
@@ -75,11 +78,10 @@ IngressRoute
   installation id
   service id
   normalized hostname
-  exposure mode: lan | managed-https | cloudflare-tunnel
+  exposure mode: lan | managed-https
   upstream protocol: http | https
-  tls policy: none | provided | acme | cloudflare
+  tls policy: none | provided | acme
   certificate id, when applicable
-  provider id, when applicable
   desired state: disabled | enabled
   applied ingress generation
   created and updated times
@@ -125,19 +127,6 @@ The control database stores metadata only. The helper stores PEM material by
 certificate ID under its protected ingress state. Ordinary APIs never return
 PEM bytes or filesystem paths.
 
-### Exposure provider
-
-```text
-ExposureProvider =
-  DirectLAN
-  PublicACME
-  CloudflareTunnel(provider id, account id, tunnel id, state)
-```
-
-Cloudflare credentials are write-only helper state. A provider record stores a
-credential fingerprint and replacement time, never the token. Local routes do
-not depend on provider health.
-
 ### Readiness
 
 Readiness is a set of independent observations, not one boolean:
@@ -148,7 +137,6 @@ RuntimeReadiness
 ApplicationReadiness
 IngressReadiness
 TLSReadiness
-ProviderReadiness
 ```
 
 Each observation includes `state`, `checked_at`, a stable reason code, and a
@@ -161,7 +149,7 @@ Setup is a durable state machine:
 
 ```text
 host-readiness -> administrator -> storage -> network -> access ->
-optional-tls -> optional-cloudflare -> optional-first-application -> complete
+optional-tls -> optional-first-application -> complete
 ```
 
 Each step records `pending`, `in-progress`, `complete`, `attention`, or
@@ -203,10 +191,9 @@ access control restrict both processes.
   generation's protected binding record.
 
 LAN routes may use HTTP or a provided certificate. Managed HTTPS uses ACME or
-a provided certificate and redirects port 80 to 443. Cloudflare routes accept
-traffic only on a loopback origin listener with a per-route unguessable origin
-token supplied to cloudflared outside HTTP headers visible to clients. Public
-DNS and port prerequisites are checked and reported before ACME issuance.
+a provided certificate and redirects port 80 to 443. Public DNS and inbound
+TCP/80 are required for HTTP-01. KITPro reports failures without changing
+router or firewall configuration.
 
 ## Transactional ingress activation
 
@@ -257,26 +244,6 @@ operator-selected files before entering the helper boundary, validates that
 the key matches the leaf and the hostname matches the certificate, and sends a
 bounded typed import request. The browser API cannot read or export keys.
 
-## Cloudflare boundary
-
-Cloudflare Tunnel is optional. KITPro uses `cloudflared` as a separately
-confined service with one fixed generated configuration. The helper accepts
-only account, zone, tunnel, hostname, and write-only scoped token values that
-pass strict syntax and length checks.
-
-Remote calls use hardcoded Cloudflare API origins and typed endpoint builders.
-The token may create, inspect, and remove DNS routes only for the configured
-zone and tunnel. KITPro rejects account-global credentials in documentation
-and reports insufficient scope without echoing provider responses that might
-contain secrets. Local unlink and remote deletion are separate commands.
-Application uninstall disables the local route and never deletes the remote
-tunnel or DNS record.
-
-Cloudflare failure changes provider readiness only. LAN and direct managed
-HTTPS routes remain active. Token replacement writes a new root-owned file,
-restarts only the allowlisted tunnel service, verifies connection, and removes
-the old file after success.
-
 ## Administrator recovery
 
 `sudo kitpro-server admin reset-password` is a local command. It requires real
@@ -292,12 +259,12 @@ The API creates a diagnostics request. The helper gathers an allowlisted data
 model and writes a mode-0600 archive. It never archives a directory wholesale.
 Collectors return typed values for build identity, OS, runtime, address pool,
 disk, installations, bindings, readiness, routes, certificate metadata,
-provider metadata, operation outcomes, mandatory-access-control status, and a
+operation outcomes, mandatory-access-control status, and a
 bounded log window.
 
 Redaction happens before serialization. It removes authorization and cookie
 headers, known secret values, token-like environment fields, PEM private-key
-blocks, session hashes, application secret values, and Cloudflare credentials.
+blocks, session hashes, and application secret values.
 The archive is scanned again for registered synthetic test secrets and private
 key markers before it is committed. A match deletes the candidate and fails
 the operation.
@@ -310,11 +277,7 @@ separate host-access state payload to the paired KITPro control/helper backup:
 - route desired state and hostname;
 - ingress generation metadata and generated configuration;
 - certificate metadata and root-owned certificate/key files;
-- Cloudflare non-secret metadata and the local credential file;
 - setup state and readiness history needed for recovery.
-
-The backup manifest states that Cloudflare remote resources are not included.
-Restored provider credentials may be reactivated only after a live validation.
 
 Application restore keeps its current storage transaction, then verifies the
 application before enabling a restored route:
@@ -322,13 +285,12 @@ application before enabling a restored route:
 ```text
 restore core installation state -> restore storage -> restore runtime ->
 verify runtime and application -> restore route desired state ->
-validate certificate/provider -> activate ingress -> verify route
+validate certificate -> activate ingress -> verify route
 ```
 
 Failure before route verification leaves the route disabled. Runtime removal
 disables ingress and preserves local certificate material. Uninstall-preserve
-does not delete remote provider resources. Permanent remote deletion remains a
-separate explicit operation.
+preserves certificate state.
 
 ## Privileged helper authority
 
@@ -337,28 +299,25 @@ New helper operations are limited to:
 - prepare, validate, activate, verify, roll back, and inspect one complete
   ingress generation;
 - import, issue, renew, inspect, and revoke one modeled certificate;
-- configure, start, stop, restart, inspect, replace credentials for, or unlink
-  the fixed cloudflared service;
 - gather the fixed diagnostics schema.
 
 The helper gains no arbitrary write, command, path, URL, proxy directive,
-systemd unit, or service name. nginx and cloudflared subprocess arguments are
-constant except for helper-created paths beneath fixed roots. Every mutation
+systemd unit, or service name. nginx subprocess arguments are constant except
+for helper-created paths beneath fixed roots. Every mutation
 uses the existing operation coordinator, canonical request hash, durable
 event log, and recovery disposition.
 
 ## Failure and reboot behavior
 
 - The last active ingress generation and certificate remain on disk.
-- systemd starts the dedicated proxy after local filesystems and before
-  cloudflared. It starts the API independently of provider availability.
+- systemd starts the dedicated proxy after local filesystems. It starts the API
+  independently of ACME availability.
 - On startup, the helper verifies the active generation hash, proxy process,
-  route backends, certificate metadata, and tunnel state.
+  route backends, and certificate metadata.
 - Interrupted candidate work resumes from durable phase evidence. Unknown
   activation outcome requires reconciliation before another mutation.
 - An unavailable application produces `application=not-ready` and
   `ingress=backend-unavailable`; it does not retarget the hostname.
-- A failed provider never disables local ingress.
 
 ## Alternatives rejected
 
@@ -370,23 +329,19 @@ applications to share a lifecycle lease.
 Deriving routes from open HTTP ports was rejected. It would expose existing
 alpha.13 applications during migration and would erase administrator intent.
 
-Letting nginx or cloudflared configuration be user editable was rejected.
+Letting nginx configuration be user editable was rejected.
 KITPro could no longer validate routing isolation, restore known-good state, or
 describe effective authority.
-
-Running Cloudflare API calls from the unprivileged API was rejected because
-the API would need to read the provider token. The root helper instead exposes
-typed provider actions and never returns the token.
 
 ## Release-blocking proofs
 
 Alpha.14 cannot become a local release candidate until tests prove:
 
-- alpha.13 migration creates no route, certificate, or provider state;
+- alpha.13 migration creates no route or certificate state;
 - hostname collision and cross-installation backend substitution fail;
 - a bad candidate and failed reload preserve the known-good route set;
 - invalid and mismatched certificates never activate;
-- token, key, password, cookie, authorization, and application secrets do not
+- key, password, cookie, authorization, and application secrets do not
   appear in API responses, logs, operation details, or support bundles;
 - password reset rejects the old password and every prior session;
 - restore never exposes an unverified application;

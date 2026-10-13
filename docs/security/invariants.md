@@ -58,9 +58,9 @@ These rules apply to every implementation and supported application. A change th
 48. Certificate private keys, ACME account material, and provider credentials
     remain root-owned and absent from ordinary API, UI, log, audit, and support
     bundle output. KITPro does not claim encryption at rest.
-49. Cloudflare is optional. Provider failure cannot disable local ingress.
-    Local disablement, unlink, or package removal cannot delete remote resources
-    without a separate explicit remote-deletion confirmation.
+49. ACME HTTP-01 failure cannot disable local ingress or replace a known-good
+    certificate. KITPro reports public DNS or TCP/80 reachability failures
+    without changing router or firewall state.
 50. Restored ingress remains held until the same installation restores and
     passes readiness, and a validated ingress candidate activates. Restore
     never retargets a hostname to a different installation.

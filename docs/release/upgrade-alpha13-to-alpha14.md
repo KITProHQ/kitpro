@@ -10,13 +10,12 @@ upgrade baseline. A local alpha.13 build is not equivalent release evidence.
    external-storage references, backup metadata, operation failures, and
    sessions exist.
 3. Create and verify an application backup for critical applications.
-4. Record that no managed ingress route, HTTPS certificate, or Cloudflare
-   provider exists in the alpha.13 state.
+4. Record that no managed ingress route or HTTPS certificate exists in the
+   alpha.13 state.
 5. Install the alpha.14 native package through the platform package manager.
 6. Wait for the schema migration and service restart.
 7. Verify the recorded application and state baseline.
-8. Confirm that ingress remains empty and disabled, HTTPS remains disabled,
-   and Cloudflare remains unconfigured.
+8. Confirm that ingress remains empty and disabled and HTTPS remains disabled.
 
 Schema 18 adds alpha.14 control and helper state without changing the existing
 application exposure policy. The migration does not infer hostnames or create

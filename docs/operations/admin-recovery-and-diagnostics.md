@@ -24,8 +24,8 @@ bundle contains build and OS identity, runtime status, safe installation and
 binding metadata, ingress and certificate status, provider health, readiness,
 and bounded operation outcomes.
 
-KITPro excludes passwords, application secret values, API tokens, Cloudflare
-credentials, certificate private keys, cookies, session material,
+KITPro excludes passwords, application secret values, API tokens,
+certificate private keys, cookies, session material,
 authorization headers, and sensitive environment variables. Generation fails
 closed when the redaction scan finds a private-key marker or a synthetic known
 secret.

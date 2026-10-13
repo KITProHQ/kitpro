@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: `FRESH_DEBIAN_PASS / BLOCKED_EXTERNAL_TEST_RESOURCES`
+Status: `FRESH_DEBIAN_PASS / ALPHA14_SCOPE_CORRECTION_REGRESSION_PENDING`
 
 VM 500 is the authoritative Debian qualification host for this record. Its
 Debian operating system was wiped and reinstalled clean before alpha.14
@@ -54,10 +54,10 @@ the current source and have regression coverage:
   history.
 
 No additional product defect was found during the original qualification of the
-exact `94397d0` candidate. A later correction to the external-gate architecture
-identified a Cloudflare-origin defect; its fix and affected-gate evidence are
-recorded below without rewriting the identity of the original fresh-install
-candidate.
+exact `94397d0` candidate. Cloudflare Tunnel was later evaluated as a possible
+qualification path. That evaluation found useful generic Host-isolation and
+ACME challenge-routing issues. Cloudflare Tunnel is now intentionally outside
+the alpha.14 product scope; the generic ingress protections remain.
 
 ## Fresh host identity and baseline
 
@@ -170,7 +170,7 @@ metadata only. The private key was absent from tested service logs and support
 bundles. After the final reboot, HTTPS still returned 200 and an unknown host
 was rejected.
 
-## ACME and Cloudflare local regression
+## ACME local regression and scope correction
 
 The ACME scheduler was active after reboot. Local API checks rejected an
 unapproved directory and invalid hostname. A controlled failed issuance for
@@ -180,57 +180,28 @@ ACME tests passed directory allowlisting, scheduler and renewal transitions,
 failed issuance/renewal behavior, and known-good certificate retention. The
 Let's Encrypt directory allowlist was not weakened.
 
-Cloudflare remained disabled with no configured provider. Setup could skip it,
-local operation continued, and no credentials were invented or used. Focused
-tests passed write-only credential handling, enable/disable state transitions,
-failure behavior, API projection, and diagnostics redaction. The packaged
-Cloudflare service was active after reboot even though provider readiness was
-correctly `disabled/provider_disabled`.
+The Cloudflare evaluation produced commit `4b12da0a807bce03d287e078b8c3aebb756486c5`
+and a temporary qualification candidate. Its loopback-listener behavior was
+specific to the deferred feature and is no longer shipped. The independent
+security properties remain covered: port 80 has a rejecting default server,
+port 443 rejects unknown TLS hosts, exact managed hostnames isolate application
+backends, and the bounded HTTP-01 location is evaluated before an HTTPS
+redirect.
 
-## Cloudflare-first ACME correction and affected candidate
+The alpha.14 scope correction removes provider APIs, helper operations,
+credentials, runtime/service units, package identities, mandatory-access-control
+rules, readiness/setup projections, and backup claims. The first-run flow now
+contains nine truthful steps. Unpublished alpha.14 provider schema is retained
+inert for database compatibility, while legacy tunnel routes are disabled and
+excluded from product projections.
 
-This qualification environment is behind an ISP that blocks inbound TCP/80.
-Direct public HTTP-01 access to VM 500 is neither available nor required, and
-its absence is not an infrastructure misconfiguration. The required external
-sequence is Cloudflare Tunnel first, followed by public HTTP and ACME HTTP-01
-through the tunnel to KITPro's managed ingress challenge handler. Router port
-forwarding and direct public exposure of VM 500 are outside this qualification
-path.
-
-Implementation review reproduced a product defect in the original renderer.
-Cloudflare routes target KITPro's loopback origin at `127.0.0.1:18080`, but the
-hostname server on that listener sent the ACME challenge path to the application
-backend. The listener also had no explicit rejecting default server, allowing
-nginx to select the first configured tunnel hostname for an unmatched Host.
-
-Commit `4b12da0a807bce03d287e078b8c3aebb756486c5` adds the existing bounded
-ACME challenge location to each authorized Cloudflare hostname and adds a
-single default server on the loopback tunnel listener that returns 444. The
-regression failed before the fix and passed afterward. Full Go tests, Go vet,
-UI tests, and Debian, Arch, and RPM package static tests passed.
-
-The affected Debian candidate was rebuilt from the clean fix commit and
-installed over the earlier alpha.14 candidate on VM 500:
-
-| Property | Value |
-| --- | --- |
-| Filename | `kitpro-server_0.1.0~alpha14_amd64.deb` |
-| SHA-256 | `9b7251196954d8e115d386697e998c4dab45af771342ee375d1e77a2c612dd12` |
-| Source commit | `4b12da0a807bce03d287e078b8c3aebb756486c5` |
-| Source tree | `ec291fc436ab2ed8783fcb6e13da4e2e088ce3d5` |
-| Clean-source marker | `source_tree_dirty=false` |
-
-An isolated live nginx instance on VM 500 validated the fixed generated
-configuration without changing active ingress: the authorized tunnel hostname
-reached its intended backend with HTTP 200, a nonexistent ACME token reached
-the challenge handler and returned 404, and an unknown Host was rejected with
-nginx's 444 behavior. The installed candidate then passed service, database,
-AppArmor, active HTTPS, unknown-Host, Docker-pool, application-runtime, failed
-unit, ordering-cycle, and secret-log checks.
-
-This is local proof of the corrected origin contract. It is not live proof of
-Cloudflare edge routing or Let's Encrypt staging. Those gates still require the
-authorized disposable resources below.
+This Cox environment blocks inbound TCP/80. That is an environment limitation,
+not a KITPro failure, and it does not justify making a tunnel provider mandatory.
+VM 500 can continue to qualify local ingress, provided certificates, ACME local
+state transitions, and failure preservation. Any mandatory live Let's Encrypt
+staging HTTP-01 gate needs a separate disposable Debian host or VPS with an
+authorized public hostname and reachable TCP/80. No home router or ISP change is
+required.
 
 ## Administrator recovery and diagnostics
 
@@ -245,7 +216,7 @@ The final post-reboot support bundle was
 `6928700e0ddae6587550d214855a8965e1b03f5c014d3d423d4f8e789056cc3d`.
 It was mode `0600` and contained the expected safe policy, runtime, and
 readiness information. Scans excluded known application/helper secrets,
-passwords, Cloudflare tokens, authorization headers, cookies, CSRF material,
+passwords, API tokens, authorization headers, cookies, CSRF material,
 and private-key markers. A temporary synthetic sensitive operation caused
 bundle generation to fail closed with HTTP 500 and no completed artifact; the
 fixture was removed.
@@ -256,9 +227,10 @@ Backup `op-af4d2cf1fd7747f8384c6fec26c7c04a` produced a mode-`0600`
 control database and helper archive. The helper archive SHA-256 was
 `e86bd3ce3ba92379132bdae5cd611cbdd30abb0d488cc5c15f349bb831017b12`.
 Integrity and contents checks covered the control database, helper database,
-ingress metadata, provided-certificate files, ACME local state, Cloudflare local
-credential state as designed, and setup state. Metadata explicitly reports
-`remote_cloudflare_resources_included=false`.
+ingress metadata, provided-certificate files, ACME local state, and setup state.
+That archive describes the earlier candidate. New scope-corrected backups omit
+provider credentials and remote-provider claims while retaining compatibility
+with the earlier archive format.
 
 The offline restore stopped the relevant services, checkpointed SQLite WAL,
 verified the archive, restored both databases with correct ownership and mode
@@ -295,7 +267,7 @@ The following passed against the exact source checkout:
 - Debian, Arch, and RPM package static tests;
 - Debian incoming pre-install tests using the published alpha.12 binaries;
 - Debian and Arch fail-closed upgrade-gate tests;
-- fresh focused ACME, Cloudflare, diagnostics, host-backup, backup,
+- fresh focused ACME, diagnostics, host-backup, backup,
   authentication, certificate, ingress, API, and helper tests;
 - `git diff --check`.
 
@@ -309,7 +281,8 @@ with the required loopback permission and a writable qualification cache under
 The following Debian-local gates are complete:
 
 - Debian 13 fresh installation;
-- ten-step first run;
+- nine-step first run (the earlier ten-step evidence is retained above as
+  historical evidence for the pre-correction candidate);
 - AppArmor live enforcement;
 - application lifecycle;
 - managed ingress and cross-installation isolation;
@@ -319,36 +292,23 @@ The following Debian-local gates are complete:
 - backup and offline restore;
 - reboot and recovery.
 
-Two external-resource gates remain `BLOCKED_EXTERNAL_TEST_RESOURCES` and must
-run in this order:
-
-1. Live Cloudflare lifecycle qualification needs explicitly authorized scoped
-   credentials, zone/account metadata, a disposable hostname, and a disposable
-   tunnel or permission to create and delete one.
-2. After that tunnel publishes KITPro's loopback HTTP origin, live Let's Encrypt
-   staging issuance and renewal need the same authorized hostname, contact
-   email, and subscriber-terms authorization. HTTP-01 must traverse Cloudflare
-   Tunnel; direct inbound TCP/80 to VM 500 is not part of the gate.
+Cloudflare qualification is no longer a release gate. If live Let's Encrypt
+staging HTTP-01 remains mandatory, its status is
+`BLOCKED_EXTERNAL_DIRECT_ACME_TEST_HOST`: it requires an authorized disposable
+public hostname, contact email, subscriber-terms authorization, and a separate
+Internet-reachable Debian host or VPS with inbound TCP/80.
 
 The post-qualification local resource discovery was repeated before stopping:
 
 - KITPro's ignored `.env` contains only the established Proxmox API and guest
-  privilege inputs. It does not provide an ACME hostname, contact email,
-  Cloudflare tunnel routing declaration, or authorization to accept the
-  staging subscriber terms.
+  privilege inputs. It does not provide an ACME hostname, contact email, or
+  authorization to accept the staging subscriber terms.
 - No local ACME client state or explicitly authorized non-production FQDN was
-  present, so public DNS, tunneled HTTP-01 issuance, and renewal could not be
+  present, so public DNS, direct HTTP-01 issuance, and renewal could not be
   exercised safely.
-- No valid scoped Cloudflare token file, insufficient-scope token file,
-  replacement token file, account/zone/test-host metadata, or disposable
-  tunnel authorization was present.
-- A separate homelab environment contains production home-tunnel credential
-  material and a repository example contains a placeholder token. Neither is
-  an authorized disposable alpha.14 test resource, and neither was read into
-  KITPro or used for an API call.
 
-No ACME account, order, challenge, certificate, DNS record, Cloudflare route,
-or tunnel was created, modified, or deleted during this discovery pass.
+No ACME account, order, challenge, certificate, or DNS record was created,
+modified, or deleted during this discovery pass.
 
 Those missing resources do not invalidate the successful fresh-Debian
 qualification. No final release artifact was frozen, and publication staging

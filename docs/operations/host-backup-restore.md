@@ -1,8 +1,7 @@
 # Back up and restore alpha.14 host state
 
 `POST /api/v1/backup` creates a control database backup and a root-owned helper
-archive. The API response marks the backup as containing secrets and states
-that remote Cloudflare resources are not included.
+archive. The API response marks the backup as containing secrets.
 
 ## Backup contents
 
@@ -13,11 +12,9 @@ The host backup contains durable local state:
 - hostname and certificate metadata;
 - provided certificate files and private keys;
 - ACME account and renewal state;
-- Cloudflare provider configuration and the local credential file;
 - setup state and stored readiness observations.
 
-Generated nginx files are recreatable runtime state. Remote Cloudflare DNS,
-tunnel, and route resources remain remote provider state. Imported application
+Generated nginx files are recreatable runtime state. Imported application
 storage stays outside a host-state archive and follows the application backup
 contract.
 
@@ -27,7 +24,7 @@ transport it as a secret.
 
 ## Restore safely
 
-Stop the API, helper, ingress, ACME, and Cloudflare services before an offline
+Stop the API, helper, ingress, and ACME services before an offline
 host-state restore. Run the packaged restore command only against the selected
 backup and use its explicit confirmation that services are stopped.
 
