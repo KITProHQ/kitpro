@@ -28,11 +28,26 @@ KITPro will use a two-owner durable state model:
 1. The unprivileged control plane owns administrator intent, desired application state, catalog references, and user-facing operation metadata.
 2. The privileged helper owns trusted Docker and filesystem ownership records, privileged operation receipts, and helper-produced audit events.
 
-The helper uses a small durable store that is independent of the control-plane database. The storage engine remains open. A control-plane row cannot grant Docker ownership or destructive authority.
+The helper uses a small durable store that is independent of the control-plane database. The implementation selects separate SQLite databases for the control plane and helper. A control-plane row cannot grant Docker ownership or destructive authority.
 
 The helper's receipt is authoritative for whether the helper accepted a privileged operation and which privileged phases it recorded. Current host and Docker state still comes from a fresh observation. The user-facing operation view joins the control-plane request, helper receipt, current observation, and audit events without collapsing them into one status field.
 
 KITPro does not claim exactly-once external mutation. It records intent before dispatch, inspects after dispatch, and reconciles any uncertain result before retrying. Destructive operations fail closed when ownership or external outcome is ambiguous.
+
+### Implemented release-candidate boundary
+
+The schema-13 implementation realizes this decision with `helper_operations`,
+`helper_operation_events`, `installation_leases`, `runtime_generations`,
+`runtime_components`, `lifecycle_component_steps`, `reconciliation`,
+`restore_operations`, and `restore_storage_steps`. The older `receipts`,
+`ownership`, and `component_ownership` tables remain migration and forensic
+evidence for public alpha.11 upgrades.
+
+The API uses one `op-` identifier for semantic operation identity and a new
+`req-` identifier for each helper exchange. The helper accepts only the closed
+protocol-v2 mutation contract, hashes the canonical secret-free request,
+serializes each installation with a durable lease, and checks the fencing token
+at state transitions. Different installations are not globally serialized.
 
 ## Installation and runtime identity
 
@@ -88,7 +103,7 @@ Audit events form a logically append-only history. A correction or override adds
 
 ## Operation receipt model
 
-Every privileged mutation has a caller-supplied UUID `operation_id`. The helper binds that ID to the canonical request hash on first acceptance.
+Every privileged mutation has an API-generated semantic `operation_id` in the form `op-` plus 32 lowercase hexadecimal characters. The helper binds that ID to the canonical request hash on first acceptance. A separate `req-` transport ID is excluded from the hash.
 
 A receipt contains at least:
 
@@ -168,7 +183,7 @@ The install operation uses these phases:
 5. prepare ownership intent and create the deterministic application network;
 6. prepare ownership intent and create the deterministic container generation;
 7. start the container;
-8. verify configuration, network membership, runtime state, and health; and
+8. verify configuration, network membership, and requested runtime state; and
 9. commit confirmed ownership and the final desired-state generation.
 
 Image pull and inspection do not grant ownership of a shared image. Storage preparation records the stable storage identity before container creation.
@@ -183,10 +198,15 @@ The update operation uses a new deterministic runtime generation rather than mut
 4. prepare the new generation and its ownership intent;
 5. stop or isolate the old runtime only at the declared cutover phase;
 6. start and verify the new generation;
-7. commit the new desired generation only after health checks pass; and
+7. commit the new desired generation only after exact runtime verification; and
 8. retain the old runtime or image reference for the defined rollback window.
 
-An image rollback does not imply a persistent-data rollback. If an application migration changes data incompatibly, the operation requires the backup and rollback guarantees defined by later ADRs.
+Runtime-running verification is not application readiness. Readiness can only
+be claimed when a trusted manifest supplies a supported check; the current
+catalog does not yet define one. An image rollback does not imply a
+persistent-data rollback. If an application migration changes data
+incompatibly, the operation requires the backup and rollback guarantees defined
+by later ADRs.
 
 ### Uninstall application
 
@@ -214,7 +234,7 @@ Before the first destructive call, the helper verifies every target. If any targ
 | After storage creation | Prepared storage record; path and mount may exist | Requires reconciliation | Verify descriptor-relative path, mount identity, owner, mode, and storage record; continue only on exact match |
 | After network creation | Prepared network intent; Docker outcome may be unknown | Requires reconciliation | Inspect the deterministic name, labels, full network configuration, foreign members, and daemon identity |
 | After container creation | Prepared container intent; object ID may be missing | Requires reconciliation | Inspect by deterministic name and exact expected configuration; record Docker ID only after full match |
-| After container start | Container may be running, stopped, or unhealthy | Automatically recoverable only when ownership and configuration match | Inspect and resume health verification; retry start only if stopped and the start preconditions still hold |
+| After container start | Container may be running, stopped, or missing | Automatically recoverable only when ownership and configuration match | Inspect and resume exact runtime verification; retry start only if stopped and the start preconditions still hold. Do not infer application readiness. |
 | Docker reported success before the helper recorded it | Phase remains dispatching | Requires reconciliation | Observe first; never issue create again from the stale receipt |
 | After an intermediate receipt commit | Durable phase and external state may differ | Requires reconciliation | Treat the receipt as intent evidence and Docker as observation; compare both |
 
@@ -276,7 +296,7 @@ KITPro stable identifiers remain authoritative within KITPro:
   advance without changing the installation or its persistent storage;
 - Docker container and network names are derived from the installation, instance, role, and generation identifiers with a bounded collision-resistant encoding;
 - `storage_id` identifies persistent data independently of a container generation; and
-- `operation_id` is a UUID unique to one semantic request.
+- `operation_id` is an `op-` identifier unique to one semantic request.
 
 Docker object IDs, mount IDs, filesystem device and inode observations, and daemon IDs are recorded as observed identifiers. They are never accepted from the browser-facing API as lifecycle targets. A changed Docker object ID triggers full reconciliation even if the deterministic name and labels match.
 
@@ -303,7 +323,7 @@ Every observation has a timestamp, source, Docker daemon identity, and sequence 
 
 | Drift class | Example | Default response |
 | --- | --- | --- |
-| Healthy or expected | Docker restarted the exact owned container and all policy fields still match | Record the observation; no repair |
+| Consistent runtime | Docker restarted the exact owned container and all policy fields still match | Record the observation; no repair; do not infer application readiness |
 | Recoverable | The exact owned container should run but is stopped | Report; an existing authorized recovery phase may restart it after fresh checks, otherwise require an explicit start |
 | User modification | An administrator recreated or changed a managed container | Block automatic mutation and show the configuration difference |
 | Ownership conflict | Labels claim KITPro ownership but helper state is missing or disagrees | Quarantine from mutation; never adopt or delete automatically |
@@ -381,16 +401,19 @@ Recovery never reconstructs destructive authority from labels alone. A future ad
 
 ## Manual recovery operations
 
-The future administrative interface must expose narrow workflows rather than a generic state editor:
+The implemented API exposes narrow workflows rather than a generic state editor:
 
-- inspect an inconsistent instance and its evidence;
-- acknowledge non-security drift without claiming ownership changed;
-- recover or adopt an exact resource after full verification;
-- retry a phase marked `retry_after_validation`;
-- close an unknown-outcome operation with an explicit observed result;
-- mark non-running work superseded;
-- remove a stale ownership record only after proving that no matching resource exists; and
-- authorize a separate cleanup operation for a conflicting disposable resource.
+- reconcile an installation and inspect component evidence;
+- start an exact stopped active generation;
+- recreate a missing runtime as a new generation from trusted desired state;
+- clean exact non-active runtime resources while preserving storage; and
+- acknowledge a missing retained generation without pretending it still exists.
+
+Ambiguous ownership, mixed restore trees, configuration drift, and an
+unreachable runtime remain action-required conditions. The root-local
+`kitpro-helper --resolve-operation <operation-id> --release-as-failed` command
+can close an action-required operation only as failed; it does not assert that
+the requested runtime state was achieved.
 
 Each workflow previews its scope, names irreversible effects, requires fresh authentication and authorization at the control plane, and produces control-plane and helper audit events. The helper still validates the operation independently. Administrator metadata does not become a second helper authentication factor.
 
@@ -427,7 +450,7 @@ The state and reconciliation design adds these rules:
 
 ## Database requirements
 
-This ADR does not select a database. The control-plane and helper stores may use different technologies. A production choice must provide:
+The implementation selects separate SQLite databases for the control-plane and helper stores. The production configuration must provide:
 
 - atomic transactions for receipt, phase, ownership, lease, and event changes that must agree;
 - crash recovery and documented durability guarantees after acknowledged commits;
@@ -442,7 +465,11 @@ This ADR does not select a database. The control-plane and helper stores may use
 - operation without a KITPro account or cloud service; and
 - a narrow access boundary between the unprivileged and privileged stores.
 
-The evaluation must test actual crash durability, transaction behavior, backup restoration, migration failure, and concurrent lease acquisition. Familiarity or trend does not satisfy these requirements.
+The release gates test transaction behavior, backup restoration, schema-7 to
+schema-13 migration, concurrent lease acquisition, stale fencing, helper
+restart, runtime unavailability, and reboot recovery. SQLite transactions do
+not make Docker or filesystem mutation atomic, so durable intent and fresh
+observation remain required.
 
 ## Consequences
 
@@ -495,11 +522,16 @@ Some Docker calls appear idempotent when names are deterministic. A timeout can 
 
 A controller that repairs every difference can keep applications running, but it can also overwrite intentional administrator changes or normalize an attacker's resource. Phase 1 uses startup, operation-triggered, and explicit reconciliation with observation-only periodic scans.
 
-## Validation plan
+## Validation evidence
 
-The disposable prototype in [`prototypes/reconciliation/`](../../prototypes/reconciliation/) must test durable receipts, exact and conflicting replay, crash points around external mutation, unknown Docker outcomes, ownership disagreement, state loss, stale execution, security drift, supersession, and durable per-instance exclusion.
+The production tests cover durable receipts, exact and conflicting replay,
+crash points around external mutation, unknown runtime outcomes, ownership
+disagreement, stale execution, supersession, and durable per-installation
+exclusion. Debian and Arch VM acceptance additionally exercised schema
+migration, reboot recovery, AppArmor/systemd confinement, live Docker same-port
+cutover, backup/restore, and package upgrade behavior.
 
-Before production implementation, validation must also prove:
+Before promotion beyond alpha, validation must continue to prove:
 
 1. acknowledged helper commits survive process and host power interruption within the selected store's documented guarantees;
 2. two helper processes cannot acquire the same instance lease;
@@ -511,13 +543,12 @@ Before production implementation, validation must also prove:
 
 ## Open questions
 
-- Which storage technology best meets the control-plane and helper requirements?
 - Should the helper event store use hash chaining, external export, or another tamper-evidence mechanism?
 - Which application updates can recover automatically after data migration begins?
 - How long should completed receipts, tombstones, observations, and rollback generations remain?
 - Which periodic observations are useful enough to justify their load?
 - How will backup generation IDs coordinate independent control-plane and helper stores?
-- Which adoption operations are safe enough for Phase 1?
+- Whether any future resource-adoption operation can be safe enough to add; none is currently implemented.
 
 ## Review conditions
 

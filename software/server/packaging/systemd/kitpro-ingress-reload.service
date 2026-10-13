@@ -1,0 +1,25 @@
+[Unit]
+Description=Reload KITPro managed ingress
+Requires=kitpro-ingress.service
+After=kitpro-ingress.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl reload kitpro-ingress.service
+ExecStartPost=/usr/bin/mv -T -- /run/kitpro/ingress-reload.request /run/kitpro/ingress-reload.complete
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ReadWritePaths=/run/kitpro
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+UMask=0077

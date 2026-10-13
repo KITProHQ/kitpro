@@ -1,0 +1,12 @@
+{
+  "package": "kitpro-server",
+  "version": "0.1.0_alpha7-1",
+  "architecture": "x86_64",
+  "source_commit": "6b4811ec64187973977a4963e27bb3115ce343dd",
+  "source_tree_dirty": true,
+  "source_date_epoch": 1789439452,
+  "go_version": "go1.27.0-X:nodwarf5",
+  "builder": "makepkg (pacman) 7.1.0",
+  "cgo_enabled": false,
+  "build_flags": ["-trimpath", "-buildvcs=false", "-ldflags=-s -w"]
+}

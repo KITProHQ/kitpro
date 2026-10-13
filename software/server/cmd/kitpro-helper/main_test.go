@@ -2,17 +2,205 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kitpro/kitpro/software/server/internal/appconfig"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
+	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
 	"github.com/kitpro/kitpro/software/server/internal/hardware"
+	"github.com/kitpro/kitpro/software/server/internal/lifecycle"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
+	"github.com/kitpro/kitpro/software/server/internal/multicontainer"
+	"github.com/kitpro/kitpro/software/server/internal/ownership"
+	"github.com/kitpro/kitpro/software/server/internal/platform"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
 	"github.com/kitpro/kitpro/software/server/internal/state"
 )
+
+type startupLifecycleRuntime struct {
+	networks   map[string]containers.NetworkObservation
+	containers map[string]containers.ContainerObservation
+	images     map[string]containers.ImageObservation
+}
+
+type configurationBootstrapRuntime struct {
+	plan       containers.ContainerPlan
+	pulled     string
+	started    bool
+	removed    bool
+	configRoot string
+}
+
+func (r *configurationBootstrapRuntime) Name() string { return "test" }
+func (r *configurationBootstrapRuntime) Version() (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) Info() (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) Pull(image string) error { r.pulled = image; return nil }
+func (r *configurationBootstrapRuntime) CreateNetwork(string, map[string]string) (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) CreateContainerPlan(plan containers.ContainerPlan) (string, error) {
+	r.plan = plan
+	return "bootstrap-id", nil
+}
+func (r *configurationBootstrapRuntime) Start(id string) error {
+	return r.StartContainer(context.Background(), id)
+}
+func (r *configurationBootstrapRuntime) Stop(string) error   { return nil }
+func (r *configurationBootstrapRuntime) Remove(string) error { r.removed = true; return nil }
+func (r *configurationBootstrapRuntime) RemoveNetwork(string) error {
+	return errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) Inspect(string) (map[string]any, error) {
+	return nil, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) ListContainers() ([]containers.ContainerSummary, error) {
+	return nil, nil
+}
+func (r *configurationBootstrapRuntime) HasForeignNetworkMember(string, string) (bool, error) {
+	return false, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) HasForeignNetworkMembers(string, map[string]bool) (bool, error) {
+	return false, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) PullImage(_ context.Context, image string) error {
+	r.pulled = image
+	return nil
+}
+func (r *configurationBootstrapRuntime) ObserveImage(context.Context, string) (containers.ImageObservation, error) {
+	return containers.ImageObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) CreateLifecycleNetwork(context.Context, string, map[string]string) (containers.NetworkObservation, error) {
+	return containers.NetworkObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) ObserveNetwork(context.Context, string) (containers.NetworkObservation, error) {
+	return containers.NetworkObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) CreateLifecycleContainer(_ context.Context, plan containers.ContainerPlan) (string, error) {
+	r.plan = plan
+	return "bootstrap-id", nil
+}
+func (r *configurationBootstrapRuntime) ObserveContainer(context.Context, string) (containers.ContainerObservation, error) {
+	return containers.ContainerObservation{}, errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) StartContainer(context.Context, string) error {
+	r.started = true
+	directory := filepath.Join(r.configRoot, "config")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return err
+	}
+	configuration := `<?xml version="1.0"?><configuration version="52"><device id="GENERATED-DEVICE-ID"></device><gui><apikey>GENERATED-API-KEY</apikey></gui><options><listenAddress>default</listenAddress><listenAddress>quic://0.0.0.0:22000</listenAddress><globalAnnounceEnabled>true</globalAnnounceEnabled><localAnnounceEnabled>true</localAnnounceEnabled><relaysEnabled>true</relaysEnabled><natEnabled>true</natEnabled><startBrowser>true</startBrowser><urAccepted>0</urAccepted><autoUpgradeIntervalH>12</autoUpgradeIntervalH><crashReportingEnabled>true</crashReportingEnabled></options></configuration>`
+	for name, contents := range map[string]string{"config.xml": configuration, "cert.pem": "generated certificate", "key.pem": "generated key"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (r *configurationBootstrapRuntime) StopContainer(context.Context, string) error { return nil }
+func (r *configurationBootstrapRuntime) RemoveContainer(context.Context, string) error {
+	r.removed = true
+	return nil
+}
+func (r *configurationBootstrapRuntime) RemoveLifecycleNetwork(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *configurationBootstrapRuntime) WaitContainer(context.Context, string, containers.RuntimeState, time.Duration) (containers.ContainerObservation, error) {
+	return containers.ContainerObservation{Exists: true, State: containers.RuntimeStopped}, nil
+}
+
+func (r *startupLifecycleRuntime) PullImage(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) ObserveImage(_ context.Context, image string) (containers.ImageObservation, error) {
+	if r.images == nil {
+		return containers.ImageObservation{Exists: true}, nil
+	}
+	return r.images[image], nil
+}
+func (r *startupLifecycleRuntime) CreateLifecycleNetwork(context.Context, string, map[string]string) (containers.NetworkObservation, error) {
+	return containers.NetworkObservation{}, errors.New("not used")
+}
+func (r *startupLifecycleRuntime) ObserveNetwork(_ context.Context, name string) (containers.NetworkObservation, error) {
+	return r.networks[name], nil
+}
+func (r *startupLifecycleRuntime) CreateLifecycleContainer(context.Context, containers.ContainerPlan) (string, error) {
+	return "", errors.New("not used")
+}
+func (r *startupLifecycleRuntime) ObserveContainer(_ context.Context, id string) (containers.ContainerObservation, error) {
+	if observed, ok := r.containers[id]; ok {
+		return observed, nil
+	}
+	return containers.ContainerObservation{State: containers.RuntimeMissing}, nil
+}
+func (r *startupLifecycleRuntime) StartContainer(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) StopContainer(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) RemoveContainer(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) RemoveLifecycleNetwork(context.Context, string) error {
+	return errors.New("not used")
+}
+func (r *startupLifecycleRuntime) WaitContainer(context.Context, string, containers.RuntimeState, time.Duration) (containers.ContainerObservation, error) {
+	return containers.ContainerObservation{}, errors.New("not used")
+}
+
+func TestRuntimeSocketNamesAreRejected(t *testing.T) {
+	for _, value := range []string{"/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock"} {
+		if !containsRuntimeSocket(value) {
+			t.Fatalf("runtime socket was not recognized: %s", value)
+		}
+	}
+	if containsRuntimeSocket("/srv/kitpro/apps/podman.socket/data") {
+		t.Fatal("ordinary path was treated as a runtime socket")
+	}
+}
+
+func TestSelectRuntimeUsesExplicitOrInstallablePlatform(t *testing.T) {
+	rocky := platform.Platform{ID: "rocky", Version: "10.1", ContainerRuntime: "podman", Installable: true}
+	if got, err := selectRuntime("", rocky); err != nil || got != "podman" {
+		t.Fatalf("Rocky runtime = %q, %v", got, err)
+	}
+	if got, err := selectRuntime("docker", rocky); err != nil || got != "docker" {
+		t.Fatalf("explicit runtime = %q, %v", got, err)
+	}
+	if _, err := selectRuntime("containerd", rocky); err == nil {
+		t.Fatal("unknown explicit runtime accepted")
+	}
+	rhel := platform.Platform{ID: "rhel", Version: "10.0", ContainerRuntime: "podman", Installable: false}
+	if _, err := selectRuntime("", rhel); err == nil {
+		t.Fatal("unvalidated RHEL host silently accepted")
+	}
+}
+
+func TestOnlyNetworkCreatingMutationsRequireHostPreflight(t *testing.T) {
+	for _, operation := range []string{"InstallApplication", "ConfigureServiceExposure", "UpdateApplication"} {
+		if !createsApplicationNetwork(operation) {
+			t.Fatalf("%s must require host preflight", operation)
+		}
+	}
+	for _, operation := range []string{"StopApplication", "StartApplication", "RestartApplication", "RemoveApplication", "ReconcileInstallation", "CreateApplicationBackup", "RestoreApplicationBackup"} {
+		if createsApplicationNetwork(operation) {
+			t.Fatalf("%s must remain available for recovery without network allocation", operation)
+		}
+	}
+}
 
 func TestExpectedAPIUIDFromConfiguredNumericValue(t *testing.T) {
 	t.Setenv("KITPRO_API_UID", "1234")
@@ -60,7 +248,7 @@ func trustedCatalogRequest(t *testing.T, appID string) protocol.Request {
 }
 
 func TestApplicationPlanValidationAcceptsEveryRealCatalogApp(t *testing.T) {
-	for _, appID := range []string{"freshrss", "mealie", "memos", "uptime-kuma"} {
+	for _, appID := range []string{"freshrss", "mealie", "memos", "pihole", "uptime-kuma"} {
 		t.Run(appID, func(t *testing.T) {
 			if err := validateApplicationPlan(trustedCatalogRequest(t, appID)); err != nil {
 				t.Fatalf("trusted catalog plan rejected: %v", err)
@@ -69,10 +257,209 @@ func TestApplicationPlanValidationAcceptsEveryRealCatalogApp(t *testing.T) {
 	}
 }
 
+func TestTrustedBindingSetValidation(t *testing.T) {
+	m := manifest.Manifest{SchemaVersion: manifest.NetworkBindingSchemaVersion, ID: "network-fixture", Name: "Network fixture", Services: []manifest.Service{{ID: "admin", Name: "Admin", Protocol: "http", ContainerPort: 80}, {ID: "dns-tcp", Name: "DNS TCP", Protocol: "tcp", ContainerPort: 53, FixedHostPort: 53}, {ID: "dns-udp", Name: "DNS UDP", Protocol: "udp", ContainerPort: 53, FixedHostPort: 53}}}
+	request := protocol.Request{Version: 2, Bindings: []protocol.ServiceBinding{{ServiceID: "dns-udp", Transport: "udp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "admin", Transport: "tcp", ContainerPort: 80, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000}, {ServiceID: "dns-tcp", Transport: "tcp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53}}}
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", "10.0.0.2")
+	if err := validateTrustedBindings(request, m); err != nil {
+		t.Fatalf("exact trusted set rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing":          func(r *protocol.Request) { r.Bindings = r.Bindings[:2] },
+		"extra":            func(r *protocol.Request) { r.Bindings = append(r.Bindings, r.Bindings[0]) },
+		"transport":        func(r *protocol.Request) { r.Bindings[0].Transport = "tcp" },
+		"container-port":   func(r *protocol.Request) { r.Bindings[1].ContainerPort = 81 },
+		"fixed-port":       func(r *protocol.Request) { r.Bindings[0].HostPort = 54 },
+		"injected-service": func(r *protocol.Request) { r.Bindings[0].ServiceID = "shell" },
+		"injected-dhcp": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "dhcp", Transport: "udp", ContainerPort: 67, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 67})
+		},
+		"injected-address": func(r *protocol.Request) { r.Bindings[0].HostAddress = "10.0.0.3" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := request
+			q.Bindings = append([]protocol.ServiceBinding(nil), request.Bindings...)
+			mutate(&q)
+			if validateTrustedBindings(q, m) == nil {
+				t.Fatal("tampered binding set accepted")
+			}
+		})
+	}
+	request.ExposureMode = "internal"
+	if err := validateTrustedBindings(request, m); err == nil {
+		t.Fatal("protocol v2 scalar authority accepted")
+	}
+}
+
+func TestRuntimePortBindingsCarriesMultipleTransports(t *testing.T) {
+	bindings := runtimePortBindings([]exposure.ServiceBinding{{ServiceID: "dns-tcp", Transport: exposure.TCP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "dns-udp", Transport: exposure.UDP, ContainerPort: 53, Mode: exposure.LAN, HostAddress: "10.0.0.2", HostPort: 53}, {ServiceID: "admin", Transport: exposure.TCP, ContainerPort: 80, Mode: exposure.Loopback, HostAddress: "127.0.0.1", HostPort: 20000}})
+	if len(bindings) != 3 || bindings["53/tcp"][0].HostPort != "53" || bindings["53/udp"][0].HostPort != "53" || bindings["80/tcp"][0].HostPort != "20000" {
+		t.Fatalf("runtime bindings=%#v", bindings)
+	}
+}
+
 func TestExpectedAPIUIDRejectsInvalidNumericValue(t *testing.T) {
 	t.Setenv("KITPRO_API_UID", "not-a-uid")
 	if _, err := expectedAPIUID(); err == nil {
 		t.Fatal("invalid UID accepted")
+	}
+}
+
+func openAlpha11HelperFixture(t *testing.T, name string) *sql.DB {
+	t.Helper()
+	db, err := state.Open(filepath.Join(t.TempDir(), name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	script, err := os.ReadFile(filepath.Join("..", "..", "internal", "state", "testdata", "alpha11_helper_schema7.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(string(script)); err != nil {
+		t.Fatal(err)
+	}
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func TestAlpha11LegacyMultiBackfillsAndReconcilesAtStartup(t *testing.T) {
+	db := openAlpha11HelperFixture(t, "valid.db")
+	if count, err := backfillLegacyMultiAtStartup(context.Background(), db); err != nil || count != 1 {
+		t.Fatalf("backfill count=%d err=%v", count, err)
+	}
+	var componentCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runtime_components WHERE installation_id='inst-paperless1' AND runtime_generation=1`).Scan(&componentCount); err != nil || componentCount != 2 {
+		t.Fatalf("component count=%d err=%v", componentCount, err)
+	}
+	networkName := "kitpro-net-inst-paperless1-g1"
+	networkID := "network-paperless"
+	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: "inst-paperless1", "com.kitpro.runtime-generation": "1"}
+	runtime := &startupLifecycleRuntime{
+		networks: map[string]containers.NetworkObservation{networkName: {Exists: true, ID: networkID, Name: networkName}},
+		containers: map[string]containers.ContainerObservation{
+			"paperless-broker": {Exists: true, ID: "paperless-broker", Name: "kitpro-paperless-ngx-inst-paperless1-broker-g1", ImageReference: "docker.io/library/redis@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7", State: containers.RuntimeRunning, Labels: labels, Networks: map[string]containers.NetworkAttachment{networkName: {NetworkID: networkID}}},
+			"paperless-web":    {Exists: true, ID: "paperless-web", Name: "kitpro-paperless-ngx-inst-paperless1-web-g1", ImageReference: "docker.io/paperlessngx/paperless-ngx@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f", State: containers.RuntimeRunning, Labels: labels, Networks: map[string]containers.NetworkAttachment{networkName: {NetworkID: networkID}}},
+		},
+	}
+	if count, err := lifecycle.ReconcileAll(context.Background(), lifecycle.Store{DB: db}, runtime); err != nil || count != 2 {
+		// The exact alpha.11 fixture also contains one migrated single install.
+		t.Fatalf("reconciled=%d err=%v", count, err)
+	}
+	result, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), "inst-paperless1")
+	if err != nil || result.State != lifecycle.ReconciliationConsistent || result.RuntimeState != "running" {
+		t.Fatalf("reconciliation=%#v err=%v", result, err)
+	}
+	single, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), "inst-busybox01")
+	if err != nil || single.CheckedGeneration != 1 || single.State != lifecycle.ReconciliationRuntimeMissing {
+		t.Fatalf("migrated single reconciliation=%#v err=%v", single, err)
+	}
+}
+
+func migratedBusyBoxRuntime(restart string) *startupLifecycleRuntime {
+	installation := "inst-busybox01"
+	network := "kitpro-net-" + installation + "-g1"
+	labels := map[string]string{
+		ownership.LabelManaged:          "true",
+		ownership.LabelInstance:         installation,
+		ownership.LabelResource:         "application",
+		"com.kitpro.application":        "busybox",
+		"com.kitpro.release":            "1.37.0",
+		"com.kitpro.runtime-generation": "1",
+	}
+	return &startupLifecycleRuntime{
+		networks: map[string]containers.NetworkObservation{network: {Exists: true, ID: "busybox-network", Name: network}},
+		containers: map[string]containers.ContainerObservation{
+			"busybox-runtime": {
+				Exists: true, ID: "busybox-runtime", Name: "kitpro-busybox-inst-busybox01-g1",
+				ImageID: "sha256:busybox", ImageReference: "docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0",
+				State: containers.RuntimeRestarting, Labels: labels, RestartPolicy: restart,
+				Mounts:   []containers.MountObservation{{Source: "/srv/kitpro/apps/busybox/inst-busybox01/data", Destination: "/data"}},
+				Networks: map[string]containers.NetworkAttachment{network: {NetworkID: "busybox-network"}}, NetworkMode: network,
+				PortBindings: map[string][]containers.PortBinding{},
+			},
+		},
+	}
+}
+
+func TestMigratedSingleConfigurationIsTrustedBeforeHashRecording(t *testing.T) {
+	t.Run("image-default root runtime", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "image-default-single.db")
+		runtime := migratedBusyBoxRuntime("unless-stopped")
+		observed := runtime.containers["busybox-runtime"]
+		observed.User = "0:0"
+		runtime.containers["busybox-runtime"] = observed
+		runtime.images = map[string]containers.ImageObservation{
+			observed.ImageReference: {Exists: true, ConfiguredUser: "0:0"},
+		}
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err != nil {
+			t.Fatal(err)
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash == "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+	})
+
+	t.Run("exact restarting runtime", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "exact-single.db")
+		runtime := migratedBusyBoxRuntime("unless-stopped")
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err != nil {
+			t.Fatal(err)
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash == "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), "inst-busybox01")
+		if err != nil || result.State != lifecycle.ReconciliationDegraded || result.RuntimeState != "restarting" || result.RecommendedAction != lifecycle.RepairNone || !hasLifecycleMismatch(result, lifecycle.MismatchActiveContainerUnstable) {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	})
+
+	t.Run("configuration drift", func(t *testing.T) {
+		db := openAlpha11HelperFixture(t, "drifted-single.db")
+		runtime := migratedBusyBoxRuntime("always")
+		if err := prepareMigratedSingleConfiguration(context.Background(), db, runtime, "inst-busybox01"); err == nil {
+			t.Fatal("drifted migrated runtime was trusted")
+		}
+		var hash string
+		if err := db.QueryRow(`SELECT configuration_hash FROM runtime_components WHERE installation_id='inst-busybox01' AND runtime_generation=1 AND component_id='app'`).Scan(&hash); err != nil || hash != "" {
+			t.Fatalf("hash=%q err=%v", hash, err)
+		}
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), "inst-busybox01")
+		if err != nil || result.State != lifecycle.ReconciliationActionRequired || !hasLifecycleMismatch(result, lifecycle.MismatchConfiguration) {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	})
+}
+
+func hasLifecycleMismatch(result lifecycle.ReconciliationResult, want lifecycle.MismatchCode) bool {
+	for _, code := range result.MismatchCodes {
+		if code == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAlpha11AmbiguousLegacyMultiBecomesActionRequired(t *testing.T) {
+	db := openAlpha11HelperFixture(t, "ambiguous.db")
+	if _, err := db.Exec(`UPDATE component_ownership SET image_digest='docker.io/example/mismatch@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE installation_id='inst-paperless1' AND component_id='web'`); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := backfillLegacyMultiAtStartup(context.Background(), db); err != nil || count != 1 {
+		t.Fatalf("backfill count=%d err=%v", count, err)
+	}
+	var generations int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runtime_generations WHERE installation_id='inst-paperless1'`).Scan(&generations); err != nil || generations != 0 {
+		t.Fatalf("ambiguous topology was guessed: generations=%d err=%v", generations, err)
+	}
+	result, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), "inst-paperless1")
+	if err != nil || result.State != lifecycle.ReconciliationActionRequired || len(result.MismatchCodes) != 1 || result.MismatchCodes[0] != lifecycle.MismatchOwnershipAmbiguous {
+		t.Fatalf("reconciliation=%#v err=%v", result, err)
 	}
 }
 
@@ -89,6 +476,98 @@ func validFreshRSSRequest() protocol.Request {
 	}
 }
 
+func validForgejoRequest() protocol.Request {
+	return protocol.Request{
+		Version: 1, ID: "op-forgejo12345678", Operation: "InstallApplication",
+		ApplicationID: "forgejo", ReleaseID: "16.0.5", InstanceID: "inst-forgejo01", RuntimeGeneration: 1,
+		Image:         "codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74",
+		NetworkName:   "kitpro-net-inst-forgejo01-g1",
+		DataPath:      "/srv/kitpro/apps/forgejo/inst-forgejo01/data",
+		RestartPolicy: "unless-stopped",
+		Environment:   []protocol.EnvVar{{Name: "USER_UID", Value: "1000"}, {Name: "USER_GID", Value: "1000"}},
+		Storage:       []protocol.StorageMount{{ID: "data", ContainerPath: "/data", HostPath: "/srv/kitpro/apps/forgejo/inst-forgejo01/data", OwnerUID: 1000, OwnerGID: 1000}},
+		Services:      []protocol.Service{{ID: "web", Protocol: "http", ContainerPort: 3000}},
+		ExposureMode:  "internal",
+	}
+}
+
+func validPlexRequest() protocol.Request {
+	return protocol.Request{
+		Version: 1, ID: "op-plex1234567890", Operation: "InstallApplication",
+		ApplicationID: "plex", ReleaseID: "1.43.4.10903-e5521bd8c", InstanceID: "inst-plex0001", RuntimeGeneration: 1,
+		Image:         "docker.io/plexinc/pms-docker@sha256:dbb879bf58c3fc56635f21ac48c32aa6853aaa23d4a57b102033b6dc6d2d9cee",
+		NetworkName:   "kitpro-net-inst-plex0001-g1",
+		DataPath:      "/srv/kitpro/apps/plex/inst-plex0001/data",
+		RestartPolicy: "unless-stopped",
+		Storage:       []protocol.StorageMount{{ID: "config", ContainerPath: "/config", HostPath: "/srv/kitpro/apps/plex/inst-plex0001/config"}},
+		ExternalStorage: []protocol.ExternalStorageBinding{{
+			SlotID: "media", RootID: "storage-0123456789abcdef",
+		}},
+		Services:     []protocol.Service{{ID: "web", Protocol: "http", ContainerPort: 32400}},
+		ExposureMode: "internal",
+	}
+}
+
+func validNextcloudRequest() protocol.Request {
+	return protocol.Request{
+		Version: 1, ID: "op-nextcloud123456", Operation: "InstallApplication",
+		ApplicationID: "nextcloud", ReleaseID: "34.0.4-apache", InstanceID: "inst-nextcloud01", RuntimeGeneration: 1,
+		Image:         "docker.io/library/nextcloud@sha256:a6281e8046ba1a15bfd4225c8027daee7fd2fff6c593b446f4cd4983a432eef1",
+		NetworkName:   "kitpro-net-inst-nextcloud01-g1",
+		DataPath:      "/srv/kitpro/apps/nextcloud/inst-nextcloud01/data",
+		RestartPolicy: "unless-stopped",
+		Storage:       []protocol.StorageMount{{ID: "html", ContainerPath: "/var/www/html", HostPath: "/srv/kitpro/apps/nextcloud/inst-nextcloud01/html"}},
+		Services:      []protocol.Service{{ID: "web", Protocol: "http", ContainerPort: 80}},
+		ExposureMode:  "internal",
+	}
+}
+
+func validPiHoleRequest() protocol.Request {
+	return protocol.Request{
+		Version: 2, ID: "op-pihole123456789", OperationID: "op-1234567890abcdef1234567890abcdef", OperationRevision: 1, Operation: "InstallApplication",
+		ApplicationID: "pihole", ReleaseID: "2026.09.0", InstanceID: "inst-pihole01", RuntimeGeneration: 1,
+		Image:         "docker.io/pihole/pihole@sha256:bd3fc82ee1b1473a45fc074379dcd9fd7ce3e933809c44e10c0df9b22fd5de63",
+		NetworkName:   "kitpro-net-inst-pihole01-g1",
+		DataPath:      "/srv/kitpro/apps/pihole/inst-pihole01/data",
+		RestartPolicy: "unless-stopped",
+		Environment:   []protocol.EnvVar{{Name: "FTLCONF_dns_listeningMode", Value: "ALL"}, {Name: "FTLCONF_webserver_api_password", Secret: true, Generate: "random-hex-32"}},
+		Storage:       []protocol.StorageMount{{ID: "config", ContainerPath: "/etc/pihole", HostPath: "/srv/kitpro/apps/pihole/inst-pihole01/config"}},
+		Services:      []protocol.Service{{ID: "admin", Protocol: "http", ContainerPort: 80}, {ID: "dns-tcp", Protocol: "tcp", ContainerPort: 53}, {ID: "dns-udp", Protocol: "udp", ContainerPort: 53}},
+		Bindings: []protocol.ServiceBinding{
+			{ServiceID: "admin", Transport: "tcp", ContainerPort: 80, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+			{ServiceID: "dns-tcp", Transport: "tcp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53},
+			{ServiceID: "dns-udp", Transport: "udp", ContainerPort: 53, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 53},
+		},
+	}
+}
+
+func validSyncthingRequest() protocol.Request {
+	return protocol.Request{
+		Version: 2, ID: "op-syncthing12345", OperationID: "op-1234567890abcdef1234567890abcdef", OperationRevision: 1, Operation: "InstallApplication",
+		ApplicationID: "syncthing", ReleaseID: "2.1.5", InstanceID: "inst-syncthing01", RuntimeGeneration: 1,
+		Image:         "docker.io/syncthing/syncthing@sha256:84dcf202b0890f795c4c3899d35a5ac7369bb8b72b5c270078c50247da4ddeef",
+		NetworkName:   "kitpro-net-inst-syncthing01-g1",
+		DataPath:      "/srv/kitpro/apps/syncthing/inst-syncthing01/data",
+		RestartPolicy: "unless-stopped",
+		Environment: []protocol.EnvVar{
+			{Name: "STGUIADDRESS", Value: "0.0.0.0:8384"},
+			{Name: "STNOBROWSER", Value: "true"},
+			{Name: "STNORESTART", Value: "true"},
+			{Name: "STNOUPGRADE", Value: "true"},
+			{Name: "STNOPORTPROBING", Value: "true"},
+		},
+		Storage:         []protocol.StorageMount{{ID: "config", ContainerPath: "/var/syncthing", HostPath: "/srv/kitpro/apps/syncthing/inst-syncthing01/config", OwnerUID: 1000, OwnerGID: 1000}},
+		ExternalStorage: []protocol.ExternalStorageBinding{{SlotID: "sync", RootID: "storage-0123456789abcdef"}},
+		Services:        []protocol.Service{{ID: "gui", Protocol: "http", ContainerPort: 8384}, {ID: "sync-tcp", Protocol: "tcp", ContainerPort: 22000}},
+		Bindings: []protocol.ServiceBinding{
+			{ServiceID: "gui", Transport: "tcp", ContainerPort: 8384, Mode: "loopback", HostAddress: "127.0.0.1", HostPort: 20000},
+			{ServiceID: "sync-tcp", Transport: "tcp", ContainerPort: 22000, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 22000},
+		},
+		RunAs:         &protocol.RuntimeIdentity{UID: 1000, GID: 1000},
+		Configuration: &protocol.ConfigurationPolicy{Type: "syncthing-tcp-only-v1", StorageID: "config"},
+	}
+}
+
 func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	if err := validateApplicationPlan(validFreshRSSRequest()); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
@@ -100,6 +579,220 @@ func TestApplicationPlanValidationAcceptsTrustedCatalogPlan(t *testing.T) {
 	q.NetworkName = "kitpro-net-inst-12345678-g2"
 	if err := validateApplicationPlan(q); err != nil {
 		t.Fatalf("valid loopback plan rejected: %v", err)
+	}
+}
+
+func TestApplicationPlanValidationAcceptsExactForgejoPlan(t *testing.T) {
+	if err := validateApplicationPlan(validForgejoRequest()); err != nil {
+		t.Fatalf("valid Forgejo plan rejected: %v", err)
+	}
+	for name, image := range map[string]string{
+		"other-codeberg-repository": "codeberg.org/unrelated/project@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74",
+		"lookalike-host":            "evil.codeberg.org/forgejo/forgejo@sha256:523de0217475297d05786d7551c1c1d6b5c8b90d6fee7189e88a234260ec0e74",
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := validForgejoRequest()
+			q.Image = image
+			if err := validateApplicationPlan(q); err == nil {
+				t.Fatalf("untrusted Forgejo image accepted: %s", image)
+			}
+		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsBoundedPlexPlan(t *testing.T) {
+	if err := validateApplicationPlan(validPlexRequest()); err != nil {
+		t.Fatalf("valid Plex plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing-media": func(r *protocol.Request) { r.ExternalStorage = nil },
+		"read-only-managed-config": func(r *protocol.Request) {
+			r.Storage[0].ReadOnly = true
+		},
+		"discovery-port": func(r *protocol.Request) {
+			r.Services = append(r.Services, protocol.Service{ID: "discovery", Protocol: "tcp", ContainerPort: 32469})
+		},
+		"gpu": func(r *protocol.Request) {
+			r.Hardware = []protocol.HardwareRequirement{{Class: "gpu.nvidia", Optional: true, CPUFallback: true}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := validPlexRequest()
+			mutate(&q)
+			if err := validateApplicationPlan(q); err == nil {
+				t.Fatalf("accepted Plex plan mutation %s", name)
+			}
+		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsExactPiHolePlan(t *testing.T) {
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", "10.0.0.2")
+	request := validPiHoleRequest()
+	if err := validateApplicationPlan(request); err != nil {
+		t.Fatalf("valid Pi-hole plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing DNS transport": func(r *protocol.Request) { r.Bindings = r.Bindings[:2] },
+		"wrong host port":       func(r *protocol.Request) { r.Bindings[1].HostPort = 54 },
+		"wrong transport":       func(r *protocol.Request) { r.Bindings[2].Transport = "tcp" },
+		"altered container port": func(r *protocol.Request) {
+			r.Bindings[1].ContainerPort = 54
+		},
+		"injected DHCP": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "dhcp", Transport: "udp", ContainerPort: 67, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 67})
+		},
+		"extra service": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "metrics", Transport: "tcp", ContainerPort: 8080, Mode: "internal"})
+		},
+		"injected host address": func(r *protocol.Request) { r.Bindings[1].HostAddress = "10.0.0.3" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			candidate.Bindings = append([]protocol.ServiceBinding(nil), request.Bindings...)
+			mutate(&candidate)
+			if err := validateApplicationPlan(candidate); err == nil {
+				t.Fatal("tampered Pi-hole plan accepted")
+			}
+		})
+	}
+}
+
+func TestApplicationPlanValidationAcceptsBoundedSyncthingPlan(t *testing.T) {
+	t.Setenv("KITPRO_LAN_BIND_ADDRESS", "10.0.0.2")
+	request := validSyncthingRequest()
+	if err := validateApplicationPlan(request); err != nil {
+		t.Fatalf("valid Syncthing plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"missing policy":       func(r *protocol.Request) { r.Configuration = nil },
+		"wrong policy":         func(r *protocol.Request) { r.Configuration.Type = "arbitrary-template" },
+		"wrong policy storage": func(r *protocol.Request) { r.Configuration.StorageID = "sync" },
+		"missing TCP":          func(r *protocol.Request) { r.Bindings = r.Bindings[:1] },
+		"UDP sync":             func(r *protocol.Request) { r.Bindings[1].Transport = "udp" },
+		"dynamic sync port":    func(r *protocol.Request) { r.Bindings[1].HostPort = 22001 },
+		"discovery service": func(r *protocol.Request) {
+			r.Bindings = append(r.Bindings, protocol.ServiceBinding{ServiceID: "discovery", Transport: "udp", ContainerPort: 21027, Mode: "lan", HostAddress: "10.0.0.2", HostPort: 21027})
+		},
+		"missing sync root": func(r *protocol.Request) { r.ExternalStorage = nil },
+		"host network":      func(r *protocol.Request) { r.NetworkName = "host" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			candidate.Bindings = append([]protocol.ServiceBinding(nil), request.Bindings...)
+			if request.Configuration != nil {
+				copyPolicy := *request.Configuration
+				candidate.Configuration = &copyPolicy
+			}
+			mutate(&candidate)
+			if err := validateApplicationPlan(candidate); err == nil {
+				t.Fatal("tampered Syncthing plan accepted")
+			}
+		})
+	}
+}
+
+func TestSyncthingConfigurationBootstrapIsOfflineTypedAndRemoved(t *testing.T) {
+	root := t.TempDir()
+	runtime := &configurationBootstrapRuntime{configRoot: root}
+	request := validSyncthingRequest()
+	request.Storage[0].HostPath = root
+	labels := map[string]string{
+		ownership.LabelManaged:  "true",
+		ownership.LabelInstance: request.InstanceID,
+		ownership.LabelResource: "application",
+	}
+	if err := prepareStructuredConfiguration(context.Background(), runtime, runtime, request, labels); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.pulled != request.Image || !runtime.started || !runtime.removed {
+		t.Fatalf("bootstrap lifecycle incomplete: %#v", runtime)
+	}
+	if runtime.plan.Network != "none" || runtime.plan.RestartPolicy != "" || len(runtime.plan.PortBindings) != 0 || len(runtime.plan.Environment) != 0 || len(runtime.plan.Devices) != 0 || len(runtime.plan.DeviceRequests) != 0 {
+		t.Fatalf("bootstrap gained network or runtime authority: %#v", runtime.plan)
+	}
+	if !reflect.DeepEqual(runtime.plan.Command, []string{"generate", "--no-port-probing"}) || runtime.plan.User != "1000:1000" {
+		t.Fatalf("unexpected bootstrap command or identity: %#v", runtime.plan)
+	}
+	if len(runtime.plan.Storage) != 1 || runtime.plan.Storage[0] != (containers.StorageMount{HostPath: root, ContainerPath: "/var/syncthing"}) {
+		t.Fatalf("unexpected bootstrap storage: %#v", runtime.plan.Storage)
+	}
+	if runtime.plan.Labels[ownership.LabelResource] != "configuration-bootstrap" {
+		t.Fatalf("bootstrap ownership labels missing: %#v", runtime.plan.Labels)
+	}
+	if err := appconfig.Verify(appconfig.SyncthingTCPOnlyV1, root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "config", "config.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "GENERATED-DEVICE-ID") || !strings.Contains(string(data), "GENERATED-API-KEY") {
+		t.Fatal("Syncthing-generated identity was not preserved")
+	}
+}
+
+func TestSyncthingConfigurationIsReappliedWithoutRegeneratingIdentity(t *testing.T) {
+	root := t.TempDir()
+	runtime := &configurationBootstrapRuntime{configRoot: root}
+	if err := runtime.StartContainer(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	runtime.started = false
+	request := validSyncthingRequest()
+	request.Storage[0].HostPath = root
+	if err := prepareStructuredConfiguration(context.Background(), runtime, runtime, request, nil); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.started || runtime.pulled != "" || runtime.removed {
+		t.Fatalf("existing identity was regenerated: %#v", runtime)
+	}
+	if err := appconfig.Verify(appconfig.SyncthingTCPOnlyV1, root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncthingConfigurationRejectsIncompleteExistingIdentity(t *testing.T) {
+	root := t.TempDir()
+	runtime := &configurationBootstrapRuntime{configRoot: root}
+	if err := runtime.StartContainer(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "key.pem"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	request := validSyncthingRequest()
+	request.Storage[0].HostPath = root
+	if err := prepareStructuredConfiguration(context.Background(), runtime, runtime, request, nil); err == nil {
+		t.Fatal("incomplete existing Syncthing identity was accepted")
+	}
+}
+
+func TestApplicationPlanValidationAcceptsBoundedNextcloudPlan(t *testing.T) {
+	if err := validateApplicationPlan(validNextcloudRequest()); err != nil {
+		t.Fatalf("valid Nextcloud plan rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"extra-port": func(r *protocol.Request) {
+			r.Services = append(r.Services, protocol.Service{ID: "https", Protocol: "http", ContainerPort: 443})
+		},
+		"environment": func(r *protocol.Request) {
+			r.Environment = []protocol.EnvVar{{Name: "NEXTCLOUD_ADMIN_USER", Value: "admin"}}
+		},
+		"forced-user": func(r *protocol.Request) {
+			r.RunAs = &protocol.RuntimeIdentity{UID: 33, GID: 33}
+		},
+		"external-storage": func(r *protocol.Request) {
+			r.ExternalStorage = []protocol.ExternalStorageBinding{{SlotID: "data", RootID: "storage-0123456789abcdef"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := validNextcloudRequest()
+			mutate(&q)
+			if err := validateApplicationPlan(q); err == nil {
+				t.Fatalf("accepted Nextcloud plan mutation %s", name)
+			}
+		})
 	}
 }
 
@@ -189,6 +882,127 @@ func TestTrustedRecreationRequiresGenerationAndStablePort(t *testing.T) {
 	}
 }
 
+func TestTrustedRecreationAllowsRecoveryAfterRuntimeRemoval(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	base := validFreshRSSRequest()
+	base.Version = 2
+	base.Bindings = []protocol.ServiceBinding{{ServiceID: "web", Transport: "tcp", ContainerPort: 80, Mode: "internal"}}
+	_, err = db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,plan_hash,data_path,exposure_mode,created_at,cleanup_state) VALUES(?,1,'removed-runtime',?,?, 'removed',?,'removed-plan',?,'loopback','now','clean')`, base.InstanceID, base.ApplicationID, base.ReleaseID, base.NetworkName, base.DataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO runtime_components(installation_id,runtime_generation,component_id,container_name,image_digest,state,created_at) VALUES(? ,1,'app','removed-container',?,'removed','now')`, base.InstanceID, base.Image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO runtime_generation_bindings(installation_id,runtime_generation,service_id,transport,container_port,mode,host_address,host_port) VALUES(?,1,'web','tcp',80,'internal','',0)`, base.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.RuntimeGeneration = 2
+	if err = validateTrustedRecreation(db, base); err != nil {
+		t.Fatalf("same-installation recovery after runtime removal rejected: %v", err)
+	}
+	base.RuntimeGeneration = 3
+	if err = validateTrustedRecreation(db, base); err == nil {
+		t.Fatal("runtime-removal recovery generation skip accepted")
+	}
+}
+
+func TestLegacyMultiOwnershipBackfillsOnlyExactTrustedTopology(t *testing.T) {
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := entries["paperless-ngx"].Manifest
+	nodes := make([]manifest.Component, 0, len(trusted.Components))
+	request := protocol.Request{InstanceID: "inst-paperless01", ApplicationID: trusted.ID, ReleaseID: trusted.Releases[0].Version, RuntimeGeneration: 5, NetworkName: "kitpro-net-inst-paperless01-g5", DataPath: "/srv/kitpro/apps/paperless-ngx/inst-paperless01/data", ExposureMode: "internal"}
+	for _, component := range trusted.Components {
+		var image string
+		for _, release := range trusted.Releases {
+			if release.Version == component.Release {
+				image = release.Registry + "/" + release.Repository + "@" + release.Digest
+			}
+		}
+		request.Components = append(request.Components, protocol.Component{ID: component.ID, Image: image, DependsOn: append([]string(nil), component.DependsOn...)})
+		nodes = append(nodes, manifest.Component{ID: component.ID, DependsOn: append([]string(nil), component.DependsOn...)})
+	}
+	topology, err := multicontainer.BuildTopology(nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name                                                       string
+		tamperImage, missing, mixedGeneration, unexpectedComponent bool
+	}{
+		{name: "exact"},
+		{name: "unexpected-image", tamperImage: true},
+		{name: "missing-component", missing: true},
+		{name: "mixed-generation", mixedGeneration: true},
+		{name: "unexpected-component", unexpectedComponent: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, openErr := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			defer db.Close()
+			if openErr = state.Migrate(context.Background(), db, true); openErr != nil {
+				t.Fatal(openErr)
+			}
+			for index, component := range request.Components {
+				if testCase.missing && index == len(request.Components)-1 {
+					continue
+				}
+				image := component.Image
+				if testCase.tamperImage && index == 0 {
+					image += "-tampered"
+				}
+				componentID := component.ID
+				if testCase.unexpectedComponent && index == 0 {
+					componentID = "unexpected"
+				}
+				generation := 4
+				if testCase.mixedGeneration && index == len(request.Components)-1 {
+					generation = 5
+				}
+				if _, openErr = db.Exec(`INSERT INTO component_ownership(installation_id,component_id,container_id,container_name,network_name,image_digest,runtime_generation,created_at) VALUES(?,?,?,?,?,?,?,'now')`, request.InstanceID, componentID, "container-"+componentID, "name-"+componentID, "legacy-network", image, generation); openErr != nil {
+					t.Fatal(openErr)
+				}
+			}
+			migrationErr := backfillLegacyMulti(db, request, topology, trusted)
+			if testCase.name != "exact" {
+				if migrationErr == nil {
+					t.Fatal("ambiguous legacy ownership was migrated")
+				}
+				return
+			}
+			if migrationErr != nil {
+				t.Fatal(migrationErr)
+			}
+			var status, hash string
+			var components int
+			if openErr = db.QueryRow(`SELECT status,topology_hash FROM runtime_generations WHERE installation_id=? AND runtime_generation=4`, request.InstanceID).Scan(&status, &hash); openErr != nil {
+				t.Fatal(openErr)
+			}
+			if openErr = db.QueryRow(`SELECT COUNT(*) FROM runtime_components WHERE installation_id=? AND runtime_generation=4`, request.InstanceID).Scan(&components); openErr != nil {
+				t.Fatal(openErr)
+			}
+			if status != "verification_required" || hash != topology.Hash || components != len(request.Components) {
+				t.Fatalf("status=%s hash=%s components=%d", status, hash, components)
+			}
+		})
+	}
+}
+
 func TestTrustedApplicationUpdateMayChangePinnedReleaseOnlyThroughUpdateOperation(t *testing.T) {
 	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
 	if err != nil {
@@ -213,36 +1027,6 @@ func TestTrustedApplicationUpdateMayChangePinnedReleaseOnlyThroughUpdateOperatio
 	base.Operation = "UpdateApplication"
 	if err = validateTrustedRecreation(db, base); err != nil {
 		t.Fatalf("trusted update transition rejected: %v", err)
-	}
-}
-
-func TestRuntimeRemovalRetainsTrustedInstallationForRecreate(t *testing.T) {
-	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err = state.Migrate(context.Background(), db, true); err != nil {
-		t.Fatal(err)
-	}
-	base := validFreshRSSRequest()
-	_, err = db.Exec(`INSERT INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation,application_id,release_id,exposure_mode,service_id,host_address,host_port,container_port,service_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, base.InstanceID, "container", "name", base.NetworkName, base.Image, base.DataPath, "now", 1, base.ApplicationID, base.ReleaseID, "loopback", "web", "127.0.0.1", 20000, 80, "http")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = markRuntimeRemoved(db, base.InstanceID); err != nil {
-		t.Fatal(err)
-	}
-	var containerID, containerName, networkName string
-	if err = db.QueryRow(`SELECT container_id,container_name,network_name FROM ownership WHERE instance_id=?`, base.InstanceID).Scan(&containerID, &containerName, &networkName); err != nil {
-		t.Fatalf("trusted installation was deleted: %v", err)
-	}
-	if containerID != "" || containerName != "" || networkName != "" {
-		t.Fatalf("disposable runtime identity retained: %q %q %q", containerID, containerName, networkName)
-	}
-	base.RuntimeGeneration, base.HostPort = 2, 20000
-	if err = validateTrustedRecreation(db, base); err != nil {
-		t.Fatalf("recreate after intentional runtime removal rejected: %v", err)
 	}
 }
 
@@ -295,6 +1079,74 @@ func TestGeneratedEnvironmentSecretPersistsAndIsNotReturnedAsMetadata(t *testing
 	}
 	if _, err = resolvedEnvironment(db, "inst-secret01", "", []protocol.EnvVar{{Name: "BAD", Secret: true, Generate: "weak"}}); err == nil {
 		t.Fatal("weak secret generator accepted")
+	}
+}
+
+func TestRevealApplicationCredentialUsesTrustedManifestAndInstallationState(t *testing.T) {
+	db, err := state.Open(filepath.Join(t.TempDir(), "helper.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = state.Migrate(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestEnvironment := entries["pihole"].Manifest.Environment
+	declaration := make([]protocol.EnvVar, 0, len(manifestEnvironment))
+	for _, variable := range manifestEnvironment {
+		declaration = append(declaration, protocol.EnvVar{Name: variable.Name, Value: variable.Value, Secret: variable.Secret, Generate: variable.Generate})
+	}
+	resolved, err := resolvedEnvironment(db, "inst-pihole01", "", declaration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimPrefix(resolved[1], "FTLCONF_webserver_api_password=")
+	if _, err = db.Exec(`INSERT INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,data_path,created_at,cleanup_state) VALUES(?,1,'seed','pihole','2026.09.0','active','network','/data','now','clean')`, "inst-pihole01"); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.Request{Version: 2, ID: "request-reveal01", Operation: "RevealApplicationCredential", InstanceID: "inst-pihole01", ApplicationID: "pihole", CredentialID: "admin-password"}
+	first, err := revealApplicationCredential(db, request)
+	if err != nil || first.ID != "admin-password" || first.Label != "Admin password" || first.Username != "" || first.Value != want {
+		t.Fatal("trusted credential disclosure did not match the generated runtime value")
+	}
+	second, err := revealApplicationCredential(db, request)
+	if err != nil || second.Value != first.Value {
+		t.Fatal("repeat reveal did not return the stable credential")
+	}
+	if _, err = db.Exec(`UPDATE runtime_generations SET status='removed' WHERE installation_id=?`, "inst-pihole01"); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := revealApplicationCredential(db, request)
+	if err != nil || retained.Value != first.Value {
+		t.Fatal("runtime removal discarded the retained credential")
+	}
+	if _, err = db.Exec(`UPDATE installation_secrets SET value=? WHERE installation_id=?`, strings.Repeat("b", 64), "inst-pihole01"); err != nil {
+		t.Fatal(err)
+	}
+	restored := secretValues{Version: 1, Values: []secretValue{{Component: "app", Name: "FTLCONF_webserver_api_password", Value: first.Value}}}
+	if err = replaceSecrets(context.Background(), db, "inst-pihole01", restored); err != nil {
+		t.Fatal(err)
+	}
+	afterRestore, err := revealApplicationCredential(db, request)
+	if err != nil || afterRestore.Value != first.Value {
+		t.Fatal("restored credential was not revealable")
+	}
+	for name, mutate := range map[string]func(*protocol.Request){
+		"arbitrary credential": func(r *protocol.Request) { r.CredentialID = "internal-key" },
+		"wrong application":    func(r *protocol.Request) { r.ApplicationID = "open-webui" },
+		"another installation": func(r *protocol.Request) { r.InstanceID = "inst-pihole02" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			mutate(&candidate)
+			if disclosure, revealErr := revealApplicationCredential(db, candidate); revealErr == nil || disclosure.Value != "" {
+				t.Fatal("unauthorized credential disclosure succeeded")
+			}
+		})
 	}
 }
 

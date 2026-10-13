@@ -1,11 +1,13 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -13,37 +15,73 @@ import (
 const MaxFrame = 64 * 1024
 
 type Request struct {
-	Version   int    `json:"version"`
-	ID        string `json:"request_id"`
-	Operation string `json:"operation"`
+	Version           int    `json:"version"`
+	ID                string `json:"request_id"`
+	OperationID       string `json:"operation_id,omitempty"`
+	Operation         string `json:"operation"`
+	OperationRevision int    `json:"operation_revision,omitempty"`
+	Deadline          string `json:"deadline,omitempty"`
 	// InstanceID is the stable installed-application identity; runtime
 	// incarnations are distinguished by RuntimeGeneration.
-	InstanceID        string                   `json:"instance_id"`
-	RuntimeGeneration int                      `json:"runtime_generation,omitempty"`
-	Image             string                   `json:"image,omitempty"`
-	ApplicationID     string                   `json:"application_id,omitempty"`
-	ReleaseID         string                   `json:"release_id,omitempty"`
-	NetworkName       string                   `json:"network_name,omitempty"`
-	DataPath          string                   `json:"data_path,omitempty"`
-	RestartPolicy     string                   `json:"restart_policy,omitempty"`
-	Command           []string                 `json:"command,omitempty"`
-	Environment       []EnvVar                 `json:"environment,omitempty"`
-	Storage           []StorageMount           `json:"storage,omitempty"`
-	ExposureMode      string                   `json:"exposure_mode,omitempty"`
-	HostAddress       string                   `json:"host_address,omitempty"`
-	HostPort          int                      `json:"host_port,omitempty"`
-	ServiceID         string                   `json:"service_id,omitempty"`
-	ContainerPort     int                      `json:"container_port,omitempty"`
-	ServiceProtocol   string                   `json:"service_protocol,omitempty"`
-	Services          []Service                `json:"services,omitempty"`
-	Components        []Component              `json:"components,omitempty"`
-	Hardware          []HardwareRequirement    `json:"hardware,omitempty"`
-	ExternalStorage   []ExternalStorageBinding `json:"external_storage,omitempty"`
-	RootID            string                   `json:"root_id,omitempty"`
-	RootName          string                   `json:"root_name,omitempty"`
-	RootPath          string                   `json:"root_path,omitempty"`
-	RootMode          string                   `json:"root_mode,omitempty"`
-	RunAs             *RuntimeIdentity         `json:"run_as,omitempty"`
+	InstanceID        string           `json:"instance_id"`
+	RuntimeGeneration int              `json:"runtime_generation,omitempty"`
+	Image             string           `json:"image,omitempty"`
+	ApplicationID     string           `json:"application_id,omitempty"`
+	ReleaseID         string           `json:"release_id,omitempty"`
+	NetworkName       string           `json:"network_name,omitempty"`
+	DataPath          string           `json:"data_path,omitempty"`
+	RestartPolicy     string           `json:"restart_policy,omitempty"`
+	Command           []string         `json:"command,omitempty"`
+	Environment       []EnvVar         `json:"environment,omitempty"`
+	Storage           []StorageMount   `json:"storage,omitempty"`
+	Bindings          []ServiceBinding `json:"bindings,omitempty"`
+	// Deprecated scalar exposure fields are accepted only so the helper can
+	// reject mixed/legacy mutation requests explicitly. Bindings is the sole
+	// authority for protocol-v2 application plans.
+	ExposureMode    string                   `json:"exposure_mode,omitempty"`
+	HostAddress     string                   `json:"host_address,omitempty"`
+	HostPort        int                      `json:"host_port,omitempty"`
+	ServiceID       string                   `json:"service_id,omitempty"`
+	ContainerPort   int                      `json:"container_port,omitempty"`
+	ServiceProtocol string                   `json:"service_protocol,omitempty"`
+	Services        []Service                `json:"services,omitempty"`
+	Components      []Component              `json:"components,omitempty"`
+	Hardware        []HardwareRequirement    `json:"hardware,omitempty"`
+	ExternalStorage []ExternalStorageBinding `json:"external_storage,omitempty"`
+	RootID          string                   `json:"root_id,omitempty"`
+	RootName        string                   `json:"root_name,omitempty"`
+	RootPath        string                   `json:"root_path,omitempty"`
+	RootMode        string                   `json:"root_mode,omitempty"`
+	RunAs           *RuntimeIdentity         `json:"run_as,omitempty"`
+	BackupID        string                   `json:"backup_id,omitempty"`
+	RepairAction    string                   `json:"repair_action,omitempty"`
+	CredentialID    string                   `json:"credential_id,omitempty"`
+	Configuration   *ConfigurationPolicy     `json:"configuration,omitempty"`
+	IngressRoutes   []IngressRoute           `json:"ingress_routes,omitempty"`
+	CertificateID   string                   `json:"certificate_id,omitempty"`
+	Hostname        string                   `json:"hostname,omitempty"`
+	CertificatePEM  string                   `json:"certificate_pem,omitempty"`
+	PrivateKeyPEM   string                   `json:"private_key_pem,omitempty"`
+	ACMEEmail       string                   `json:"acme_email,omitempty"`
+	ACMEDirectory   string                   `json:"acme_directory,omitempty"`
+	AcceptACMETerms bool                     `json:"accept_acme_terms,omitempty"`
+	ProviderID      string                   `json:"provider_id,omitempty"`
+	ProviderToken   string                   `json:"provider_token,omitempty"`
+	ProviderAccount string                   `json:"provider_account,omitempty"`
+	ProviderZone    string                   `json:"provider_zone,omitempty"`
+	ProviderTunnel  string                   `json:"provider_tunnel,omitempty"`
+	ConfirmRemote   bool                     `json:"confirm_remote,omitempty"`
+}
+type IngressRoute struct {
+	RouteID          string `json:"route_id"`
+	InstallationID   string `json:"installation_id"`
+	ServiceID        string `json:"service_id"`
+	Hostname         string `json:"hostname"`
+	ExposureMode     string `json:"exposure_mode"`
+	UpstreamProtocol string `json:"upstream_protocol"`
+	TLSPolicy        string `json:"tls_policy"`
+	CertificateID    string `json:"certificate_id,omitempty"`
+	ProviderID       string `json:"provider_id,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -63,6 +101,10 @@ type RuntimeIdentity struct {
 	UID int `json:"uid"`
 	GID int `json:"gid"`
 }
+type ConfigurationPolicy struct {
+	Type      string `json:"type"`
+	StorageID string `json:"storage_id"`
+}
 type ExternalStorageBinding struct {
 	SlotID string `json:"slot_id"`
 	RootID string `json:"root_id"`
@@ -71,6 +113,14 @@ type Service struct {
 	ID            string `json:"id"`
 	Protocol      string `json:"protocol"`
 	ContainerPort int    `json:"container_port"`
+}
+type ServiceBinding struct {
+	ServiceID     string `json:"service_id"`
+	Transport     string `json:"transport"`
+	ContainerPort int    `json:"container_port"`
+	Mode          string `json:"mode"`
+	HostAddress   string `json:"host_address,omitempty"`
+	HostPort      int    `json:"host_port,omitempty"`
 }
 type Component struct {
 	ID              string                   `json:"id"`
@@ -91,14 +141,75 @@ type HardwareRequirement struct {
 	CPUFallback bool   `json:"cpu_fallback,omitempty"`
 }
 type Response struct {
-	OK        bool   `json:"ok"`
-	RequestID string `json:"request_id,omitempty"`
-	Result    any    `json:"result,omitempty"`
-	Error     string `json:"error,omitempty"`
+	OK                bool   `json:"ok"`
+	RequestID         string `json:"request_id,omitempty"`
+	OperationID       string `json:"operation_id,omitempty"`
+	State             string `json:"state,omitempty"`
+	Phase             string `json:"phase,omitempty"`
+	ActiveOperationID string `json:"active_operation_id,omitempty"`
+	Result            any    `json:"result,omitempty"`
+	ErrorCode         string `json:"error_code,omitempty"`
+	Error             string `json:"error,omitempty"`
+	Retryable         bool   `json:"retryable,omitempty"`
+}
+
+// CredentialDisclosure is returned only by the explicit reveal operation.
+// It must never be persisted in operation state, logged, or embedded in normal
+// application resources.
+type CredentialDisclosure struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Username string `json:"username,omitempty"`
+	Value    string `json:"value"`
+}
+
+// SemanticOperationID returns the durable mutation identity. The request ID
+// fallback keeps protocol-v1 read paths and focused handler tests compatible;
+// protocol-v2 mutations are required to provide OperationID explicitly.
+func (r Request) SemanticOperationID() string {
+	if r.OperationID != "" {
+		return r.OperationID
+	}
+	return r.ID
+}
+
+// Canonical returns the bounded semantic request representation used for
+// idempotency. Transport request IDs, semantic operation IDs, deadlines, and
+// generated secret values cannot change the hash. JSON struct encoding fixes
+// field order, while omitempty makes nil and empty collections equivalent.
+// Slice order is retained because command, component, dependency, and manifest
+// order participate in the existing trusted-plan contract.
+func Canonical(r Request) ([]byte, error) {
+	r.ID = ""
+	r.OperationID = ""
+	r.Deadline = ""
+	r.CertificatePEM = ""
+	r.PrivateKeyPEM = ""
+	r.ProviderToken = ""
+	for i := range r.Environment {
+		if r.Environment[i].Secret {
+			r.Environment[i].Value = ""
+		}
+	}
+	for i := range r.Components {
+		for j := range r.Components[i].Environment {
+			if r.Components[i].Environment[j].Secret {
+				r.Components[i].Environment[j].Value = ""
+			}
+		}
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxFrame {
+		return nil, errors.New("canonical request too large")
+	}
+	return b, nil
 }
 
 func Hash(r Request) (string, error) {
-	b, e := json.Marshal(r)
+	b, e := Canonical(r)
 	if e != nil {
 		return "", e
 	}
@@ -117,7 +228,10 @@ func Read(r io.Reader) (Request, error) {
 	if _, e := io.ReadFull(r, b); e != nil {
 		return Request{}, e
 	}
-	d := json.NewDecoder(strings.NewReader(string(b)))
+	if err := rejectDuplicateKeys(b); err != nil {
+		return Request{}, err
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	var q Request
 	if e := d.Decode(&q); e != nil {
@@ -128,6 +242,69 @@ func Read(r io.Reader) (Request, error) {
 		return q, errors.New("trailing JSON")
 	}
 	return q, nil
+}
+
+func rejectDuplicateKeys(data []byte) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	if err := readUniqueValue(d); err != nil {
+		return err
+	}
+	if token, err := d.Token(); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("trailing JSON token %v", token)
+	}
+	return nil
+}
+
+func readUniqueValue(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("object key is not a string")
+			}
+			if seen[key] {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = true
+			if err := readUniqueValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("invalid object termination")
+		}
+	case '[':
+		for d.More() {
+			if err := readUniqueValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("invalid array termination")
+		}
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
+	return nil
 }
 
 func ReadResponse(r io.Reader) (Response, error) {

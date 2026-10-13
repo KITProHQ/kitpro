@@ -21,8 +21,8 @@ This matrix is a correctness-oriented starting point for the root, socket-activa
 | `MemoryDenyWriteExecute` | DEFER UNTIL IMPLEMENTATION | Validate against runtime/JIT behavior; do not assume. |
 | `SystemCallArchitectures` | ENABLE WITH EXCEPTION | Restrict to native architecture after runtime validation. |
 | `SystemCallFilter` | DEFER UNTIL IMPLEMENTATION | Build from measured syscall traces; never use a guessed denylist. |
-| `CapabilityBoundingSet` | ENABLE | Start empty; add only measured capability requirements. |
-| `AmbientCapabilities` | ENABLE | Empty. |
+| `CapabilityBoundingSet` | ENABLE WITH EXCEPTION | `CAP_CHOWN` preserves catalog-declared managed ownership. `CAP_DAC_READ_SEARCH` reads application-owned backup data without granting write bypass. |
+| `AmbientCapabilities` | ENABLE WITH EXCEPTION | Match the two bounded filesystem capabilities above. |
 | `UMask` | ENABLE | Use a restrictive mask suitable for root-owned state. |
 | `RuntimeDirectory` | ENABLE | Systemd owns the transient socket directory and mode. |
 | `StateDirectory` | ENABLE WITH EXCEPTION | Use for helper-owned durable state where packaging permits; audit/storage paths may be separate. |

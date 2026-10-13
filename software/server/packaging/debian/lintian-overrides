@@ -2,6 +2,9 @@
 # helper has no runtime libc dependency on the Debian 13 amd64 baseline.
 kitpro-server: statically-linked-binary [usr/bin/kitpro-api]
 kitpro-server: statically-linked-binary [usr/libexec/kitpro-helper]
+kitpro-server: statically-linked-binary [usr/libexec/kitpro-acme]
+kitpro-server: statically-linked-binary [usr/libexec/kitpro-cloudflare]
+kitpro-server: statically-linked-binary [usr/libexec/kitpro-ingress-validator]
 
 # Upgrade invokes currently installed binaries by fixed package paths before
 # unpack so each trust domain creates its own production SQLite backup.

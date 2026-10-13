@@ -1,38 +1,81 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/kitpro/kitpro/software/server/internal/backup"
-	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
-	"github.com/kitpro/kitpro/software/server/internal/catalog"
-	"github.com/kitpro/kitpro/software/server/internal/docker"
-	"github.com/kitpro/kitpro/software/server/internal/exposure"
-	"github.com/kitpro/kitpro/software/server/internal/hardware"
-	"github.com/kitpro/kitpro/software/server/internal/maintenance"
-	"github.com/kitpro/kitpro/software/server/internal/manifest"
-	"github.com/kitpro/kitpro/software/server/internal/multicontainer"
-	"github.com/kitpro/kitpro/software/server/internal/ownership"
-	"github.com/kitpro/kitpro/software/server/internal/protocol"
-	"github.com/kitpro/kitpro/software/server/internal/state"
-	"golang.org/x/sys/unix"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kitpro/kitpro/software/server/internal/appconfig"
+	"github.com/kitpro/kitpro/software/server/internal/backup"
+	"github.com/kitpro/kitpro/software/server/internal/buildinfo"
+	"github.com/kitpro/kitpro/software/server/internal/catalog"
+	"github.com/kitpro/kitpro/software/server/internal/containers"
+	"github.com/kitpro/kitpro/software/server/internal/docker"
+	"github.com/kitpro/kitpro/software/server/internal/exposure"
+	"github.com/kitpro/kitpro/software/server/internal/hardware"
+	"github.com/kitpro/kitpro/software/server/internal/helperops"
+	"github.com/kitpro/kitpro/software/server/internal/hostbackup"
+	"github.com/kitpro/kitpro/software/server/internal/lifecycle"
+	"github.com/kitpro/kitpro/software/server/internal/maintenance"
+	"github.com/kitpro/kitpro/software/server/internal/manifest"
+	"github.com/kitpro/kitpro/software/server/internal/multicontainer"
+	"github.com/kitpro/kitpro/software/server/internal/ownership"
+	"github.com/kitpro/kitpro/software/server/internal/platform"
+	"github.com/kitpro/kitpro/software/server/internal/podman"
+	"github.com/kitpro/kitpro/software/server/internal/protocol"
+	"github.com/kitpro/kitpro/software/server/internal/state"
+	"golang.org/x/sys/unix"
 )
+
+var detectPlatform = platform.Detect
+
+var newContainerRuntime = func() containers.Runtime {
+	name, _ := configuredRuntimeName()
+	if name == "podman" {
+		return podman.New()
+	}
+	return docker.New()
+}
+
+var verifyHostPrerequisites = func(ctx context.Context) error {
+	runtimeName, err := configuredRuntimeName()
+	if err != nil {
+		return err
+	}
+	if runtimeName != "docker" {
+		return nil
+	}
+	return docker.New().VerifyNetworkPrerequisites(ctx)
+}
 
 func main() {
 	if handleMaintenance(os.Args[1:]) {
 		return
 	}
+	stateLock, err := acquireStateLock()
+	if err != nil {
+		fatal(err.Error())
+	}
+	defer stateLock.Close()
+	runtimeName, err := configuredRuntimeName()
+	if err != nil {
+		fatal(err.Error())
+	}
+	slog.Info("container runtime selected", "component", "helper", "runtime", runtimeName)
 	sock := env("KITPRO_HELPER_SOCKET", "/run/kitpro/helper.sock")
 	u, e := expectedAPIUID()
 	if e != nil {
@@ -45,6 +88,39 @@ func main() {
 	defer db.Close()
 	if e = state.Migrate(context.Background(), db, true); e != nil {
 		fatal(e.Error())
+	}
+	coordinator := helperops.Coordinator{DB: db}
+	if recovered, recoverErr := coordinator.RecoverInterrupted(context.Background()); recoverErr != nil {
+		fatal(recoverErr.Error())
+	} else if recovered > 0 {
+		slog.Warn("interrupted helper operations classified", "component", "helper", "count", recovered)
+	}
+	if recovered, recoverErr := recoverInterruptedRestores(context.Background(), db, coordinator); recoverErr != nil {
+		fatal(recoverErr.Error())
+	} else if recovered > 0 {
+		slog.Warn("interrupted application restores recovered", "component", "helper", "count", recovered)
+	}
+	cleanupCommittedRestores(context.Background(), db)
+	if lifecycleRuntime, ok := newContainerRuntime().(containers.LifecycleRuntime); ok {
+		if _, backfillErr := backfillLegacyMultiAtStartup(context.Background(), db); backfillErr != nil {
+			fatal(backfillErr.Error())
+		}
+		if verificationErr := prepareAllMigratedSingleConfigurations(context.Background(), db, lifecycleRuntime); verificationErr != nil {
+			fatal(verificationErr.Error())
+		}
+		if recovered, recoverErr := lifecycle.RecoverInterrupted(context.Background(), lifecycle.Store{DB: db}, lifecycleRuntime); recoverErr != nil {
+			fatal(recoverErr.Error())
+		} else if recovered > 0 {
+			slog.Warn("interrupted lifecycle generations reconciled", "component", "helper", "count", recovered)
+		}
+		startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		reconciled, reconcileErr := lifecycle.ReconcileAll(startupCtx, lifecycle.Store{DB: db}, lifecycleRuntime)
+		cancel()
+		if reconcileErr != nil {
+			fatal(reconcileErr.Error())
+		} else if reconciled > 0 {
+			slog.Info("managed installations observed", "component", "helper", "count", reconciled)
+		}
 	}
 	stopInstallationsWithUnavailableStorage(db)
 	var l net.Listener
@@ -65,9 +141,30 @@ func main() {
 	for {
 		c, e := l.Accept()
 		if e == nil {
-			go serve(c, u, db)
+			go serve(c, u, db, coordinator)
 		}
 	}
+}
+
+func configuredRuntimeName() (string, error) {
+	p, err := detectPlatform()
+	if err != nil {
+		return "", err
+	}
+	return selectRuntime(os.Getenv("KITPRO_CONTAINER_RUNTIME"), p)
+}
+
+func selectRuntime(explicit string, p platform.Platform) (string, error) {
+	if explicit != "" {
+		if explicit != "docker" && explicit != "podman" {
+			return "", fmt.Errorf("unsupported KITPRO_CONTAINER_RUNTIME %q", explicit)
+		}
+		return explicit, nil
+	}
+	if !p.Installable || p.ContainerRuntime == "" {
+		return "", fmt.Errorf("unsupported host platform %s %s", p.ID, p.Version)
+	}
+	return p.ContainerRuntime, nil
 }
 
 func expectedAPIUID() (uint32, error) {
@@ -112,6 +209,15 @@ func handleMaintenance(args []string) bool {
 		}
 		slog.Info("database migration completed", "component", "helper", "event", "migration_completed", "result", "success")
 		return true
+	case "--verify-host-prerequisites":
+		if len(args) != 1 {
+			fatal("--verify-host-prerequisites accepts no arguments")
+		}
+		if err := verifyHostPrerequisites(context.Background()); err != nil {
+			fatal(err.Error())
+		}
+		fmt.Println("KITPro host prerequisites verified")
+		return true
 	case "--prepare-upgrade":
 		if len(args) != 2 {
 			fatal("--prepare-upgrade requires target version")
@@ -138,12 +244,46 @@ func handleMaintenance(args []string) bool {
 		}
 		slog.Info("database verification completed", "component", "helper", "event", "database_verification_completed", "result", "success")
 		return true
+	case "--restore-host-state":
+		if len(args) != 3 || args[2] != "--confirm-services-stopped" {
+			fatal("usage: kitpro-helper --restore-host-state ABSOLUTE_ARCHIVE --confirm-services-stopped")
+		}
+		if os.Geteuid() != 0 {
+			fatal("host-state restore requires local root authority")
+		}
+		stateLock, err := acquireStateLock()
+		if err != nil {
+			fatal("KITPro helper is active; stop control, helper, ingress, ACME, and Cloudflare services before restore")
+		}
+		defer stateLock.Close()
+		if err = hostbackup.Restore(context.Background(), hostbackup.RestoreOptions{Archive: args[1], StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")}); err != nil {
+			fatal(err.Error())
+		}
+		slog.Info("host state restored with ingress disabled", "component", "helper", "event", "host_state_restored", "result", "success")
+		return true
+	case "--resolve-operation":
+		if len(args) != 3 || args[2] != "--release-as-failed" {
+			fatal("--resolve-operation requires an operation ID and --release-as-failed")
+		}
+		db, err := state.Open(env("KITPRO_HELPER_DB", "/var/lib/kitpro-helper/helper.db"))
+		if err == nil {
+			defer db.Close()
+			err = state.Migrate(context.Background(), db, true)
+		}
+		if err == nil {
+			err = (helperops.Coordinator{DB: db}).ResolveActionRequired(context.Background(), args[1])
+		}
+		if err != nil {
+			fatal(err.Error())
+		}
+		slog.Info("operation recovery lock released as failed", "component", "helper", "operation_id", args[1])
+		return true
 	default:
 		fatal("unknown argument")
 	}
 	return true
 }
-func serve(c net.Conn, api uint32, db *sql.DB) {
+func serve(c net.Conn, api uint32, db *sql.DB, coordinator helperops.Coordinator) {
 	defer c.Close()
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
@@ -163,36 +303,123 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 		if e != nil {
 			return
 		}
-		h, _ := protocol.Hash(r)
-		_, _ = db.Exec("INSERT OR REPLACE INTO receipts(operation_id,request_hash,operation_type,instance_id,phase,outcome,container_id,created_at) VALUES(?,?,?,?,?,?,?,?)", r.ID, h, r.Operation, r.InstanceID, "received", "accepted", "", time.Now().UTC().Format(time.RFC3339Nano))
-		slog.Default().Info("helper request", "event", "helper_request_accepted", "operation_id", r.ID, "instance_id", r.InstanceID, "operation", r.Operation)
-		if r.Version != 1 {
+		slog.Default().Info("helper request", "event", "helper_request_received", "request_id", r.ID, "operation_id", r.OperationID, "instance_id", r.InstanceID, "operation", r.Operation)
+		if r.Version != 1 && r.Version != 2 {
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "unsupported protocol"})
+			continue
+		}
+		if r.Operation == "GetOperation" {
+			response, err := coordinator.Response(context.Background(), r.OperationID, r.ID)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "OperationNotFound", Error: "operation not found"})
+			} else {
+				protocol.Write(c, response)
+			}
+			continue
+		}
+		if r.Operation == "GetReconciliation" {
+			result, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), r.InstanceID)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "ReconciliationNotFound", Error: "reconciliation state not found"})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+			}
+			continue
+		}
+		if isDurableMutation(r.Operation) {
+			if r.Version != 2 {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "ProtocolUpgradeRequired", Error: "lifecycle mutations require protocol version 2"})
+				continue
+			}
+			if (r.Operation == "ReconcileInstallation" || r.Operation == "RepairInstallation") && r.InstanceID == "" {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "InvalidRequest", Error: "installation ID is required"})
+				continue
+			}
+			if r.Operation == "RepairInstallation" && r.RepairAction != lifecycle.RepairStartActive && r.RepairAction != lifecycle.RepairCleanupResources && r.RepairAction != lifecycle.RepairAcknowledgeRetainedLoss {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "InvalidRequest", Error: "unsupported repair action"})
+				continue
+			}
+			if r.Operation == "InstallApplication" && r.RepairAction != "" {
+				reconciliation, reconcileErr := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), r.InstanceID)
+				if r.RepairAction != lifecycle.RepairRecreateGeneration || reconcileErr != nil || reconciliation.CheckedGeneration != r.RuntimeGeneration-1 || reconciliation.RecommendedAction != lifecycle.RepairRecreateGeneration {
+					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "InvalidRepair", Error: "controlled recreation requires current helper reconciliation evidence"})
+					continue
+				}
+			}
+			if createsApplicationNetwork(r.Operation) {
+				if err := verifyHostPrerequisites(context.Background()); err != nil {
+					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "HostPrerequisiteFailed", Error: err.Error()})
+					continue
+				}
+			}
+			if r.InstanceID != "" && r.Operation != "ReconcileInstallation" {
+				blocked, blockErr := restoreBlocksInstallation(context.Background(), db, r.InstanceID, r.OperationID)
+				if blockErr != nil {
+					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "OperationStateUnavailable", Error: "restore recovery state unavailable"})
+					continue
+				}
+				if blocked {
+					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "RestoreRecoveryRequired", Error: "installation has an unresolved restore; lifecycle mutation is blocked"})
+					continue
+				}
+			}
+			decision, beginErr := coordinator.Begin(context.Background(), r, api, operationScope(r))
+			if beginErr != nil {
+				if decision.Response.Error != "" {
+					protocol.Write(c, decision.Response)
+				} else {
+					protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "OperationStateUnavailable", Error: beginErr.Error()})
+				}
+				continue
+			}
+			if !decision.Execute {
+				protocol.Write(c, decision.Response)
+				continue
+			}
+			if err := coordinator.AuthorizeMutation(context.Background(), r.OperationID, decision.FencingToken); err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "OperationFenceRejected", Error: err.Error()})
+				continue
+			}
+			var resultFrame bytes.Buffer
+			executeMutation(&resultFrame, db, r, coordinator, decision.FencingToken)
+			response, err := protocol.ReadResponse(&resultFrame)
+			if err != nil {
+				response = protocol.Response{RequestID: r.ID, OperationID: r.OperationID, ErrorCode: "HandlerProtocolFailure", Error: "mutation handler did not return a valid result"}
+			}
+			response.RequestID = r.ID
+			response.OperationID = r.OperationID
+			response, err = coordinator.Complete(context.Background(), r.OperationID, decision.FencingToken, response)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, OperationID: r.OperationID, State: helperops.StateActionRequired, ErrorCode: "RecoveryRequired", Error: err.Error()})
+			} else {
+				protocol.Write(c, response)
+			}
 			continue
 		}
 		switch r.Operation {
 		case "Ping":
 			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "ok"}})
-		case "InspectDocker":
-			v, e := docker.New().Version()
+		case "InspectRuntime", "InspectDocker":
+			runtime := newContainerRuntime()
+			v, e := runtime.Version()
 			if e != nil {
 				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 			} else {
+				v["KitproRuntime"] = runtime.Name()
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: v})
 			}
-		case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication":
-			createApplication(c, db, r)
-		case "StopApplication", "RemoveApplication":
-			remove(c, db, r)
-		case "StartApplication":
-			start(c, db, r)
-		case "ReconcileTestWorkload":
-			reconcile(c, db, r)
+		case "InspectDockerAddressPool":
+			if runtimeName, _ := configuredRuntimeName(); runtimeName != "docker" {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"state": "not-applicable", "reason_code": "non-docker-runtime", "summary": "The selected container runtime does not use Docker default address pools"}})
+			} else {
+				assessment := docker.New().AssessNetworkPrerequisites(context.Background())
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: assessment})
+			}
 		case "GetHardwareInventory":
-			d := docker.New()
+			d := newContainerRuntime()
 			info, err := d.Info()
 			if err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "Docker runtime inventory unavailable"})
+				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "container runtime inventory unavailable"})
 				break
 			}
 			inv, err := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
@@ -208,26 +435,12 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 				break
 			}
 			protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
-		case "RegisterStorageRoot":
-			result, err := registerStorageRoot(db, r)
-			if err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			} else {
-				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
-			}
 		case "ListStorageRoots":
 			result, err := listStorageRoots(db)
 			if err != nil {
 				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "storage inventory unavailable"})
 			} else {
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"roots": result}})
-			}
-		case "RemoveStorageRoot":
-			err := removeStorageRoot(db, r.RootID)
-			if err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			} else {
-				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "removed"}})
 			}
 		case "GetStorageAssignments":
 			result, err := storageAssignments(db, r.InstanceID)
@@ -236,15 +449,198 @@ func serve(c net.Conn, api uint32, db *sql.DB) {
 			} else {
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"assignments": result}})
 			}
-		case "BackupHelperState":
-			path, be := backup.Vacuum(context.Background(), db, "/var/lib/kitpro-helper/backups", r.ID+".db")
-			if be != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: be.Error()})
+		case "RevealApplicationCredential":
+			result, err := revealApplicationCredential(db, r)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "CredentialUnavailable", Error: "application credential unavailable"})
 			} else {
-				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"path": path}})
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+			}
+		case "InspectCloudflareProvider":
+			result, err := inspectCloudflareProvider(context.Background(), db, r)
+			if err != nil {
+				protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "CloudflareUnavailable", Error: "Cloudflare provider health unavailable", Result: result})
+			} else {
+				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 			}
 		default:
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "operation not permitted"})
+		}
+	}
+}
+
+func revealApplicationCredential(db *sql.DB, request protocol.Request) (protocol.CredentialDisclosure, error) {
+	if request.Version != 2 || !strings.HasPrefix(request.InstanceID, "inst-") || len(request.InstanceID) < 13 || len(request.InstanceID) > 80 || request.ApplicationID == "" || request.CredentialID == "" {
+		return protocol.CredentialDisclosure{}, errors.New("invalid credential request")
+	}
+	entries, err := catalog.Load()
+	if err != nil {
+		return protocol.CredentialDisclosure{}, errors.New("trusted catalog unavailable")
+	}
+	entry, ok := entries[request.ApplicationID]
+	if !ok {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	credential, ok := manifest.FindPresentedCredential(entry.Manifest, request.CredentialID)
+	if !ok {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	var applicationID string
+	if err = db.QueryRow(`SELECT application_id FROM runtime_generations WHERE installation_id=? AND application_id=? ORDER BY runtime_generation DESC LIMIT 1`, request.InstanceID, request.ApplicationID).Scan(&applicationID); err != nil || applicationID != request.ApplicationID {
+		return protocol.CredentialDisclosure{}, errors.New("installation credential unavailable")
+	}
+	var value string
+	if err = db.QueryRow(`SELECT value FROM installation_secrets WHERE installation_id=? AND component_id=? AND name=?`, request.InstanceID, credential.ComponentID, credential.EnvironmentName).Scan(&value); err != nil || len(value) != 64 {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	if _, err = hex.DecodeString(value); err != nil {
+		return protocol.CredentialDisclosure{}, errors.New("application credential unavailable")
+	}
+	return protocol.CredentialDisclosure{ID: credential.ID, Label: credential.Label, Username: credential.Username, Value: value}, nil
+}
+
+func isDurableMutation(operation string) bool {
+	switch operation {
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup", "ApplyIngressGeneration", "InstallCertificateMaterial", "IssueACMECertificate", "RenewACMECertificate", "ConfigureCloudflareProvider", "EnableCloudflareProvider", "DisableCloudflareProvider", "AddCloudflareRoute", "RemoveCloudflareRemoteRoute", "UnlinkCloudflareProvider", "DeleteCloudflareRemoteTunnel":
+		return true
+	default:
+		return false
+	}
+}
+
+func createsApplicationNetwork(operation string) bool {
+	switch operation {
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication":
+		return true
+	default:
+		return false
+	}
+}
+
+func operationScope(r protocol.Request) string {
+	if r.InstanceID != "" {
+		return r.InstanceID
+	}
+	if r.Operation == "RegisterStorageRoot" || r.Operation == "RemoveStorageRoot" {
+		return "host-storage"
+	}
+	if r.Operation == "ApplyIngressGeneration" || r.Operation == "InstallCertificateMaterial" || r.Operation == "IssueACMECertificate" || r.Operation == "RenewACMECertificate" {
+		return "host-ingress"
+	}
+	if strings.Contains(r.Operation, "Cloudflare") {
+		return "host-provider"
+	}
+	return "helper-state"
+}
+
+func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator helperops.Coordinator, fencingToken int64) {
+	switch r.Operation {
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication":
+		createApplication(w, db, r, coordinator, fencingToken)
+	case "StopApplication", "RemoveApplication":
+		changeApplicationState(w, db, r, coordinator, fencingToken, map[string]string{"StopApplication": "stop", "RemoveApplication": "remove"}[r.Operation])
+	case "StartApplication":
+		changeApplicationState(w, db, r, coordinator, fencingToken, "start")
+	case "RestartApplication":
+		changeApplicationState(w, db, r, coordinator, fencingToken, "restart")
+	case "ReconcileInstallation":
+		runtime, ok := newContainerRuntime().(containers.LifecycleRuntime)
+		if !ok {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: "reconciliation requires the supported Docker lifecycle runtime"})
+			return
+		}
+		_ = prepareMigratedSingleConfiguration(context.Background(), db, runtime, r.InstanceID)
+		result, err := (lifecycle.Reconciler{Runtime: runtime, Store: lifecycle.Store{DB: db}}).Reconcile(context.Background(), r.InstanceID)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "RepairInstallation":
+		runtime, ok := newContainerRuntime().(containers.LifecycleRuntime)
+		if !ok {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: "repair requires the supported Docker lifecycle runtime"})
+			return
+		}
+		_ = prepareMigratedSingleConfiguration(context.Background(), db, runtime, r.InstanceID)
+		result, err := (lifecycle.Repairer{Runtime: runtime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Repair(context.Background(), r.InstanceID, r.OperationID, fencingToken, r.RepairAction)
+		if err != nil {
+			var unknown lifecycle.UnknownOutcomeError
+			if errors.As(err, &unknown) {
+				protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "RecoveryRequired", Error: err.Error()})
+			} else {
+				protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+			}
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "RegisterStorageRoot":
+		result, err := registerStorageRoot(db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "RemoveStorageRoot":
+		err := removeStorageRoot(db, r.RootID)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "removed"}})
+		}
+	case "BackupHelperState":
+		result, err := hostbackup.Create(context.Background(), hostbackup.CreateOptions{DB: db, Destination: env("KITPRO_HELPER_BACKUP_DIR", "/var/lib/kitpro-helper/backups"), Name: r.SemanticOperationID() + ".kitpro-host-state.tar.gz", OperationID: r.SemanticOperationID(), StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")})
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"path": result.Path, "sha256": result.SHA256, "contains_secrets": true, "remote_cloudflare_resources_included": false, "generated_ingress_runtime_included": false}})
+		}
+	case "CreateApplicationBackup":
+		result, err := createApplicationBackup(context.Background(), db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "RestoreApplicationBackup":
+		result, err := restoreApplicationBackupWithFence(context.Background(), db, r, fencingToken)
+		if err != nil {
+			needsRecovery, stateErr := restoreOperationNeedsRecovery(context.Background(), db, r.OperationID)
+			if stateErr != nil || needsRecovery {
+				protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "RecoveryRequired", Error: err.Error()})
+			} else {
+				protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
+			}
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "ApplyIngressGeneration":
+		result, err := applyIngressGeneration(context.Background(), db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: ingressErrorCode(err), Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "InstallCertificateMaterial":
+		result, err := installCertificateMaterial(context.Background(), db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "CertificateRejected", Error: "certificate material was rejected"})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "IssueACMECertificate", "RenewACMECertificate":
+		result, err := issueACMECertificate(context.Background(), db, r, r.Operation == "RenewACMECertificate")
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "ACMERejected", Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+		}
+	case "ConfigureCloudflareProvider", "EnableCloudflareProvider", "DisableCloudflareProvider", "AddCloudflareRoute", "RemoveCloudflareRemoteRoute", "UnlinkCloudflareProvider", "DeleteCloudflareRemoteTunnel":
+		result, err := cloudflareOperation(context.Background(), db, r)
+		if err != nil {
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "CloudflareRejected", Error: err.Error()})
+		} else {
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 		}
 	}
 }
@@ -258,7 +654,7 @@ func hardwareAssignmentView(db *sql.DB, installation string) (map[string]any, er
 		return nil, err
 	}
 	defer rows.Close()
-	info, _ := docker.New().Info()
+	info, _ := newContainerRuntime().Info()
 	inv, _ := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
 	assignments := []map[string]any{}
 	for rows.Next() {
@@ -278,7 +674,7 @@ func hardwareAssignmentView(db *sql.DB, installation string) (map[string]any, er
 }
 func validateApplicationPlan(r protocol.Request) error {
 	digest := r.Image[strings.LastIndex(r.Image, "@sha256:")+1:]
-	if r.ApplicationID == "" || r.ReleaseID == "" || r.InstanceID == "" || (!strings.HasPrefix(r.Image, "docker.io/") && !strings.HasPrefix(r.Image, "ghcr.io/")) || !strings.Contains(r.Image, "@sha256:") || len(digest) != 71 {
+	if r.ApplicationID == "" || r.ReleaseID == "" || r.InstanceID == "" || (!strings.HasPrefix(r.Image, "docker.io/") && !strings.HasPrefix(r.Image, "ghcr.io/") && !strings.HasPrefix(r.Image, "codeberg.org/")) || !strings.Contains(r.Image, "@sha256:") || len(digest) != 71 {
 		return fmt.Errorf("invalid application plan")
 	}
 	for _, c := range digest[7:] {
@@ -321,6 +717,9 @@ func validateApplicationPlan(r protocol.Request) error {
 	if !runtimeIdentityEqual(r.RunAs, entry.Manifest.RunAs) {
 		return fmt.Errorf("trusted runtime identity mismatch")
 	}
+	if !configurationPolicyEqual(r.Configuration, entry.Manifest.Configuration) {
+		return fmt.Errorf("trusted structured configuration policy mismatch")
+	}
 	for i, command := range entry.Manifest.Command {
 		if r.Command[i] != command {
 			return fmt.Errorf("trusted command mismatch")
@@ -342,40 +741,8 @@ func validateApplicationPlan(r protocol.Request) error {
 			return fmt.Errorf("trusted service plan mismatch")
 		}
 	}
-	if r.ExposureMode != "internal" && r.ExposureMode != "loopback" && r.ExposureMode != "lan" {
-		return fmt.Errorf("invalid exposure mode")
-	}
-	if r.ExposureMode == "internal" && (r.HostAddress != "" || (r.HostPort != 0 && (r.HostPort < exposure.FirstPort || r.HostPort > exposure.LastPort))) {
-		return fmt.Errorf("internal exposure cannot bind")
-	}
-	if r.ExposureMode == "loopback" && r.HostAddress != "127.0.0.1" {
-		return fmt.Errorf("invalid loopback address")
-	}
-	if r.ExposureMode == "lan" && (net.ParseIP(r.HostAddress) == nil || net.ParseIP(r.HostAddress).IsUnspecified() || net.ParseIP(r.HostAddress).IsMulticast() || net.ParseIP(r.HostAddress).IsLinkLocalUnicast()) {
-		return fmt.Errorf("invalid LAN address")
-	}
-	if r.ExposureMode == "lan" && (env("KITPRO_LAN_BIND_ADDRESS", "") == "" || r.HostAddress != env("KITPRO_LAN_BIND_ADDRESS", "")) {
-		return fmt.Errorf("LAN address is not configured host address")
-	}
-	if r.ExposureMode == "loopback" || r.ExposureMode == "lan" {
-		if r.ServiceID == "" || r.ContainerPort == 0 || r.ServiceProtocol == "" {
-			return fmt.Errorf("service declaration required")
-		}
-		found := false
-		for _, s := range r.Services {
-			if s.ID == r.ServiceID {
-				if s.ContainerPort != r.ContainerPort || s.Protocol != r.ServiceProtocol {
-					return fmt.Errorf("service declaration mismatch")
-				}
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("service not declared")
-		}
-		if r.HostPort < 20000 || r.HostPort > 29999 || r.ContainerPort < 1 || r.ContainerPort > 65535 {
-			return fmt.Errorf("invalid exposure binding")
-		}
+	if err := validateTrustedBindings(r, entry.Manifest); err != nil {
+		return err
 	}
 	for _, c := range r.Command {
 		if c == "" || strings.ContainsAny(c, "\r\n") || c == "/bin/sh" || c == "/bin/bash" || c == "-c" {
@@ -388,7 +755,7 @@ func validateApplicationPlan(r protocol.Request) error {
 		}
 	}
 	for _, s := range r.Storage {
-		if s.ID == "" || s.ContainerPath == "" || !strings.HasPrefix(s.HostPath, "/srv/kitpro/apps/") || strings.Contains(s.HostPath, "..") || strings.Contains(s.ContainerPath, "..") || strings.Contains(s.HostPath, "docker.sock") || s.ContainerPath == "/" {
+		if s.ID == "" || s.ContainerPath == "" || !strings.HasPrefix(s.HostPath, "/srv/kitpro/apps/") || strings.Contains(s.HostPath, "..") || strings.Contains(s.ContainerPath, "..") || containsRuntimeSocket(s.HostPath) || containsRuntimeSocket(s.ContainerPath) || s.ContainerPath == "/" {
 			return fmt.Errorf("invalid storage mapping")
 		}
 	}
@@ -414,6 +781,22 @@ func runtimeIdentityEqual(got *protocol.RuntimeIdentity, want *manifest.RuntimeI
 	return got.UID == want.UID && got.GID == want.GID
 }
 
+func configurationPolicyEqual(got *protocol.ConfigurationPolicy, want *manifest.ConfigurationPolicy) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return got.Type == want.Type && got.StorageID == want.StorageID
+}
+
+func containsRuntimeSocket(value string) bool {
+	for _, component := range strings.Split(value, "/") {
+		if component == "docker.sock" || component == "podman.sock" || component == "containerd.sock" {
+			return true
+		}
+	}
+	return false
+}
+
 func externalBindingsEqual(got []protocol.ExternalStorageBinding, want []manifest.ExternalStorage) bool {
 	if len(got) != len(want) {
 		return false
@@ -427,19 +810,19 @@ func externalBindingsEqual(got []protocol.ExternalStorageBinding, want []manifes
 }
 
 type runtimeHardware struct {
-	Devices     []docker.DeviceMapping
-	Requests    []docker.DeviceRequest
+	Devices     []containers.DeviceMapping
+	Requests    []containers.DeviceRequest
 	Assignments []hardware.Assignment
 	CPU         []string
 }
 
-func resolveHardware(d *docker.Client, requirements []protocol.HardwareRequirement) (runtimeHardware, error) {
+func resolveHardware(d containers.Runtime, requirements []protocol.HardwareRequirement) (runtimeHardware, error) {
 	if len(requirements) == 0 {
 		return runtimeHardware{}, nil
 	}
 	info, err := d.Info()
 	if err != nil {
-		return runtimeHardware{}, fmt.Errorf("Docker runtime inventory unavailable: %w", err)
+		return runtimeHardware{}, fmt.Errorf("container runtime inventory unavailable: %w", err)
 	}
 	inv, err := hardware.Discover(hardware.ParseDockerRuntimes(info["Runtimes"]))
 	if err != nil {
@@ -457,10 +840,10 @@ func resolveHardware(d *docker.Client, requirements []protocol.HardwareRequireme
 		}
 		out.Assignments = append(out.Assignments, assignment)
 		if assignment.NVIDIARuntime {
-			out.Requests = append(out.Requests, docker.DeviceRequest{Driver: "nvidia", Count: -1, Capabilities: [][]string{{"gpu"}}})
+			out.Requests = append(out.Requests, containers.DeviceRequest{Driver: "nvidia", Count: -1, Capabilities: [][]string{{"gpu"}}})
 		}
 		for _, node := range assignment.Devices {
-			out.Devices = append(out.Devices, docker.DeviceMapping{PathOnHost: node.Path, PathInContainer: node.Path, CgroupPermissions: "rwm"})
+			out.Devices = append(out.Devices, containers.DeviceMapping{PathOnHost: node.Path, PathInContainer: node.Path, CgroupPermissions: "rwm"})
 		}
 	}
 	return out, nil
@@ -511,7 +894,7 @@ func validateHardwareObservation(db *sql.DB, installation, component string, hos
 			continue
 		}
 		if inv == nil {
-			info, infoErr := docker.New().Info()
+			info, infoErr := newContainerRuntime().Info()
 			if infoErr != nil {
 				return fmt.Errorf("accelerator inventory unavailable")
 			}
@@ -655,32 +1038,106 @@ func validateMultiComponentPlan(r protocol.Request, m manifest.Manifest) error {
 	if _, err := multicontainer.StartOrder(components); err != nil {
 		return err
 	}
-	if r.ExposureMode != "internal" && r.ExposureMode != "loopback" && r.ExposureMode != "lan" {
-		return fmt.Errorf("invalid exposure mode")
+	return validateTrustedBindings(r, m)
+}
+
+func validateTrustedBindings(r protocol.Request, m manifest.Manifest) error {
+	legacyScalar := r.ExposureMode != "" || r.ServiceID != "" || r.HostAddress != "" || r.HostPort != 0 || r.ContainerPort != 0 || r.ServiceProtocol != ""
+	if legacyScalar && (r.Version >= 2 || len(r.Bindings) != 0) {
+		return fmt.Errorf("scalar exposure fields are not accepted")
 	}
-	if r.ExposureMode != "internal" {
-		if r.ServiceID == "" || r.ContainerPort < 1 || r.HostPort < exposure.FirstPort || r.HostPort > exposure.LastPort {
-			return fmt.Errorf("invalid component exposure")
+	bindingsInput := r.Bindings
+	if r.Version < 2 && len(bindingsInput) == 0 {
+		bindingsInput = legacyBindings(r, m)
+	}
+	if len(bindingsInput) != len(m.Services) || len(bindingsInput) > exposure.MaxBindings {
+		return fmt.Errorf("trusted binding set shape mismatch")
+	}
+	declared := map[string]manifest.Service{}
+	for _, service := range m.Services {
+		declared[service.ID] = service
+	}
+	seen := map[string]bool{}
+	bindings := make([]exposure.ServiceBinding, 0, len(bindingsInput))
+	for _, got := range bindingsInput {
+		service, ok := declared[got.ServiceID]
+		if !ok || seen[got.ServiceID] {
+			return fmt.Errorf("binding service is not uniquely declared")
 		}
-		declared := false
-		for _, c := range m.Components {
-			for _, s := range c.Services {
-				if s.ID == r.ServiceID && s.ContainerPort == r.ContainerPort && s.Protocol == r.ServiceProtocol {
-					declared = true
-				}
+		seen[got.ServiceID] = true
+		transport, err := exposure.TransportFor(service.Protocol)
+		if err != nil || string(transport) != got.Transport || service.ContainerPort != got.ContainerPort {
+			return fmt.Errorf("trusted service binding mismatch")
+		}
+		binding := exposure.ServiceBinding{ServiceID: got.ServiceID, Transport: transport, ContainerPort: got.ContainerPort, Mode: exposure.Mode(got.Mode), HostAddress: got.HostAddress, HostPort: got.HostPort}
+		if err = exposure.ValidateBinding(binding, env("KITPRO_LAN_BIND_ADDRESS", ""), service.FixedHostPort); err != nil {
+			return err
+		}
+		bindings = append(bindings, binding)
+	}
+	return exposure.ValidateConflicts(bindings)
+}
+
+func legacyBindings(r protocol.Request, m manifest.Manifest) []protocol.ServiceBinding {
+	mode := r.ExposureMode
+	if mode == "" {
+		mode = string(exposure.Internal)
+	}
+	out := make([]protocol.ServiceBinding, 0, len(m.Services))
+	for _, service := range m.Services {
+		transport, _ := exposure.TransportFor(service.Protocol)
+		binding := protocol.ServiceBinding{ServiceID: service.ID, Transport: string(transport), ContainerPort: service.ContainerPort, Mode: string(exposure.Internal), HostPort: service.FixedHostPort}
+		if service.ID == r.ServiceID && mode != string(exposure.Internal) {
+			binding.Mode, binding.HostAddress, binding.HostPort = mode, r.HostAddress, r.HostPort
+			if r.ContainerPort != 0 {
+				binding.ContainerPort = r.ContainerPort
+			}
+			if r.ServiceProtocol != "" {
+				binding.Transport, _ = exposure.ContainerProtocol(r.ServiceProtocol)
 			}
 		}
-		if !declared {
-			return fmt.Errorf("component service not declared")
-		}
+		out = append(out, binding)
 	}
-	return nil
+	return out
+}
+
+func requestBindings(r protocol.Request) []exposure.ServiceBinding {
+	out := make([]exposure.ServiceBinding, 0, len(r.Bindings))
+	for _, b := range r.Bindings {
+		out = append(out, exposure.ServiceBinding{ServiceID: b.ServiceID, Transport: exposure.Transport(b.Transport), ContainerPort: b.ContainerPort, Mode: exposure.Mode(b.Mode), HostAddress: b.HostAddress, HostPort: b.HostPort})
+	}
+	return exposure.Normalize(out)
+}
+
+func trustedRequestBindings(r protocol.Request, m manifest.Manifest) []exposure.ServiceBinding {
+	if len(r.Bindings) == 0 {
+		r.Bindings = legacyBindings(r, m)
+	}
+	return requestBindings(r)
+}
+
+func runtimePortBindings(bindings []exposure.ServiceBinding) map[string][]containers.PortBinding {
+	out := map[string][]containers.PortBinding{}
+	for _, binding := range bindings {
+		if binding.Mode == exposure.Internal {
+			continue
+		}
+		key := fmt.Sprintf("%d/%s", binding.ContainerPort, binding.Transport)
+		out[key] = append(out[key], containers.PortBinding{HostIP: binding.HostAddress, HostPort: strconv.Itoa(binding.HostPort)})
+	}
+	return out
 }
 
 func validateTrustedRecreation(db *sql.DB, r protocol.Request) error {
-	var generation, trustedPort int
+	var generation int
+	var legacyPort int
+	legacyOwnership := false
 	var applicationID, releaseID, image, dataPath string
-	err := db.QueryRow(`SELECT runtime_generation,application_id,release_id,image_digest,data_path,host_port FROM ownership WHERE instance_id=?`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath, &trustedPort)
+	err := db.QueryRow(`SELECT g.runtime_generation,g.application_id,g.release_id,c.image_digest,g.data_path FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.status IN ('active','verification_required','removed') AND c.component_id='app' ORDER BY CASE g.status WHEN 'active' THEN 0 WHEN 'verification_required' THEN 1 ELSE 2 END,g.runtime_generation DESC LIMIT 1`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath)
+	if err == sql.ErrNoRows {
+		err = db.QueryRow(`SELECT runtime_generation,application_id,release_id,image_digest,data_path,host_port FROM ownership WHERE instance_id=?`, r.InstanceID).Scan(&generation, &applicationID, &releaseID, &image, &dataPath, &legacyPort)
+		legacyOwnership = err == nil
+	}
 	if err == sql.ErrNoRows {
 		if r.RuntimeGeneration != 1 {
 			return fmt.Errorf("new installation must begin at runtime generation 1")
@@ -696,17 +1153,54 @@ func validateTrustedRecreation(db *sql.DB, r protocol.Request) error {
 	if r.Operation != "UpdateApplication" && ((releaseID != "" && releaseID != r.ReleaseID) || image != r.Image) {
 		return fmt.Errorf("trusted runtime identity mismatch")
 	}
-	if trustedPort != 0 && r.HostPort != trustedPort {
-		return fmt.Errorf("trusted exposure assignment mismatch")
+	if r.Operation != "ConfigureServiceExposure" {
+		if legacyOwnership && r.Version < 2 {
+			if legacyPort != 0 && r.HostPort != legacyPort {
+				return fmt.Errorf("trusted exposure assignment mismatch")
+			}
+			return nil
+		}
+		rows, queryErr := db.Query(`SELECT service_id,transport,container_port,mode,host_address,host_port FROM runtime_generation_bindings WHERE installation_id=? AND runtime_generation=? ORDER BY service_id`, r.InstanceID, generation)
+		if queryErr != nil {
+			return fmt.Errorf("trusted binding state unavailable")
+		}
+		var stored []exposure.ServiceBinding
+		for rows.Next() {
+			var b exposure.ServiceBinding
+			if queryErr = rows.Scan(&b.ServiceID, &b.Transport, &b.ContainerPort, &b.Mode, &b.HostAddress, &b.HostPort); queryErr != nil {
+				break
+			}
+			stored = append(stored, b)
+		}
+		_ = rows.Close()
+		requested := requestBindings(r)
+		if queryErr != nil || len(stored) != len(requested) {
+			return fmt.Errorf("trusted exposure assignment mismatch")
+		}
+		for i := range stored {
+			if stored[i] != requested[i] {
+				return fmt.Errorf("trusted exposure assignment mismatch")
+			}
+		}
 	}
 	return nil
 }
-func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
+func createApplication(c io.Writer, db *sql.DB, r protocol.Request, coordinator helperops.Coordinator, fencingToken int64) {
 	if e := validateApplicationPlan(r); e != nil {
-		slog.Default().Warn("application plan rejected", "event", "plan_rejected", "operation_id", r.ID, "error_category", "validation")
-		_, _ = db.Exec("UPDATE receipts SET phase='rejected',outcome='failed' WHERE operation_id=?", r.ID)
+		slog.Default().Warn("application plan rejected", "event", "plan_rejected", "operation_id", r.SemanticOperationID(), "error_category", "validation")
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 		return
+	}
+	if r.RepairAction != "" {
+		if r.RepairAction != lifecycle.RepairRecreateGeneration || r.Operation != "InstallApplication" {
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "invalid lifecycle repair request"})
+			return
+		}
+		reconciliation, err := (lifecycle.Store{DB: db}).LoadReconciliation(context.Background(), r.InstanceID)
+		if err != nil || reconciliation.CheckedGeneration != r.RuntimeGeneration-1 || reconciliation.RecommendedAction != lifecycle.RepairRecreateGeneration {
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "missing runtime recreation requires current helper reconciliation evidence"})
+			return
+		}
 	}
 	var trustedErr error
 	if len(r.Components) > 0 {
@@ -715,19 +1209,24 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		trustedErr = validateTrustedRecreation(db, r)
 	}
 	if e := trustedErr; e != nil {
-		slog.Default().Warn("application plan rejected", "event", "plan_rejected", "operation_id", r.ID, "error_category", "trusted_state")
-		_, _ = db.Exec("UPDATE receipts SET phase='rejected',outcome='failed' WHERE operation_id=?", r.ID)
+		slog.Default().Warn("application plan rejected", "event", "plan_rejected", "operation_id", r.SemanticOperationID(), "error_category", "trusted_state")
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 		return
 	}
 	if len(r.Components) > 0 {
-		createMultiApplication(c, db, r)
+		createMultiApplication(c, db, r, coordinator, fencingToken)
 		return
 	}
-	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: r.InstanceID, ownership.LabelResource: "application", "com.kitpro.application": r.ApplicationID, "com.kitpro.release": r.ReleaseID, "com.kitpro.runtime-generation": strconv.Itoa(maxGeneration(r.RuntimeGeneration))}
-	gen := maxGeneration(r.RuntimeGeneration)
+	gen := r.RuntimeGeneration
+	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: r.InstanceID, ownership.LabelResource: "application", "com.kitpro.application": r.ApplicationID, "com.kitpro.release": r.ReleaseID, "com.kitpro.runtime-generation": strconv.Itoa(gen), "com.kitpro.operation": r.OperationID}
 	name := "kitpro-" + r.ApplicationID + "-" + r.InstanceID + "-g" + strconv.Itoa(gen)
-	d := docker.New()
+	d := newContainerRuntime()
+	lifecycleRuntime, supported := d.(containers.LifecycleRuntime)
+	if !supported {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "staged replacement requires the supported Docker lifecycle runtime"})
+		return
+	}
+	_ = prepareMigratedSingleConfiguration(context.Background(), db, lifecycleRuntime, r.InstanceID)
 	hw, e := resolveHardware(d, r.Hardware)
 	if e != nil {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
@@ -736,21 +1235,6 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 	entries, _ := catalog.Load()
 	externalMounts, e := resolveExternalMounts(db, r.InstanceID, "", gen, entries[r.ApplicationID].Manifest.ExternalStorage, r.ExternalStorage)
 	if e != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
-		return
-	}
-	// Exposure changes and explicit recreation replace only the previously
-	// trusted runtime; persistent storage remains untouched.
-	var oldID, oldNetwork string
-	_ = db.QueryRow("SELECT container_id,network_name FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&oldID, &oldNetwork)
-	if oldID != "" && oldID != name {
-		_ = d.Stop(oldID)
-		_ = d.Remove(oldID)
-		if oldNetwork != "" {
-			_ = d.RemoveNetwork(oldNetwork)
-		}
-	}
-	if e := d.Pull(r.Image); e != nil {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
 		return
 	}
@@ -768,15 +1252,13 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 			return
 		}
 	}
-	networkCreated := false
-	if _, e := d.CreateNetwork(r.NetworkName, labels); e != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
+	if e := prepareStructuredConfiguration(context.Background(), d, lifecycleRuntime, r, labels); e != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application configuration bootstrap failed"})
 		return
 	}
-	networkCreated = true
-	mounts := make([]docker.StorageMount, 0, len(r.Storage))
+	mounts := make([]containers.StorageMount, 0, len(r.Storage))
 	for _, s := range r.Storage {
-		mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
+		mounts = append(mounts, containers.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
 	}
 	mounts = append(mounts, externalMounts...)
 	env, e := resolvedEnvironment(db, r.InstanceID, "", r.Environment)
@@ -784,73 +1266,187 @@ func createApplication(c net.Conn, db *sql.DB, r protocol.Request) {
 		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
 		return
 	}
-	bindings := map[string][]docker.PortBinding{}
-	if r.ExposureMode == "loopback" || r.ExposureMode == "lan" {
-		proto, _ := exposure.DockerProtocol(r.ServiceProtocol)
-		bindings[fmt.Sprintf("%d/%s", r.ContainerPort, proto)] = []docker.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
-	}
+	trustedBindings := trustedRequestBindings(r, entries[r.ApplicationID].Manifest)
+	bindings := runtimePortBindings(trustedBindings)
 	user := ""
 	if r.RunAs != nil {
 		user = strconv.Itoa(r.RunAs.UID) + ":" + strconv.Itoa(r.RunAs.GID)
 	}
-	id, e := d.CreateContainerPlan(docker.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests})
-	if e == nil {
-		e = d.Start(id)
-	}
-	if e == nil {
-		var observed map[string]any
-		observed, e = d.Inspect(id)
-		if e == nil {
-			host, _ := observed["HostConfig"].(map[string]any)
-			portBindings, _ := host["PortBindings"].(map[string]any)
-			if !exposure.ObservedBindingsExact(exposure.Assignment{Mode: exposure.Mode(r.ExposureMode), Address: r.HostAddress, Port: r.HostPort}, r.ContainerPort, r.ServiceProtocol, portBindings) {
-				e = fmt.Errorf("observed Docker exposure does not match trusted assignment")
-			}
-		}
-	}
-	if e == nil {
-		tx, txErr := db.Begin()
-		if txErr == nil {
-			_, txErr = tx.Exec(`INSERT OR REPLACE INTO ownership(instance_id,container_id,container_name,network_name,image_digest,data_path,created_at,runtime_generation,application_id,release_id,exposure_mode,service_id,host_address,host_port,container_port,service_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.InstanceID, id, name, r.NetworkName, r.Image, r.DataPath, time.Now().UTC().Format(time.RFC3339Nano), gen, r.ApplicationID, r.ReleaseID, r.ExposureMode, r.ServiceID, r.HostAddress, r.HostPort, r.ContainerPort, r.ServiceProtocol)
-		}
-		if txErr == nil {
-			txErr = persistHardware(tx, r.InstanceID, "", gen, hw)
-		}
-		if txErr == nil {
-			txErr = persistExternalBindings(tx, r.InstanceID, "", gen, entries[r.ApplicationID].Manifest.ExternalStorage, r.ExternalStorage)
-		}
-		if txErr == nil {
-			txErr = tx.Commit()
-		} else if tx != nil {
-			_ = tx.Rollback()
-		}
-		e = txErr
-	}
+	containerPlan := containers.ContainerPlan{Image: r.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: r.Command, Environment: env, DataPath: r.DataPath, Storage: mounts, PortBindings: bindings, RestartPolicy: r.RestartPolicy, Devices: hw.Devices, DeviceRequests: hw.Requests}
+	planHash, e := protocol.Hash(r)
 	if e != nil {
-		if id != "" {
-			_ = d.Stop(id)
-			_ = d.Remove(id)
-		}
-		if networkCreated {
-			_ = d.RemoveNetwork(r.NetworkName)
-		}
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
+		return
+	}
+	rollbackSafe := r.Operation != "UpdateApplication" && r.RepairAction == ""
+	plan := lifecycle.Plan{OperationID: r.OperationID, InstallationID: r.InstanceID, ApplicationID: r.ApplicationID, ReleaseID: r.ReleaseID, Generation: gen, ExpectedGeneration: gen - 1, FencingToken: fencingToken, Image: r.Image, NetworkName: r.NetworkName, ContainerName: name, PlanHash: planHash, DataPath: r.DataPath, Bindings: trustedBindings, Container: containerPlan, RollbackSafe: rollbackSafe, AllowMissingActive: r.RepairAction == lifecycle.RepairRecreateGeneration}
+	// Generation-scoped helper metadata is prepared before runtime cutover. It
+	// is evidence for recovery, not the authoritative active-generation switch.
+	tx, persistErr := db.Begin()
+	if persistErr == nil {
+		persistErr = persistHardware(tx, r.InstanceID, "", gen, hw)
+	}
+	if persistErr == nil {
+		persistErr = persistExternalBindings(tx, r.InstanceID, "", gen, entries[r.ApplicationID].Manifest.ExternalStorage, r.ExternalStorage)
+	}
+	if persistErr == nil {
+		persistErr = tx.Commit()
+	} else if tx != nil {
+		_ = tx.Rollback()
+	}
+	if persistErr != nil {
+		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "candidate metadata preparation failed"})
+		return
+	}
+	result, e := (lifecycle.Runner{Runtime: lifecycleRuntime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Replace(context.Background(), plan)
+	if e != nil {
 		event := "exposure_failed"
 		if strings.Contains(e.Error(), "address already in use") || strings.Contains(e.Error(), "port is already allocated") {
 			event = "exposure_collision"
 		}
-		slog.Default().Warn("runtime creation failed", "event", event, "operation_id", r.ID, "installation_id", r.InstanceID, "service_id", r.ServiceID, "mode", r.ExposureMode, "host_address", r.HostAddress, "host_port", r.HostPort, "result", "failed", "error_category", "docker")
-		_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='failed' WHERE operation_id=?", r.ID)
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
+		slog.Default().Warn("runtime creation failed", "event", event, "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "binding_count", len(r.Bindings), "result", "failed", "error_category", "runtime")
+		var unknown lifecycle.UnknownOutcomeError
+		if errors.As(e, &unknown) {
+			protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "RecoveryRequired", Error: e.Error()})
+		} else {
+			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
+		}
 		return
 	}
-	_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='succeeded',container_id=? WHERE operation_id=?", id, r.ID)
-	slog.Default().Info("runtime created", "event", "exposure_applied", "operation_id", r.ID, "installation_id", r.InstanceID, "service_id", r.ServiceID, "mode", r.ExposureMode, "host_address", r.HostAddress, "host_port", r.HostPort, "result", "succeeded")
-	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"container": name, "network": r.NetworkName}})
+	slog.Default().Info("runtime created", "event", "exposure_applied", "operation_id", r.SemanticOperationID(), "installation_id", r.InstanceID, "binding_count", len(r.Bindings), "result", "succeeded")
+	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
+}
+
+func prepareStructuredConfiguration(ctx context.Context, runtime containers.Runtime, lifecycleRuntime containers.LifecycleRuntime, request protocol.Request, labels map[string]string) error {
+	if request.Configuration == nil {
+		return nil
+	}
+	var storage protocol.StorageMount
+	for _, candidate := range request.Storage {
+		if candidate.ID == request.Configuration.StorageID {
+			storage = candidate
+			break
+		}
+	}
+	if storage.ID == "" || storage.ReadOnly || storage.ContainerPath != "/var/syncthing" || request.Configuration.Type != appconfig.SyncthingTCPOnlyV1 {
+		return errors.New("invalid structured configuration storage")
+	}
+	configPath := filepath.Join(storage.HostPath, "config", "config.xml")
+	certPath := filepath.Join(storage.HostPath, "config", "cert.pem")
+	keyPath := filepath.Join(storage.HostPath, "config", "key.pem")
+	configExists, err := regularFileExists(configPath)
+	if err != nil {
+		return err
+	}
+	if !configExists {
+		if err = lifecycleRuntime.PullImage(ctx, request.Image); err != nil {
+			return err
+		}
+		bootstrapName := "kitpro-" + request.ApplicationID + "-" + request.InstanceID + "-config-bootstrap"
+		if err = removeStaleConfigurationBootstrap(runtime, bootstrapName, request.InstanceID); err != nil {
+			return err
+		}
+		bootstrapLabels := make(map[string]string, len(labels))
+		for key, value := range labels {
+			bootstrapLabels[key] = value
+		}
+		bootstrapLabels[ownership.LabelResource] = "configuration-bootstrap"
+		userName := ""
+		if request.RunAs != nil {
+			userName = strconv.Itoa(request.RunAs.UID) + ":" + strconv.Itoa(request.RunAs.GID)
+		}
+		containerID, createErr := lifecycleRuntime.CreateLifecycleContainer(ctx, containers.ContainerPlan{
+			Image:   request.Image,
+			Name:    bootstrapName,
+			Network: "none",
+			User:    userName,
+			Labels:  bootstrapLabels,
+			Command: []string{"generate", "--no-port-probing"},
+			Storage: []containers.StorageMount{{HostPath: storage.HostPath, ContainerPath: storage.ContainerPath}},
+		})
+		if createErr != nil {
+			return createErr
+		}
+		removed := false
+		defer func() {
+			if !removed {
+				_ = lifecycleRuntime.RemoveContainer(context.Background(), containerID)
+			}
+		}()
+		if err = lifecycleRuntime.StartContainer(ctx, containerID); err != nil {
+			return err
+		}
+		if _, err = lifecycleRuntime.WaitContainer(ctx, containerID, containers.RuntimeStopped, 60*time.Second); err != nil {
+			return err
+		}
+		if err = lifecycleRuntime.RemoveContainer(ctx, containerID); err != nil {
+			return err
+		}
+		removed = true
+	}
+	for _, required := range []string{configPath, certPath, keyPath} {
+		exists, checkErr := regularFileExists(required)
+		if checkErr != nil || !exists {
+			return errors.New("Syncthing identity bootstrap is incomplete")
+		}
+	}
+	if request.RunAs == nil {
+		return errors.New("structured configuration requires an application runtime identity")
+	}
+	if err = appconfig.Apply(request.Configuration.Type, storage.HostPath, appconfig.RuntimeOwner{UID: request.RunAs.UID, GID: request.RunAs.GID}); err != nil {
+		return err
+	}
+	return appconfig.Verify(request.Configuration.Type, storage.HostPath)
+}
+
+func regularFileExists(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err == os.ErrNotExist || os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, errors.New("application configuration identity path is not a regular file")
+	}
+	if info.Size() <= 0 || info.Size() > 1024*1024 {
+		return false, errors.New("application configuration identity file has an invalid size")
+	}
+	return true, nil
+}
+
+func removeStaleConfigurationBootstrap(runtime containers.Runtime, name, instance string) error {
+	items, err := runtime.ListContainers()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		matched := false
+		for _, candidate := range item.Names {
+			if strings.TrimPrefix(candidate, "/") == name {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if item.Labels[ownership.LabelManaged] != "true" || item.Labels[ownership.LabelInstance] != instance || item.Labels[ownership.LabelResource] != "configuration-bootstrap" {
+			return errors.New("configuration bootstrap name is owned by an unmanaged runtime")
+		}
+		_ = runtime.Stop(item.ID)
+		return runtime.Remove(item.ID)
+	}
+	return nil
 }
 
 func validateTrustedMultiRecreation(db *sql.DB, r protocol.Request) error {
 	var generation int
-	err := db.QueryRow("SELECT runtime_generation FROM component_ownership WHERE installation_id=? LIMIT 1", r.InstanceID).Scan(&generation)
+	err := db.QueryRow(`SELECT runtime_generation FROM runtime_generations WHERE installation_id=? AND status IN ('active','verification_required','removed') ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'verification_required' THEN 1 ELSE 2 END,runtime_generation DESC LIMIT 1`, r.InstanceID).Scan(&generation)
+	if err == sql.ErrNoRows {
+		err = db.QueryRow("SELECT MIN(runtime_generation) FROM component_ownership WHERE installation_id=? HAVING MIN(runtime_generation)=MAX(runtime_generation)", r.InstanceID).Scan(&generation)
+	}
 	if err == sql.ErrNoRows {
 		if r.RuntimeGeneration != 1 {
 			return fmt.Errorf("new installation must begin at runtime generation 1")
@@ -866,169 +1462,203 @@ func validateTrustedMultiRecreation(db *sql.DB, r protocol.Request) error {
 	return nil
 }
 
-// createMultiApplication creates a bounded, dependency-ordered runtime set.
-// It is deliberately separate from the single-container path: no raw Docker
-// objects cross the helper boundary, and every component is revalidated above.
-func createMultiApplication(c net.Conn, db *sql.DB, r protocol.Request) {
-	components := make([]manifest.Component, 0, len(r.Components))
-	for _, component := range r.Components {
-		components = append(components, manifest.Component{ID: component.ID, DependsOn: component.DependsOn})
-	}
-	order, err := multicontainer.StartOrder(components)
-	if err != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
+// createMultiApplication translates an already catalog-validated request into
+// the same generation model used by staged single-container replacement. The
+// older direct Docker loop remains below only as unreachable migration history.
+func createMultiApplication(c io.Writer, db *sql.DB, request protocol.Request, coordinator helperops.Coordinator, fencingToken int64) {
+	runtime := newContainerRuntime()
+	lifecycleRuntime, supported := runtime.(containers.LifecycleRuntime)
+	if !supported {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "staged replacement requires the supported Docker lifecycle runtime"})
 		return
 	}
-	d := docker.New()
-	entries, _ := catalog.Load()
-	manifestComponents := map[string]manifest.Component{}
-	for _, component := range entries[r.ApplicationID].Manifest.Components {
-		manifestComponents[component.ID] = component
-	}
-	externalByComponent := map[string][]docker.StorageMount{}
-	for _, component := range r.Components {
-		resolved, resolveErr := resolveExternalMounts(db, r.InstanceID, component.ID, r.RuntimeGeneration, manifestComponents[component.ID].ExternalStorage, component.ExternalStorage)
-		if resolveErr != nil {
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: resolveErr.Error()})
-			return
-		}
-		externalByComponent[component.ID] = resolved
-	}
-	// Replace the prior trusted component set for this installation. The
-	// generation and network names differ, so persistent storage is untouched.
-	if oldRows, qe := db.Query("SELECT container_id,network_name FROM component_ownership WHERE installation_id=?", r.InstanceID); qe == nil {
-		oldIDs := []string{}
-		oldNetwork := ""
-		for oldRows.Next() {
-			var id, network string
-			if oldRows.Scan(&id, &network) == nil {
-				oldIDs = append(oldIDs, id)
-				oldNetwork = network
-			}
-		}
-		_ = oldRows.Close()
-		for _, id := range oldIDs {
-			if id != "" {
-				_ = d.Stop(id)
-				_ = d.Remove(id)
-			}
-		}
-		if oldNetwork != "" && oldNetwork != r.NetworkName {
-			_ = d.RemoveNetwork(oldNetwork)
-		}
-		_, _ = db.Exec("DELETE FROM component_ownership WHERE installation_id=?", r.InstanceID)
-	}
-	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: r.InstanceID, ownership.LabelResource: "application", "com.kitpro.application": r.ApplicationID, "com.kitpro.release": r.ReleaseID, "com.kitpro.runtime-generation": strconv.Itoa(r.RuntimeGeneration)}
-	if _, err = d.CreateNetwork(r.NetworkName, labels); err != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-		return
-	}
-	created := map[string]string{}
-	hardwareByComponent := map[string]runtimeHardware{}
-	cleanup := func() {
-		for _, id := range created {
-			_ = d.Stop(id)
-			_ = d.Remove(id)
-		}
-		_ = d.RemoveNetwork(r.NetworkName)
-	}
-	byID := map[string]protocol.Component{}
-	for _, component := range r.Components {
+	manifestNodes := make([]manifest.Component, 0, len(request.Components))
+	byID := make(map[string]protocol.Component, len(request.Components))
+	for _, component := range request.Components {
+		manifestNodes = append(manifestNodes, manifest.Component{ID: component.ID, DependsOn: append([]string(nil), component.DependsOn...)})
 		byID[component.ID] = component
 	}
-	for _, componentID := range order {
-		component := byID[componentID]
-		hw, hardwareErr := resolveHardware(d, component.Hardware)
-		if hardwareErr != nil {
-			cleanup()
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: hardwareErr.Error()})
-			return
-		}
-		if err = d.Pull(component.Image); err != nil {
-			cleanup()
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			return
-		}
-		for _, storage := range component.Storage {
-			if err = os.MkdirAll(storage.HostPath, 0750); err != nil {
-				cleanup()
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-				return
-			}
-			if storage.OwnerUID != 0 && os.Chown(storage.HostPath, storage.OwnerUID, storage.OwnerGID) != nil {
-				cleanup()
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "managed storage ownership failed"})
-				return
-			}
-		}
-		envs, secretErr := resolvedEnvironment(db, r.InstanceID, component.ID, component.Environment)
-		if secretErr != nil {
-			cleanup()
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "application secret preparation failed"})
-			return
-		}
-		mounts := make([]docker.StorageMount, 0, len(component.Storage))
-		for _, s := range component.Storage {
-			mounts = append(mounts, docker.StorageMount{ContainerPath: s.ContainerPath, HostPath: s.HostPath, ReadOnly: s.ReadOnly})
-		}
-		mounts = append(mounts, externalByComponent[component.ID]...)
-		bindings := map[string][]docker.PortBinding{}
-		for _, service := range component.Services {
-			if service.ID == r.ServiceID {
-				if service.ContainerPort != r.ContainerPort || service.Protocol != r.ServiceProtocol {
-					cleanup()
-					protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "service binding mismatch"})
-					return
-				}
-				proto, _ := exposure.DockerProtocol(service.Protocol)
-				if r.ExposureMode != "internal" {
-					bindings[fmt.Sprintf("%d/%s", service.ContainerPort, proto)] = []docker.PortBinding{{HostIP: r.HostAddress, HostPort: strconv.Itoa(r.HostPort)}}
-				}
-			}
-		}
-		name := "kitpro-" + r.ApplicationID + "-" + r.InstanceID + "-" + component.ID + "-g" + strconv.Itoa(r.RuntimeGeneration)
-		user := ""
-		if component.RunAs != nil {
-			user = strconv.Itoa(component.RunAs.UID) + ":" + strconv.Itoa(component.RunAs.GID)
-		}
-		id, ce := d.CreateContainerPlan(docker.ContainerPlan{Image: component.Image, Name: name, Network: r.NetworkName, User: user, Labels: labels, Command: component.Command, Environment: envs, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Devices: hw.Devices, DeviceRequests: hw.Requests})
-		if ce == nil {
-			ce = d.Start(id)
-		}
-		if ce != nil {
-			cleanup()
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: ce.Error()})
-			return
-		}
-		created[componentID] = id
-		hardwareByComponent[componentID] = hw
-	}
-	tx, txErr := db.Begin()
-	for _, component := range r.Components {
-		if txErr == nil {
-			_, txErr = tx.Exec(`INSERT OR REPLACE INTO component_ownership(installation_id,component_id,container_id,container_name,network_name,image_digest,runtime_generation,created_at) VALUES(?,?,?,?,?,?,?,?)`, r.InstanceID, component.ID, created[component.ID], "kitpro-"+r.ApplicationID+"-"+r.InstanceID+"-"+component.ID+"-g"+strconv.Itoa(r.RuntimeGeneration), r.NetworkName, component.Image, r.RuntimeGeneration, time.Now().UTC().Format(time.RFC3339Nano))
-		}
-		if txErr == nil {
-			txErr = persistHardware(tx, r.InstanceID, component.ID, r.RuntimeGeneration, hardwareByComponent[component.ID])
-		}
-		if txErr == nil {
-			txErr = persistExternalBindings(tx, r.InstanceID, component.ID, r.RuntimeGeneration, manifestComponents[component.ID].ExternalStorage, component.ExternalStorage)
-		}
-	}
-	if txErr == nil {
-		txErr = tx.Commit()
-	} else if tx != nil {
-		_ = tx.Rollback()
-	}
-	if txErr != nil {
-		cleanup()
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: txErr.Error()})
+	topology, err := multicontainer.BuildTopology(manifestNodes)
+	if err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: err.Error()})
 		return
 	}
-	_, _ = db.Exec("UPDATE receipts SET phase='completed',outcome='succeeded',container_id=? WHERE operation_id=?", created[order[0]], r.ID)
-	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"components": created, "network": r.NetworkName}})
+	entries, err := catalog.Load()
+	if err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "trusted catalog unavailable"})
+		return
+	}
+	trustedComponents := map[string]manifest.Component{}
+	for _, component := range entries[request.ApplicationID].Manifest.Components {
+		trustedComponents[component.ID] = component
+	}
+	if err = backfillLegacyMulti(db, request, topology, entries[request.ApplicationID].Manifest); err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: err.Error()})
+		return
+	}
+	labels := map[string]string{ownership.LabelManaged: "true", ownership.LabelInstance: request.InstanceID, ownership.LabelResource: "application", "com.kitpro.application": request.ApplicationID, "com.kitpro.release": request.ReleaseID, "com.kitpro.runtime-generation": strconv.Itoa(request.RuntimeGeneration), "com.kitpro.operation": request.OperationID}
+	planHash, err := protocol.Hash(request)
+	if err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: err.Error()})
+		return
+	}
+	trustedBindings := trustedRequestBindings(request, entries[request.ApplicationID].Manifest)
+	plan := lifecycle.MultiPlan{OperationID: request.OperationID, InstallationID: request.InstanceID, ApplicationID: request.ApplicationID, ReleaseID: request.ReleaseID, Generation: request.RuntimeGeneration, ExpectedGeneration: request.RuntimeGeneration - 1, FencingToken: fencingToken, NetworkName: request.NetworkName, PlanHash: planHash, TopologyHash: topology.Hash, DataPath: request.DataPath, Bindings: trustedBindings, RollbackSafe: request.Operation != "UpdateApplication" && request.RepairAction == "", AllowMissingActive: request.RepairAction == lifecycle.RepairRecreateGeneration}
+	tx, err := db.Begin()
+	if err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "candidate metadata preparation failed"})
+		return
+	}
+	defer tx.Rollback()
+	for _, node := range topology.Components {
+		component := byID[node.ID]
+		externalMounts, prepareErr := resolveExternalMounts(db, request.InstanceID, component.ID, request.RuntimeGeneration, trustedComponents[component.ID].ExternalStorage, component.ExternalStorage)
+		if prepareErr != nil {
+			err = prepareErr
+			break
+		}
+		hardwarePlan, prepareErr := resolveHardware(runtime, component.Hardware)
+		if prepareErr != nil {
+			err = prepareErr
+			break
+		}
+		for _, storage := range component.Storage {
+			if prepareErr = os.MkdirAll(storage.HostPath, 0750); prepareErr != nil {
+				err = prepareErr
+				break
+			}
+			if storage.OwnerUID != 0 && os.Chown(storage.HostPath, storage.OwnerUID, storage.OwnerGID) != nil {
+				err = errors.New("managed storage ownership failed")
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+		environment, prepareErr := resolvedEnvironment(db, request.InstanceID, component.ID, component.Environment)
+		if prepareErr != nil {
+			err = errors.New("application secret preparation failed")
+			break
+		}
+		mounts := make([]containers.StorageMount, 0, len(component.Storage)+len(externalMounts))
+		for _, storage := range component.Storage {
+			mounts = append(mounts, containers.StorageMount{ContainerPath: storage.ContainerPath, HostPath: storage.HostPath, ReadOnly: storage.ReadOnly})
+		}
+		mounts = append(mounts, externalMounts...)
+		bindings := map[string][]containers.PortBinding{}
+		for _, service := range component.Services {
+			for _, binding := range trustedBindings {
+				if binding.ServiceID == service.ID && binding.ContainerPort == service.ContainerPort && binding.Mode != exposure.Internal {
+					key := fmt.Sprintf("%d/%s", binding.ContainerPort, binding.Transport)
+					bindings[key] = append(bindings[key], containers.PortBinding{HostIP: binding.HostAddress, HostPort: strconv.Itoa(binding.HostPort)})
+				}
+			}
+		}
+		name := "kitpro-" + request.ApplicationID + "-" + request.InstanceID + "-" + component.ID + "-g" + strconv.Itoa(request.RuntimeGeneration)
+		userName := ""
+		if component.RunAs != nil {
+			userName = strconv.Itoa(component.RunAs.UID) + ":" + strconv.Itoa(component.RunAs.GID)
+		}
+		dependencies := make([]string, 0, len(node.DependsOn))
+		for _, dependency := range node.DependsOn {
+			dependencies = append(dependencies, "kitpro-"+request.ApplicationID+"-"+request.InstanceID+"-"+dependency+"-g"+strconv.Itoa(request.RuntimeGeneration))
+		}
+		componentLabels := map[string]string{}
+		for key, value := range labels {
+			componentLabels[key] = value
+		}
+		componentLabels["com.kitpro.component"] = component.ID
+		containerPlan := containers.ContainerPlan{Image: component.Image, Name: name, Network: request.NetworkName, User: userName, Labels: componentLabels, Command: component.Command, Environment: environment, Storage: mounts, PortBindings: bindings, RestartPolicy: component.Restart, NetworkAliases: []string{component.ID}, Dependencies: dependencies, Devices: hardwarePlan.Devices, DeviceRequests: hardwarePlan.Requests}
+		plan.Components = append(plan.Components, lifecycle.MultiComponentPlan{ID: component.ID, Image: component.Image, ContainerName: name, DependsOn: append([]string(nil), node.DependsOn...), StartOrdinal: node.Ordinal, Container: containerPlan})
+		if err = persistHardware(tx, request.InstanceID, component.ID, request.RuntimeGeneration, hardwarePlan); err != nil {
+			break
+		}
+		if err = persistExternalBindings(tx, request.InstanceID, component.ID, request.RuntimeGeneration, trustedComponents[component.ID].ExternalStorage, component.ExternalStorage); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "candidate metadata preparation failed: " + err.Error()})
+		return
+	}
+	result, err := (lifecycle.MultiRunner{Runtime: lifecycleRuntime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Replace(context.Background(), plan)
+	if err != nil {
+		var unknown lifecycle.UnknownOutcomeError
+		if errors.As(err, &unknown) {
+			protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: err.Error()})
+		} else {
+			protocol.Write(c, protocol.Response{RequestID: request.ID, Error: err.Error()})
+		}
+		return
+	}
+	protocol.Write(c, protocol.Response{OK: true, RequestID: request.ID, Result: result})
 }
 
+func backfillLegacyMulti(db *sql.DB, request protocol.Request, topology multicontainer.Topology, trusted manifest.Manifest) error {
+	var existing int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runtime_generations WHERE installation_id=?`, request.InstanceID).Scan(&existing); err != nil || existing > 0 {
+		return err
+	}
+	rows, err := db.Query(`SELECT component_id,container_id,container_name,network_name,image_digest,runtime_generation,created_at FROM component_ownership WHERE installation_id=? ORDER BY component_id`, request.InstanceID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type legacyRow struct {
+		componentID, containerID, containerName, networkName, image, createdAt string
+		generation                                                             int
+	}
+	var legacy []legacyRow
+	for rows.Next() {
+		var row legacyRow
+		if err = rows.Scan(&row.componentID, &row.containerID, &row.containerName, &row.networkName, &row.image, &row.generation, &row.createdAt); err != nil {
+			return err
+		}
+		legacy = append(legacy, row)
+	}
+	if err = rows.Err(); err != nil || len(legacy) == 0 {
+		return err
+	}
+	if len(legacy) != len(topology.Components) {
+		return errors.New("legacy component ownership does not match one complete trusted topology")
+	}
+	trustedImages := map[string]string{}
+	for _, component := range trusted.Components {
+		for _, release := range trusted.Releases {
+			if release.Version == component.Release {
+				trustedImages[component.ID] = release.Registry + "/" + release.Repository + "@" + release.Digest
+				break
+			}
+		}
+	}
+	byID := map[string]legacyRow{}
+	generation, network := legacy[0].generation, legacy[0].networkName
+	for _, row := range legacy {
+		if row.generation != generation || row.networkName != network || row.containerID == "" || trustedImages[row.componentID] != row.image {
+			return errors.New("legacy component ownership is mixed or does not match the trusted catalog")
+		}
+		if _, duplicate := byID[row.componentID]; duplicate {
+			return errors.New("legacy component ownership contains a duplicate")
+		}
+		byID[row.componentID] = row
+	}
+	migrated := lifecycle.MultiGeneration{InstallationID: request.InstanceID, CreatingOperationID: "legacy-multi-migration", ApplicationID: request.ApplicationID, ReleaseID: trusted.Releases[0].Version, Generation: generation, Status: "verification_required", NetworkName: network, PlanHash: "legacy-component-ownership", TopologyHash: topology.Hash, DataPath: request.DataPath, Bindings: trustedRequestBindings(request, trusted), CleanupState: "not_required"}
+	for _, node := range topology.Components {
+		row, ok := byID[node.ID]
+		if !ok {
+			return errors.New("legacy component ownership is missing a trusted component")
+		}
+		migrated.Components = append(migrated.Components, lifecycle.Component{ID: node.ID, ContainerName: row.containerName, ContainerID: row.containerID, Image: row.image, State: "unknown", DependsOn: append([]string(nil), node.DependsOn...), StartOrdinal: node.Ordinal})
+	}
+	return (lifecycle.Store{DB: db}).BackfillLegacyMulti(context.Background(), migrated)
+}
+
+// createMultiApplication creates a bounded, dependency-ordered runtime set.
+// It is deliberately separate from the single-container path: no raw runtime
+// objects cross the helper boundary, and every component is revalidated above.
 func resolvedEnvironment(db *sql.DB, installationID, componentID string, variables []protocol.EnvVar) ([]string, error) {
 	result := make([]string, 0, len(variables))
 	for _, variable := range variables {
@@ -1065,137 +1695,6 @@ func maxGeneration(g int) int {
 	}
 	return g
 }
-func reconcile(c net.Conn, db *sql.DB, r protocol.Request) {
-	var componentCount int
-	_ = db.QueryRow("SELECT COUNT(*) FROM component_ownership WHERE installation_id=?", r.InstanceID).Scan(&componentCount)
-	if componentCount > 0 {
-		rows, err := db.Query("SELECT component_id,container_id,network_name,image_digest FROM component_ownership WHERE installation_id=? ORDER BY component_id", r.InstanceID)
-		if err != nil {
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			return
-		}
-		classification, summary := "exact", "all managed components match trusted state"
-		d := docker.New()
-		owned := map[string]bool{}
-		network := ""
-		bindingMatches := 0
-		for rows.Next() {
-			var componentID, cid, n, image string
-			if err = rows.Scan(&componentID, &cid, &n, &image); err != nil {
-				classification = "missing"
-				summary = "component ownership unreadable"
-				break
-			}
-			owned[cid] = true
-			network = n
-			observed, ie := d.Inspect(cid)
-			if ie != nil {
-				classification = "missing"
-				summary = "managed component missing"
-				break
-			}
-			cfg, _ := observed["Config"].(map[string]any)
-			labels, _ := cfg["Labels"].(map[string]any)
-			if labels[ownership.LabelManaged] != "true" || labels[ownership.LabelInstance] != r.InstanceID || cfg["Image"] != image {
-				classification = "security_drift"
-				summary = "component identity drift"
-				break
-			}
-			application, _ := labels["com.kitpro.application"].(string)
-			if !trustedRuntimeIdentityMatches(application, componentID, cfg) {
-				classification, summary = "security_drift", "runtime identity drift"
-				break
-			}
-			host, _ := observed["HostConfig"].(map[string]any)
-			if he := validateHardwareObservation(db, r.InstanceID, componentID, host); he != nil {
-				classification, summary = "security_drift", he.Error()
-				break
-			}
-			if se := validateStorageObservation(db, r.InstanceID, componentID, application, host); se != nil {
-				classification, summary = "security_drift", se.Error()
-				break
-			}
-			bindings, _ := host["PortBindings"].(map[string]any)
-			if r.ExposureMode == "internal" {
-				if len(bindings) != 0 {
-					classification, summary = "security_drift", "unexpected host exposure"
-					break
-				}
-			} else if exposure.ObservedBindingsExact(exposure.Assignment{Mode: exposure.Mode(r.ExposureMode), Address: r.HostAddress, Port: r.HostPort}, r.ContainerPort, r.ServiceProtocol, bindings) {
-				bindingMatches++
-			} else if len(bindings) != 0 {
-				classification, summary = "security_drift", "unexpected host exposure"
-				break
-			}
-		}
-		_ = rows.Close()
-		if classification == "exact" && r.ExposureMode != "internal" && bindingMatches != 1 {
-			classification, summary = "security_drift", "expected host exposure missing"
-		}
-		if classification == "exact" && network != "" {
-			if foreign, ne := d.HasForeignNetworkMembers(network, owned); ne == nil && foreign {
-				classification, summary = "security_drift", "unexpected network member"
-			}
-		}
-		protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"classification": classification, "summary": summary}})
-		return
-	}
-	var id, name, network, image, mode, hostAddress, serviceID, serviceProtocol string
-	var hostPort, containerPort int
-	e := db.QueryRow("SELECT container_id,container_name,network_name,image_digest,exposure_mode,host_address,host_port,service_id,container_port,service_protocol FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&id, &name, &network, &image, &mode, &hostAddress, &hostPort, &serviceID, &containerPort, &serviceProtocol)
-	classification, summary := "missing", "trusted ownership record absent"
-	if e == nil {
-		got, ie := docker.New().Inspect(id)
-		if ie != nil {
-			items, le := docker.New().ListContainers()
-			if le == nil {
-				for _, item := range items {
-					for _, n := range item.Names {
-						if n == "/"+name {
-							classification, summary = "ownership_conflict", "conflicting object occupies expected name"
-						}
-					}
-				}
-			}
-			if classification != "ownership_conflict" {
-				summary = "managed container missing"
-			}
-		} else {
-			cfg, _ := got["Config"].(map[string]any)
-			labels, _ := cfg["Labels"].(map[string]any)
-			if labels[ownership.LabelManaged] == "true" && labels[ownership.LabelInstance] == r.InstanceID && cfg["Image"] == image {
-				application, _ := labels["com.kitpro.application"].(string)
-				if !trustedRuntimeIdentityMatches(application, "", cfg) {
-					classification, summary = "security_drift", "runtime identity drift"
-				}
-				host, _ := got["HostConfig"].(map[string]any)
-				if he := validateHardwareObservation(db, r.InstanceID, "", host); he != nil {
-					classification, summary = "security_drift", he.Error()
-				}
-				if se := validateStorageObservation(db, r.InstanceID, "", application, host); se != nil {
-					classification, summary = "security_drift", se.Error()
-				}
-				pb, _ := host["PortBindings"].(map[string]any)
-				if !exposure.ObservedBindingsExact(exposure.Assignment{Mode: exposure.Mode(mode), Address: hostAddress, Port: hostPort}, containerPort, serviceProtocol, pb) {
-					classification, summary = "security_drift", "unexpected or missing host exposure"
-					slog.Default().Warn("exposure drift", "event", "exposure_drift_detected", "installation_id", r.InstanceID, "service_id", serviceID, "mode", mode, "host_address", hostAddress, "host_port", hostPort, "result", "security_drift")
-				}
-				if foreign, ne := docker.New().HasForeignNetworkMember(network, id); ne == nil && foreign {
-					classification, summary = "security_drift", "unexpected network member"
-				}
-				if classification == "security_drift" { /* preserve drift classification */
-				} else {
-					classification, summary = "exact", "managed resource matches trusted state"
-				}
-			} else {
-				classification, summary = "ownership-conflict", "observed labels or image differ"
-			}
-		}
-	}
-	_, _ = db.Exec("INSERT OR REPLACE INTO reconciliation VALUES(?,?,?,?)", r.InstanceID, classification, time.Now().UTC().Format(time.RFC3339Nano), summary)
-	protocol.Write(c, protocol.Response{OK: classification == "exact", RequestID: r.ID, Result: map[string]string{"classification": classification, "summary": summary}})
-}
-
 func trustedRuntimeIdentityMatches(applicationID, componentID string, config map[string]any) bool {
 	entries, err := catalog.Load()
 	if err != nil {
@@ -1221,167 +1720,199 @@ func trustedRuntimeIdentityMatches(applicationID, componentID string, config map
 	got, _ := config["User"].(string)
 	return got == strconv.Itoa(want.UID)+":"+strconv.Itoa(want.GID)
 }
-func remove(c net.Conn, db *sql.DB, r protocol.Request) {
+func changeApplicationState(c io.Writer, db *sql.DB, request protocol.Request, coordinator helperops.Coordinator, fencingToken int64, action string) {
 	var componentCount int
-	_ = db.QueryRow("SELECT COUNT(*) FROM component_ownership WHERE installation_id=?", r.InstanceID).Scan(&componentCount)
-	if componentCount > 0 {
-		rows, err := db.Query("SELECT container_id,network_name FROM component_ownership WHERE installation_id=?", r.InstanceID)
-		if err != nil {
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			return
-		}
-		var ids []string
-		network := ""
-		for rows.Next() {
-			var id, n string
-			if err = rows.Scan(&id, &n); err != nil {
-				_ = rows.Close()
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-				return
-			}
-			ids = append(ids, id)
-			network = n
-		}
-		_ = rows.Close()
-		d := docker.New()
-		for _, id := range ids {
-			if id != "" {
-				err = d.Stop(id)
-				if err == nil && r.Operation == "RemoveApplication" {
-					err = d.Remove(id)
-				}
-			}
-			if err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-				return
-			}
-		}
-		if r.Operation == "RemoveApplication" {
-			if network != "" {
-				err = d.RemoveNetwork(network)
-			}
-			if err == nil {
-				_, err = db.Exec("DELETE FROM component_ownership WHERE installation_id=?", r.InstanceID)
-			}
-		}
-		if err != nil {
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			return
-		}
-		protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"network": network}})
+	err := db.QueryRow(`SELECT COUNT(*) FROM runtime_components c JOIN runtime_generations g USING(installation_id,runtime_generation) WHERE c.installation_id=? AND g.status IN ('active','verification_required')`, request.InstanceID).Scan(&componentCount)
+	if err != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: err.Error()})
 		return
 	}
-	var id, name, network string
-	e := db.QueryRow("SELECT container_id,container_name,network_name FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&id, &name, &network)
-	if e == nil {
-		var got map[string]any
-		got, e = docker.New().Inspect(id)
-		if e == nil {
-			cfg, _ := got["Config"].(map[string]any)
-			labels, _ := cfg["Labels"].(map[string]any)
-			if labels[ownership.LabelManaged] != "true" || labels[ownership.LabelInstance] != r.InstanceID {
-				e = fmt.Errorf("ownership labels mismatch")
+	var multiGeneration int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM runtime_generations WHERE installation_id=? AND status IN ('active','verification_required') AND topology_hash<>''`, request.InstanceID).Scan(&multiGeneration)
+	if multiGeneration > 0 && componentCount < 2 {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: "multi-component generation evidence is incomplete"})
+		return
+	}
+	if componentCount > 1 {
+		runtime, ok := newContainerRuntime().(containers.LifecycleRuntime)
+		if !ok {
+			protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "multi-component lifecycle requires the supported Docker lifecycle runtime"})
+			return
+		}
+		result, operationErr := (lifecycle.MultiRunner{Runtime: runtime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Operate(context.Background(), request.InstanceID, request.OperationID, fencingToken, action)
+		if operationErr != nil {
+			var unknown lifecycle.UnknownOutcomeError
+			if errors.As(operationErr, &unknown) {
+				protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: operationErr.Error()})
+			} else {
+				protocol.Write(c, protocol.Response{RequestID: request.ID, Error: operationErr.Error()})
 			}
+			return
+		}
+		protocol.Write(c, protocol.Response{OK: true, RequestID: request.ID, Result: result})
+		return
+	}
+	var legacyCount int
+	_ = db.QueryRow("SELECT COUNT(*) FROM component_ownership WHERE installation_id=?", request.InstanceID).Scan(&legacyCount)
+	if legacyCount > 0 {
+		if migrationErr := backfillLegacyMultiForLifecycle(db, request.InstanceID); migrationErr != nil {
+			protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: migrationErr.Error()})
+			return
+		}
+		if countErr := db.QueryRow(`SELECT COUNT(*) FROM runtime_components c JOIN runtime_generations g USING(installation_id,runtime_generation) WHERE c.installation_id=? AND g.status='verification_required'`, request.InstanceID).Scan(&componentCount); countErr == nil && componentCount > 1 {
+			runtime, ok := newContainerRuntime().(containers.LifecycleRuntime)
+			if !ok {
+				protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "multi-component lifecycle requires the supported Docker lifecycle runtime"})
+				return
+			}
+			result, operationErr := (lifecycle.MultiRunner{Runtime: runtime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Operate(context.Background(), request.InstanceID, request.OperationID, fencingToken, action)
+			if operationErr != nil {
+				protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: operationErr.Error()})
+				return
+			}
+			protocol.Write(c, protocol.Response{OK: true, RequestID: request.ID, Result: result})
+			return
 		}
 	}
-	if e == nil {
-		if foreign, checkErr := docker.New().HasForeignNetworkMember(network, id); checkErr != nil {
-			e = checkErr
-		} else if foreign {
-			e = fmt.Errorf("network security drift")
+	runtime, ok := newContainerRuntime().(containers.LifecycleRuntime)
+	if !ok {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "single-component lifecycle requires the supported Docker lifecycle runtime"})
+		return
+	}
+	_ = prepareMigratedSingleConfiguration(context.Background(), db, runtime, request.InstanceID)
+	if (action == "start" || action == "restart") && validateInstallationStorageAvailable(db, request.InstanceID) != nil {
+		protocol.Write(c, protocol.Response{RequestID: request.ID, Error: "storage unavailable"})
+		return
+	}
+	result, operationErr := (lifecycle.SingleRunner{Runtime: runtime, Store: lifecycle.Store{DB: db}, Evidence: coordinator}).Operate(context.Background(), request.InstanceID, request.OperationID, fencingToken, action)
+	if operationErr != nil {
+		var unknown lifecycle.UnknownOutcomeError
+		if errors.As(operationErr, &unknown) {
+			protocol.Write(c, protocol.Response{RequestID: request.ID, ErrorCode: "RecoveryRequired", Error: operationErr.Error()})
+		} else {
+			protocol.Write(c, protocol.Response{RequestID: request.ID, Error: operationErr.Error()})
 		}
+		return
 	}
-	if e == nil {
-		e = docker.New().Stop(id)
-	}
-	if e == nil && r.Operation == "RemoveApplication" {
-		e = docker.New().Remove(id)
-		if e == nil {
-			e = docker.New().RemoveNetwork(network)
-		}
-		if e == nil {
-			e = markRuntimeRemoved(db, r.InstanceID)
-		}
-	}
-	if e != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
-	} else {
-		protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"container": name, "network": network}})
-	}
+	protocol.Write(c, protocol.Response{OK: true, RequestID: request.ID, Result: result})
 }
 
-// markRuntimeRemoved retains the helper-owned installation identity and its
-// storage/exposure trust anchors while clearing the disposable Docker runtime.
-// A later recreate can therefore prove continuity without adopting state from
-// the control plane or from Docker labels alone.
-func markRuntimeRemoved(db *sql.DB, instanceID string) error {
-	_, err := db.Exec(`UPDATE ownership
-		SET container_id='', container_name='', network_name=''
-		WHERE instance_id=?`, instanceID)
-	return err
+func backfillLegacyMultiForLifecycle(db *sql.DB, installation string) error {
+	rows, err := db.Query(`SELECT component_id,image_digest,runtime_generation FROM component_ownership WHERE installation_id=? ORDER BY component_id`, installation)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	images := map[string]string{}
+	generation := 0
+	for rows.Next() {
+		var componentID, image string
+		var rowGeneration int
+		if err = rows.Scan(&componentID, &image, &rowGeneration); err != nil {
+			return err
+		}
+		if generation == 0 {
+			generation = rowGeneration
+		}
+		if rowGeneration != generation || images[componentID] != "" {
+			return errors.New("legacy component ownership has mixed generations or duplicates")
+		}
+		images[componentID] = image
+	}
+	if err = rows.Err(); err != nil || len(images) < 2 {
+		return errors.New("legacy component ownership is incomplete")
+	}
+	entries, err := catalog.Load()
+	if err != nil {
+		return err
+	}
+	type match struct {
+		manifest manifest.Manifest
+		topology multicontainer.Topology
+		request  protocol.Request
+	}
+	var matches []match
+	for _, entry := range entries {
+		if len(entry.Manifest.Components) != len(images) || len(entry.Manifest.Components) < 2 {
+			continue
+		}
+		request := protocol.Request{InstanceID: installation, ApplicationID: entry.Manifest.ID, ReleaseID: entry.Manifest.Releases[0].Version, RuntimeGeneration: generation + 1, DataPath: "/srv/kitpro/apps/" + entry.Manifest.ID + "/" + installation + "/data", ExposureMode: "internal"}
+		nodes := make([]manifest.Component, 0, len(entry.Manifest.Components))
+		exact := true
+		for _, component := range entry.Manifest.Components {
+			image := ""
+			for _, release := range entry.Manifest.Releases {
+				if release.Version == component.Release {
+					image = release.Registry + "/" + release.Repository + "@" + release.Digest
+					break
+				}
+			}
+			if images[component.ID] != image {
+				exact = false
+				break
+			}
+			request.Components = append(request.Components, protocol.Component{ID: component.ID, Image: image, DependsOn: append([]string(nil), component.DependsOn...)})
+			nodes = append(nodes, manifest.Component{ID: component.ID, DependsOn: append([]string(nil), component.DependsOn...)})
+		}
+		if !exact {
+			continue
+		}
+		topology, topologyErr := multicontainer.BuildTopology(nodes)
+		if topologyErr != nil {
+			continue
+		}
+		matches = append(matches, match{manifest: entry.Manifest, topology: topology, request: request})
+	}
+	if len(matches) != 1 {
+		return errors.New("legacy component ownership does not match exactly one trusted catalog topology")
+	}
+	return backfillLegacyMulti(db, matches[0].request, matches[0].topology, matches[0].manifest)
 }
-func start(c net.Conn, db *sql.DB, r protocol.Request) {
-	if err := validateInstallationStorageAvailable(db, r.InstanceID); err != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "storage unavailable"})
-		return
+
+func backfillLegacyMultiAtStartup(ctx context.Context, db *sql.DB) (int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT installation_id FROM component_ownership GROUP BY installation_id HAVING COUNT(*)>1 AND NOT EXISTS (SELECT 1 FROM runtime_generations g WHERE g.installation_id=component_ownership.installation_id) ORDER BY installation_id`)
+	if err != nil {
+		return 0, err
 	}
-	var componentCount int
-	_ = db.QueryRow("SELECT COUNT(*) FROM component_ownership WHERE installation_id=?", r.InstanceID).Scan(&componentCount)
-	if componentCount > 0 {
-		rows, err := db.Query("SELECT container_id,container_name FROM component_ownership WHERE installation_id=?", r.InstanceID)
-		if err != nil {
-			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-			return
+	var installations []string
+	for rows.Next() {
+		var installation string
+		if err = rows.Scan(&installation); err != nil {
+			rows.Close()
+			return 0, err
 		}
-		defer rows.Close()
-		d := docker.New()
-		for rows.Next() {
-			var id, name string
-			if err = rows.Scan(&id, &name); err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-				return
-			}
-			if err = d.Start(id); err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, Error: err.Error()})
-				return
-			}
-		}
-		protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"status": "started"}})
-		return
+		installations = append(installations, installation)
 	}
-	var id, name, network, mode, hostAddress, serviceProtocol string
-	var hostPort, containerPort int
-	e := db.QueryRow("SELECT container_id,container_name,network_name,exposure_mode,host_address,host_port,container_port,service_protocol FROM ownership WHERE instance_id=?", r.InstanceID).Scan(&id, &name, &network, &mode, &hostAddress, &hostPort, &containerPort, &serviceProtocol)
-	if e == nil {
-		var got map[string]any
-		got, e = docker.New().Inspect(id)
-		if e == nil {
-			cfg, _ := got["Config"].(map[string]any)
-			labels, _ := cfg["Labels"].(map[string]any)
-			if labels[ownership.LabelManaged] != "true" || labels[ownership.LabelInstance] != r.InstanceID {
-				e = fmt.Errorf("ownership labels mismatch")
-			} else if !trustedExposureMatches(got, mode, hostAddress, hostPort, containerPort, serviceProtocol) {
-				slog.Default().Warn("start blocked by exposure drift", "event", "exposure_drift_detected", "operation_id", r.ID, "installation_id", r.InstanceID, "mode", mode, "host_address", hostAddress, "host_port", hostPort, "result", "security_drift")
-				e = fmt.Errorf("exposure security drift")
+	if err = rows.Close(); err != nil {
+		return 0, err
+	}
+	store := lifecycle.Store{DB: db}
+	for _, installation := range installations {
+		if err = backfillLegacyMultiForLifecycle(db, installation); err != nil {
+			result := lifecycle.ReconciliationResult{InstallationID: installation, State: lifecycle.ReconciliationActionRequired, RuntimeState: "unknown", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), MismatchCodes: []lifecycle.MismatchCode{lifecycle.MismatchOwnershipAmbiguous}, RecommendedAction: lifecycle.RepairNone, Summary: "legacy component ownership does not exactly match one trusted catalog topology"}
+			if saveErr := store.SaveReconciliation(ctx, result); saveErr != nil {
+				return 0, saveErr
 			}
 		}
 	}
-	if e == nil {
-		if foreign, checkErr := docker.New().HasForeignNetworkMember(network, id); checkErr != nil {
-			e = checkErr
-		} else if foreign {
-			slog.Default().Warn("start blocked by network drift", "event", "network_drift_detected", "operation_id", r.ID, "installation_id", r.InstanceID, "result", "security_drift")
-			e = fmt.Errorf("network security drift")
-		}
+	return len(installations), nil
+}
+
+type singleRuntimeOwnership struct {
+	Generation                                            int
+	ContainerID, ContainerName, NetworkName, Image        string
+	ApplicationID, ReleaseID, DataPath                    string
+	ExposureMode, ServiceID, HostAddress, ServiceProtocol string
+	HostPort, ContainerPort                               int
+}
+
+func loadSingleRuntime(db *sql.DB, installation string) (singleRuntimeOwnership, error) {
+	var owned singleRuntimeOwnership
+	err := db.QueryRow(`SELECT g.runtime_generation,c.observed_container_id,c.container_name,g.network_name,c.image_digest,g.application_id,g.release_id,g.data_path,g.exposure_mode,g.service_id,g.host_address,g.host_port,g.container_port,g.service_protocol FROM runtime_generations g JOIN runtime_components c USING(installation_id,runtime_generation) WHERE g.installation_id=? AND g.status IN ('active','verification_required') AND c.component_id='app' ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1`, installation).Scan(&owned.Generation, &owned.ContainerID, &owned.ContainerName, &owned.NetworkName, &owned.Image, &owned.ApplicationID, &owned.ReleaseID, &owned.DataPath, &owned.ExposureMode, &owned.ServiceID, &owned.HostAddress, &owned.HostPort, &owned.ContainerPort, &owned.ServiceProtocol)
+	if err == sql.ErrNoRows {
+		err = db.QueryRow(`SELECT runtime_generation,container_id,container_name,network_name,image_digest,application_id,release_id,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol FROM ownership WHERE instance_id=?`, installation).Scan(&owned.Generation, &owned.ContainerID, &owned.ContainerName, &owned.NetworkName, &owned.Image, &owned.ApplicationID, &owned.ReleaseID, &owned.DataPath, &owned.ExposureMode, &owned.ServiceID, &owned.HostAddress, &owned.HostPort, &owned.ContainerPort, &owned.ServiceProtocol)
 	}
-	if e == nil {
-		e = docker.New().Start(id)
-	}
-	if e != nil {
-		protocol.Write(c, protocol.Response{RequestID: r.ID, Error: e.Error()})
-		return
-	}
-	protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]string{"container": name}})
+	return owned, err
 }
 
 func trustedExposureMatches(observed map[string]any, mode, hostAddress string, hostPort, containerPort int, serviceProtocol string) bool {

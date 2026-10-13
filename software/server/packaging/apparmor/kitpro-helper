@@ -4,10 +4,19 @@
   #include <abstractions/base>
   /usr/libexec/kitpro-helper rix,
   capability chown,
+  capability dac_read_search,
   /etc/passwd r,
+  /run/kitpro/helper-state.lock rwk,
   /run/kitpro/** rw,
   /var/lib/kitpro-helper/ rw,
   /var/lib/kitpro-helper/** rwk,
+  /run/kitpro-ingress/acme.sock rw,
+  # backup.Vacuum atomically publishes verified upgrade and host-state database
+  # snapshots by hard-linking private temporary files to fixed final names in
+  # root-owned backup directories. No other helper path gains link authority.
+  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,
+  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,
+  link subset /var/lib/kitpro-helper/backups/.host-backup-*/helper.db -> /var/lib/kitpro-helper/backups/.host-backup-*/.helper.db.partial-*,
   /srv/kitpro/** rwk,
   # Directory metadata only. The helper validates registered roots but never
   # reads imported content; Docker performs the constrained bind mount.

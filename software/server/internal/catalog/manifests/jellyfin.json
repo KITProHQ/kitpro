@@ -1,8 +1,15 @@
 {
-  "schema_version": 4,
+  "schema_version": 9,
   "id": "jellyfin",
   "name": "Jellyfin",
   "description": "Stream a private media library while keeping source media outside KITPro's lifecycle.",
+  "category": "Media",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://jellyfin.org/",
+  "source_url": "https://github.com/jellyfin/jellyfin",
+  "documentation_url": "https://jellyfin.org/docs/",
+  "limitations": ["Hardware transcoding is not certified."],
   "releases": [
     {"version": "12.1", "registry": "docker.io", "repository": "jellyfin/jellyfin", "digest": "sha256:326be1010b16c92e492f6c7dd6fd105943db84ce723c73183279a1ab357b8f9b", "platform": "linux/amd64"}
   ],
@@ -17,7 +24,8 @@
     {"class": "gpu.nvidia", "optional": true, "cpu_fallback": true}
   ],
   "services": [
-    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8096}
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8096, "ingress": {"exposure_modes": ["lan", "managed-https", "cloudflare-tunnel"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "config", "disposition": "include"}, {"component": "app", "id": "cache", "disposition": "exclude-ephemeral"}]}
 }

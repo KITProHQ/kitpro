@@ -2,7 +2,7 @@
 
 ## Contract status
 
-The alpha.12 API is an authenticated local control-plane interface for the
+The alpha.14 API is an authenticated local control-plane interface for the
 shipped dashboard and operator diagnostics. It is public source, but it is an
 alpha contract. Endpoint shapes and state names may change before a stable
 release. Internal helper socket operations are not public HTTP APIs.
@@ -10,6 +10,12 @@ release. Internal helper socket operations are not public HTTP APIs.
 All endpoints require an authenticated local administrator session. Mutating
 endpoints also require a valid CSRF token and the expected Origin and Host
 headers. The API does not promise a remote or machine-to-machine contract.
+
+Alpha.14 ingress, certificate, setup, provider, host-backup, readiness, and
+diagnostics endpoints follow the same authentication, Origin, Host, and CSRF
+rules. Secret inputs are write-only. The API never returns a certificate
+private key, ACME account key, Cloudflare token, password, session value, or
+application secret through those endpoints.
 
 ## Hardware inventory
 
@@ -20,16 +26,75 @@ headers. The API does not promise a remote or machine-to-machine contract.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/v1/version` | Authenticated KITPro and platform build metadata |
-| GET | `/api/v1/catalog` | Trusted application catalog and release metadata |
+| GET | `/api/v1/apps` | Trusted application catalog and release metadata |
 | GET | `/api/v1/installations` | Installed application identities and desired state |
 | GET | `/api/v1/installations/{id}/services` | Declared services and safe access state |
 | GET | `/api/v1/installations/{id}/reconciliation` | Last helper reconciliation result for the installation |
 | GET | `/api/v1/operations` | Operation history and status |
 | GET | `/api/v1/operations/{id}` | One control operation, refreshed from helper authority when pending |
 | GET | `/api/v1/storage-roots` | Trusted roots, access ceilings, filesystem type, and availability |
+| GET | `/api/v1/ingress` | Managed route state without backend secrets |
+| GET | `/api/v1/certificates` | Typed certificate, expiry, and renewal state |
+| GET | `/api/v1/exposure-providers` | Provider identity and health without credentials |
+| GET | `/api/v1/system/readiness` | Separate host and optional-service readiness dimensions |
+| GET | `/api/v1/setup` | Durable first-run step state and safe evidence |
+| GET | `/api/v1/diagnostics` | Support bundle history and inclusion policy |
 
 Image digests and installation identifiers are available for administration and
 support, but clients must not turn them into arbitrary Docker requests.
+
+## Managed ingress and certificates
+
+`POST /api/v1/ingress` creates an authorized hostname route. The request names
+an installation, catalog service, normalized hostname, exposure mode, upstream
+protocol, TLS policy, and optional certificate or provider ID. The server
+derives the loopback backend. A client cannot supply an upstream address or
+port.
+
+`DELETE /api/v1/ingress/{route_id}` removes the managed route.
+`POST /api/v1/ingress/reconcile` retries held routes after a restore and
+activates only a validated candidate whose application is ready.
+
+`POST /api/v1/certificates` accepts either a provided certificate and private
+key or an ACME request. ACME requests also name the authorized installation and
+service, contact email, allowlisted directory, and explicit terms acceptance.
+`POST /api/v1/certificates/{certificate_id}/renew` requests a renewal. `GET
+/api/v1/certificates` returns metadata and typed state only.
+
+## Cloudflare Tunnel provider
+
+`POST /api/v1/exposure-providers` configures a provider or replaces its token.
+Replacement must retain the account, zone, and tunnel identity. The response
+does not echo the token.
+
+The provider actions are:
+
+| Method | Path suffix | Effect |
+| --- | --- | --- |
+| GET | `/{provider_id}/health` | Inspect tunnel runtime and record bounded health state |
+| POST | `/{provider_id}/enable` | Enable and start local tunnel use |
+| POST | `/{provider_id}/disable` | Disable local tunnel use without deleting remote resources |
+| DELETE | `/{provider_id}/unlink` | Remove local integration without remote deletion |
+| DELETE | `/{provider_id}/routes/{hostname}?confirm_remote=true` | Remove one remote route explicitly |
+| DELETE | `/{provider_id}/remote-tunnel?confirm_remote=true` | Delete the remote tunnel explicitly |
+
+## Setup, readiness, backup, and diagnostics
+
+`GET /api/v1/setup` refreshes critical steps from current system state and
+returns the durable ten-step workflow. `POST /api/v1/setup` can record only the
+local or LAN access choice and an explicit deferral of optional HTTPS or
+Cloudflare. It cannot mark a critical prerequisite complete.
+
+`GET /api/v1/system/readiness` returns typed dimensions. Clients must not
+collapse `disabled`, `unknown`, `degraded`, and `ready` into one Boolean.
+
+`POST /api/v1/backup` creates both the control database backup and the protected
+helper-state archive. Its response states `contains_secrets: true` and
+`remote_cloudflare_resources_included: false`.
+
+`POST /api/v1/diagnostics` creates a redacted support bundle. `GET
+/api/v1/diagnostics` lists bundle metadata and states the inclusion and
+exclusion policy.
 
 ## Lifecycle operations
 
@@ -55,6 +120,26 @@ reconciled before repair or retry.
 The dashboard is the supported client for installing an application, starting
 or stopping a runtime, removing a runtime while keeping its data, and
 recreating a runtime with the same installation identity and storage.
+
+Runtime removal retains the installation record, managed storage,
+external-storage bindings, and generated secrets. The next supported recovery
+uses the same installation identity. The API has no destructive
+application-data deletion endpoint.
+
+For a catalog `network-service` whose lifecycle notice requires
+acknowledgement, the API returns `428 Precondition Required` unless stop,
+restart, update, recreate, runtime removal, or exposure replacement includes
+an explicit acknowledgement. JSON requests use `"acknowledged": true`; browser
+forms use `acknowledgement=accepted`. Ordinary applications are unaffected.
+
+`POST /api/v1/installations/{id}/credentials/{credential}/reveal` deliberately
+reveals one administrator credential authorized by the installed application's
+embedded manifest. The public credential ID is not an environment-variable
+name. The endpoint uses the normal authenticated session, Origin, Host, and
+CSRF checks and returns `Cache-Control: no-store`. No GET, catalog,
+installation, lifecycle, or operation response contains the value. Reveal is
+repeatable; refresh discards the displayed value from the page. Credential
+enumeration and reset are not supported.
 
 `GET /api/v1/operations` returns up to 20 recent operation records. `GET
 /api/v1/operations/{id}` returns one record with this public shape:
@@ -108,11 +193,31 @@ lifecycle path; the other actions execute through the helper repair operation.
 Clients must not invent a repair action that the latest reconciliation result
 did not recommend.
 
+Docker can remove a stopped container's live network attachment when a start
+fails while programming a host port. If the helper proves that the container,
+immutable configuration, configured network, and surviving network identity
+are otherwise exact, reconciliation reports `active_container_detached` and
+recommends `recreate_generation`. Other network or configuration drift remains
+`action_required` and is not adopted.
+
+Controlled recreation does not label the missing or detached source generation
+as a usable rollback. After the replacement commits, the helper removes only
+the exact unusable source resources and records that generation as removed. A
+normal verified update continues to retain its valid prior generation. If an
+older build already recorded an exact detached source as retained, fresh
+reconciliation recommends `cleanup_resources`; the bounded repair removes only
+that proven unusable retained generation.
+
 The reconciliation request has no body. The repair request is JSON:
 
 ```json
 {"action":"recreate_generation"}
 ```
+
+For a network service whose lifecycle notice requires acknowledgement, include
+`"acknowledged":true` in the same repair request. The acknowledgement is
+revalidated by the normal recreate route; repair does not bypass the network
+service notice.
 
 Both mutation responses contain an operation `id`, its current `status`, and
 the latest reconciliation `result` when available. Repeating a request is not
@@ -125,9 +230,14 @@ exists or reconcile the installation before taking another action.
 `POST /api/v1/installations/{id}/services/{service}/exposure` accepts only a
 policy mode (`internal`, `loopback`, or `lan`). Host addresses, host ports,
 container ports, protocols, and Docker binding objects are not client inputs.
+The trusted manifest can authorize dynamic TCP, multiple bindings, fixed TCP,
+fixed UDP, the same numeric TCP and UDP port, or non-HTTP TCP. Wildcard
+publication and host networking remain invalid.
 
 `DELETE /api/v1/installations/{id}/services/{service}/exposure` returns the
-service to `internal` and retains its assigned port for stable re-enable.
+service to `internal` and retains its assigned port for stable re-enable. A
+network service requiring acknowledgement uses
+`?acknowledgement=accepted` on this DELETE endpoint.
 
 ## Application updates
 

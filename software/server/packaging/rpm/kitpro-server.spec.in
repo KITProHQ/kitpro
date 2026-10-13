@@ -1,0 +1,209 @@
+%global debug_package %{nil}
+
+Name:           kitpro-server
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Local application manager for KITPro Server
+License:        Apache-2.0
+URL:            https://github.com/KITProHQ/kitpro
+Source0:        %{name}-%{version}.tar.gz
+
+ExclusiveArch:  x86_64
+BuildRequires:  golang
+BuildRequires:  bzip2
+BuildRequires:  systemd-rpm-macros
+BuildRequires:  selinux-policy-devel
+BuildRequires:  selinux-policy-targeted
+Requires:       podman >= 5
+Requires:       crun
+Requires:       container-selinux
+Requires:       firewalld
+Requires:       policycoreutils-python-utils
+Requires:       systemd
+Requires:       nginx
+Requires:       util-linux
+Requires:       kitpro-selinux = %{version}-%{release}
+Requires(pre):  systemd
+Requires(pre):  libselinux-utils
+Requires(post): systemd
+Requires(preun): systemd
+
+%description
+KITPro Server manages a curated set of OCI application containers. On Rocky
+Linux 10 it uses rootful Podman, Quadlet-generated systemd services, SELinux
+Enforcing, and firewalld without installing Docker Engine.
+
+%package -n kitpro-selinux
+Summary:        SELinux file contexts for KITPro Server application data
+Requires:       container-selinux
+Requires(post): policycoreutils
+Requires(postun): policycoreutils
+Requires(post): selinux-policy-targeted
+
+%description -n kitpro-selinux
+Installs the persistent file-context rule for KITPro-managed container data.
+Container execution remains in the standard container_t domain with Podman MCS
+separation. The package does not add permissive domains or SELinux booleans.
+
+%prep
+%autosetup
+
+%build
+cd software/server
+export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-api ./cmd/kitpro-api
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-helper ./cmd/kitpro-helper
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-acme ./cmd/kitpro-acme
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-cloudflare ./cmd/kitpro-cloudflare
+go build -trimpath -buildvcs=false -ldflags '-s -w -X github.com/kitpro/kitpro/software/server/internal/buildinfo.Version=%{version} -X github.com/kitpro/kitpro/software/server/internal/buildinfo.SourceCommit=@SOURCE_COMMIT@ -X github.com/kitpro/kitpro/software/server/internal/buildinfo.BuildDate=@BUILD_DATE@' -o kitpro-ingress-validator ./cmd/kitpro-ingress-validator
+make -C packaging/selinux kitpro.pp
+bzip2 -9 packaging/selinux/kitpro.pp
+
+%install
+cd software/server
+install -Dpm0755 kitpro-api %{buildroot}%{_bindir}/kitpro-api
+ln -s kitpro-api %{buildroot}%{_bindir}/kitpro-server
+install -Dpm0755 kitpro-helper %{buildroot}%{_libexecdir}/kitpro-helper
+install -Dpm0755 kitpro-acme %{buildroot}%{_libexecdir}/kitpro-acme
+install -Dpm0755 kitpro-cloudflare %{buildroot}%{_libexecdir}/kitpro-cloudflare
+install -Dpm0755 kitpro-ingress-validator %{buildroot}%{_libexecdir}/kitpro-ingress-validator
+install -Dpm0755 packaging/rpm/kitpro-podman-command %{buildroot}%{_libexecdir}/kitpro-podman-command
+install -Dpm0755 packaging/rpm/kitpro-server-uninstall %{buildroot}%{_sbindir}/kitpro-server-uninstall
+install -Dpm0644 packaging/systemd/kitpro-api.service %{buildroot}%{_unitdir}/kitpro-api.service
+install -Dpm0644 packaging/systemd/kitpro-ingress.service %{buildroot}%{_unitdir}/kitpro-ingress.service
+install -Dpm0644 packaging/nginx/bootstrap.conf %{buildroot}%{_datadir}/kitpro-server/ingress-bootstrap.conf
+install -Dpm0644 packaging/systemd/kitpro-helper-rocky.service %{buildroot}%{_unitdir}/kitpro-helper.service
+install -Dpm0644 packaging/systemd/kitpro-helper.socket %{buildroot}%{_unitdir}/kitpro-helper.socket
+install -Dpm0644 packaging/systemd/kitpro-acme-rocky.service %{buildroot}%{_unitdir}/kitpro-acme.service
+install -Dpm0644 packaging/systemd/kitpro-cloudflare-rocky.service %{buildroot}%{_unitdir}/kitpro-cloudflare.service
+install -Dpm0644 packaging/systemd/kitpro-ingress-validator-rocky.service %{buildroot}%{_unitdir}/kitpro-ingress-validator.service
+install -Dpm0644 packaging/systemd/kitpro-ingress-reload.path %{buildroot}%{_unitdir}/kitpro-ingress-reload.path
+install -Dpm0644 packaging/systemd/kitpro-ingress-reload.service %{buildroot}%{_unitdir}/kitpro-ingress-reload.service
+install -Dpm0644 packaging/tmpfiles/kitpro.conf %{buildroot}%{_tmpfilesdir}/kitpro.conf
+install -Dpm0644 packaging/rpm/kitpro-server.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/kitpro-server
+install -Dpm0644 packaging/rpm/kitpro-server.sysusers %{buildroot}%{_sysusersdir}/kitpro-server.conf
+install -Dpm0644 packaging/debian/kitpro-api.8 %{buildroot}%{_mandir}/man8/kitpro-api.8
+install -Dpm0644 packaging/debian/kitpro-helper.8 %{buildroot}%{_mandir}/man8/kitpro-helper.8
+install -d -m 0700 %{buildroot}%{_sysconfdir}/kitpro-server/runtime
+install -Dpm0644 packaging/selinux/kitpro.pp.bz2 %{buildroot}%{_datadir}/selinux/packages/kitpro/kitpro.pp.bz2
+install -Dpm0644 packaging/selinux/kitpro.if %{buildroot}%{_datadir}/selinux/devel/include/contrib/kitpro.if
+
+%pre
+. /etc/os-release
+if [ "${ID:-}" != rocky ] || [ "${VERSION_ID%%.*}" != 10 ]; then
+    echo "kitpro-server: this RPM is installable only on Rocky Linux 10" >&2
+    exit 1
+fi
+if [ "$(getenforce 2>/dev/null || true)" != Enforcing ]; then
+    echo "kitpro-server: SELinux must be Enforcing" >&2
+    exit 1
+fi
+if ! systemctl is-active --quiet firewalld.service || ! systemctl is-enabled --quiet firewalld.service; then
+    echo "kitpro-server: firewalld must be enabled and active" >&2
+    exit 1
+fi
+podman_major=$(podman version --format '{{.Client.Version}}' | cut -d. -f1)
+if ! [ "$podman_major" -ge 5 ] 2>/dev/null; then
+    echo "kitpro-server: Podman 5 or newer is required" >&2
+    exit 1
+fi
+if [ "$(podman info --format '{{.Host.OCIRuntime.Name}}')" != crun ]; then
+    echo "kitpro-server: crun must be the active OCI runtime" >&2
+    exit 1
+fi
+if [ "$1" -gt 1 ] && [ -x %{_bindir}/kitpro-api ] && [ -x %{_libexecdir}/kitpro-helper ]; then
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket >/dev/null 2>&1 || true
+    if [ -r %{_sysconfdir}/sysconfig/kitpro-server ]; then
+        . %{_sysconfdir}/sysconfig/kitpro-server
+    fi
+    export KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}
+    export KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}
+    export KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}
+    export KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}
+    [ ! -f "$KITPRO_CONTROL_DB" ] || runuser -u kitpro-api -- %{_bindir}/kitpro-api --prepare-upgrade '%{version}-%{release}'
+    [ ! -f "$KITPRO_HELPER_DB" ] || %{_libexecdir}/kitpro-helper --prepare-upgrade '%{version}-%{release}'
+fi
+
+%post
+%systemd_post kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service
+systemd-sysusers %{_sysusersdir}/kitpro-server.conf
+systemd-tmpfiles --create %{_tmpfilesdir}/kitpro.conf
+install -m 0640 -o root -g root %{_datadir}/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new
+mv -fT /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
+[ -e /var/lib/kitpro-helper/ingress/current ] || ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
+restorecon -RF /run/kitpro /run/kitpro-ingress /var/lib/kitpro-api /var/lib/kitpro-helper /var/log/kitpro /srv/kitpro %{_sysconfdir}/kitpro-server || true
+. %{_sysconfdir}/sysconfig/kitpro-server
+export KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}
+export KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}
+export KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}
+export KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}
+for backup_dir in "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"; do
+    [ ! -d "$backup_dir" ] || find "$backup_dir" -type f -exec chmod 0600 {} +
+done
+runuser -u kitpro-api -- %{_bindir}/kitpro-api --migrate-only
+%{_libexecdir}/kitpro-helper --migrate-only
+chown kitpro-api:kitpro-api "$KITPRO_CONTROL_DB"
+chmod 0600 "$KITPRO_CONTROL_DB"
+chown root:root "$KITPRO_HELPER_DB"
+chmod 0600 "$KITPRO_HELPER_DB"
+%{_sbindir}/kitpro-server-uninstall --restore
+systemctl daemon-reload
+systemctl enable --now kitpro-ingress-validator.service kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress.service kitpro-ingress-reload.path
+
+%preun
+if [ "$1" -eq 0 ] && [ ! -e /run/kitpro/purge-complete ]; then
+    %{_sbindir}/kitpro-server-uninstall --preserve-data
+fi
+%systemd_preun kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service
+
+%postun
+%systemd_postun_with_restart kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service
+if [ "$1" -eq 0 ]; then
+    rm -f /run/kitpro/purge-complete
+    rmdir /run/kitpro 2>/dev/null || true
+fi
+
+%post -n kitpro-selinux
+%selinux_modules_install -s targeted %{_datadir}/selinux/packages/kitpro/kitpro.pp.bz2
+restorecon -RF /srv/kitpro/apps 2>/dev/null || true
+
+%postun -n kitpro-selinux
+if [ "$1" -eq 0 ]; then
+    %selinux_modules_uninstall -s targeted kitpro
+fi
+
+%files
+%license LICENSE
+%doc software/server/README.md
+%{_bindir}/kitpro-api
+%{_bindir}/kitpro-server
+%{_libexecdir}/kitpro-helper
+%{_libexecdir}/kitpro-acme
+%{_libexecdir}/kitpro-cloudflare
+%{_libexecdir}/kitpro-ingress-validator
+%{_libexecdir}/kitpro-podman-command
+%{_sbindir}/kitpro-server-uninstall
+%{_unitdir}/kitpro-api.service
+%{_unitdir}/kitpro-ingress.service
+%{_datadir}/kitpro-server/ingress-bootstrap.conf
+%{_unitdir}/kitpro-helper.service
+%{_unitdir}/kitpro-helper.socket
+%{_unitdir}/kitpro-acme.service
+%{_unitdir}/kitpro-cloudflare.service
+%{_unitdir}/kitpro-ingress-validator.service
+%{_unitdir}/kitpro-ingress-reload.path
+%{_unitdir}/kitpro-ingress-reload.service
+%{_tmpfilesdir}/kitpro.conf
+%{_sysusersdir}/kitpro-server.conf
+%{_mandir}/man8/kitpro-api.8*
+%{_mandir}/man8/kitpro-helper.8*
+%config(noreplace) %{_sysconfdir}/sysconfig/kitpro-server
+%dir %attr(0700,root,root) %{_sysconfdir}/kitpro-server/runtime
+
+%files -n kitpro-selinux
+%{_datadir}/selinux/packages/kitpro/kitpro.pp.bz2
+%{_datadir}/selinux/devel/include/contrib/kitpro.if
+
+%changelog
+* Tue Sep 15 2026 KITPro Project <release@kitpro.local> - @VERSION@-1
+- Add the experimental Rocky Linux 10 Podman and Quadlet package path.

@@ -1,0 +1,9 @@
+[Unit]
+Description=KITPro managed ingress reload requests
+
+[Path]
+PathExists=/run/kitpro/ingress-reload.request
+Unit=kitpro-ingress-reload.service
+
+[Install]
+WantedBy=multi-user.target

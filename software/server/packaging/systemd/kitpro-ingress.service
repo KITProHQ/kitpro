@@ -1,0 +1,31 @@
+[Unit]
+Description=KITPro managed ingress
+After=network-online.target
+Wants=network-online.target kitpro-acme.service
+
+[Service]
+Type=forking
+PIDFile=/var/lib/kitpro-helper/ingress/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -p /var/lib/kitpro-helper/ingress/ -c current/nginx.conf
+ExecStart=/usr/sbin/nginx -p /var/lib/kitpro-helper/ingress/ -c current/nginx.conf
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill -QUIT $MAINPID
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/kitpro-helper/ingress /run/kitpro-ingress
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+UMask=0077
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -10,7 +10,9 @@ Every case uses one status:
 - `BLOCKED`: an attempted case could not run because a stated environmental dependency or control prevented it.
 - `OBSERVATION`: measured context that is not itself an acceptance test.
 
-Reference-host acceptance requires results from the actual disposable Debian 13 and Rocky Linux 10 VMs. Fake Docker tests and development-host results validate fixture logic, not Docker Engine or distribution behavior.
+Reference-host acceptance requires results from the actual disposable Debian 13
+and Rocky Linux 10 VMs. Fake runtime tests and development-host results validate
+adapter logic, not Docker Engine, Podman/Quadlet, or distribution behavior.
 
 Capture each target run with the process in [`tools/platform-validation/README.md`](../../../tools/platform-validation/README.md). Keep the raw terminal transcript and a SHA-256 checksum, then complete a new timestamped copy of the matching Markdown template. Record the fixture revision, VM and snapshot identifiers, resolved image digest, every command, relevant output, and each unrun case. Never replace a prior failed record with a rerun.
 

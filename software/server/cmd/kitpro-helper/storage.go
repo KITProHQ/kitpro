@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/kitpro/kitpro/software/server/internal/catalog"
-	"github.com/kitpro/kitpro/software/server/internal/docker"
+	"github.com/kitpro/kitpro/software/server/internal/containers"
 	"github.com/kitpro/kitpro/software/server/internal/externalstorage"
 	"github.com/kitpro/kitpro/software/server/internal/manifest"
 	"github.com/kitpro/kitpro/software/server/internal/protocol"
@@ -154,7 +154,7 @@ func removeStorageRoot(db *sql.DB, rootID string) error {
 	return nil
 }
 
-func resolveExternalMounts(db *sql.DB, installation, component string, generation int, declarations []manifest.ExternalStorage, requested []protocol.ExternalStorageBinding) ([]docker.StorageMount, error) {
+func resolveExternalMounts(db *sql.DB, installation, component string, generation int, declarations []manifest.ExternalStorage, requested []protocol.ExternalStorageBinding) ([]containers.StorageMount, error) {
 	_ = generation
 	if len(declarations) != len(requested) {
 		return nil, fmt.Errorf("external storage selection required")
@@ -168,7 +168,7 @@ func resolveExternalMounts(db *sql.DB, installation, component string, generatio
 		seen[binding.SlotID] = true
 		wanted[binding.SlotID] = binding.RootID
 	}
-	mounts := []docker.StorageMount{}
+	mounts := []containers.StorageMount{}
 	for _, declaration := range declarations {
 		rootID := wanted[declaration.ID]
 		if rootID == "" && !declaration.Required {
@@ -207,7 +207,7 @@ func resolveExternalMounts(db *sql.DB, installation, component string, generatio
 		if _, err = validateExternalStorage(identity, path); err != nil {
 			return nil, fmt.Errorf("storage unavailable: %s", name)
 		}
-		mounts = append(mounts, docker.StorageMount{HostPath: path, ContainerPath: declaration.ContainerPath, ReadOnly: declaration.Mode == externalstorage.ReadOnly})
+		mounts = append(mounts, containers.StorageMount{HostPath: path, ContainerPath: declaration.ContainerPath, ReadOnly: declaration.Mode == externalstorage.ReadOnly})
 	}
 	return mounts, nil
 }
@@ -288,14 +288,25 @@ func stopInstallationsWithUnavailableStorage(db *sql.DB) {
 			continue
 		}
 		var id string
-		if db.QueryRow(`SELECT container_id FROM ownership WHERE instance_id=?`, installation).Scan(&id) == nil && id != "" {
-			_ = docker.New().Stop(id)
-		}
-		componentRows, e := db.Query(`SELECT container_id FROM component_ownership WHERE installation_id=?`, installation)
+		stoppedManaged := false
+		componentRows, e := db.Query(`SELECT c.observed_container_id FROM runtime_components c JOIN runtime_generations g USING(installation_id,runtime_generation) WHERE c.installation_id=? AND g.status='active' ORDER BY c.start_ordinal DESC,c.component_id DESC`, installation)
 		if e == nil {
 			for componentRows.Next() {
 				if componentRows.Scan(&id) == nil && id != "" {
-					_ = docker.New().Stop(id)
+					_ = newContainerRuntime().Stop(id)
+					stoppedManaged = true
+				}
+			}
+			_ = componentRows.Close()
+		}
+		if stoppedManaged {
+			continue
+		}
+		componentRows, e = db.Query(`SELECT container_id FROM component_ownership WHERE installation_id=? ORDER BY component_id DESC`, installation)
+		if e == nil {
+			for componentRows.Next() {
+				if componentRows.Scan(&id) == nil && id != "" {
+					_ = newContainerRuntime().Stop(id)
 				}
 			}
 			_ = componentRows.Close()

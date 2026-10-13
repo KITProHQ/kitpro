@@ -38,7 +38,7 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 	if err != nil {
 		return err
 	}
-	target := 7
+	target := 18
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -141,6 +141,541 @@ func Migrate(ctx context.Context, db *sql.DB, helper bool) error {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=7"); err != nil {
+			return err
+		}
+	}
+	if n < 8 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS application_backups (backup_id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, application_id TEXT NOT NULL, release_id TEXT NOT NULL, runtime_generation INTEGER NOT NULL, archive_path TEXT NOT NULL UNIQUE, archive_sha256 TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL CHECK(status = 'complete'))`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=8"); err != nil {
+			return err
+		}
+	}
+	if n < 9 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS helper_operations (
+				operation_id TEXT PRIMARY KEY,
+				request_hash TEXT NOT NULL,
+				request_json TEXT NOT NULL,
+				protocol_version INTEGER NOT NULL,
+				operation_revision INTEGER NOT NULL,
+				operation_kind TEXT NOT NULL,
+				installation_id TEXT NOT NULL,
+				caller_uid INTEGER NOT NULL,
+				state TEXT NOT NULL CHECK(state IN ('accepted','executing','reconciling','succeeded','failed','action_required','cancelled','superseded')),
+				current_phase TEXT NOT NULL,
+				outcome_confidence TEXT NOT NULL CHECK(outcome_confidence IN ('not_dispatched','confirmed_absent','confirmed_applied','unknown','mixed')),
+				recovery_disposition TEXT NOT NULL CHECK(recovery_disposition IN ('completed','retry_after_validation','reconcile_first','administrator_action','retry_forbidden')),
+				expected_generation INTEGER,
+				fencing_token INTEGER,
+				accepted_at TEXT NOT NULL,
+				started_at TEXT,
+				updated_at TEXT NOT NULL,
+				completed_at TEXT,
+				result_json TEXT NOT NULL DEFAULT '',
+				error_code TEXT NOT NULL DEFAULT '',
+				error_detail TEXT NOT NULL DEFAULT ''
+			);
+			CREATE INDEX IF NOT EXISTS helper_operations_installation_state ON helper_operations(installation_id,state);
+			CREATE INDEX IF NOT EXISTS helper_operations_state_updated ON helper_operations(state,updated_at);
+			CREATE TABLE IF NOT EXISTS helper_operation_events (
+				event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				operation_id TEXT NOT NULL,
+				installation_id TEXT NOT NULL,
+				fencing_token INTEGER,
+				event_kind TEXT NOT NULL,
+				phase TEXT NOT NULL,
+				facts_json TEXT NOT NULL DEFAULT '{}',
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(operation_id) REFERENCES helper_operations(operation_id) ON DELETE RESTRICT
+			);
+			CREATE INDEX IF NOT EXISTS helper_operation_events_operation ON helper_operation_events(operation_id,event_id);
+			CREATE TABLE IF NOT EXISTS installation_leases (
+				installation_id TEXT PRIMARY KEY,
+				operation_id TEXT NOT NULL,
+				fencing_token INTEGER NOT NULL,
+				state TEXT NOT NULL CHECK(state IN ('held','recovery_required','released')),
+				acquired_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				recovery_required INTEGER NOT NULL CHECK(recovery_required IN (0,1)),
+				FOREIGN KEY(operation_id) REFERENCES helper_operations(operation_id) ON DELETE RESTRICT
+			)`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=9"); err != nil {
+			return err
+		}
+	}
+	if n < 10 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS runtime_generations (
+				installation_id TEXT NOT NULL,
+				runtime_generation INTEGER NOT NULL,
+				creating_operation_id TEXT NOT NULL,
+				application_id TEXT NOT NULL,
+				release_id TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('verification_required','prepared','candidate','active','retained','failed','cleanup_pending','removed')),
+				network_name TEXT NOT NULL,
+				observed_network_id TEXT NOT NULL DEFAULT '',
+				plan_hash TEXT NOT NULL DEFAULT '',
+				data_path TEXT NOT NULL DEFAULT '',
+				exposure_mode TEXT NOT NULL DEFAULT 'internal',
+				service_id TEXT NOT NULL DEFAULT '',
+				host_address TEXT NOT NULL DEFAULT '',
+				host_port INTEGER NOT NULL DEFAULT 0,
+				container_port INTEGER NOT NULL DEFAULT 0,
+				service_protocol TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				verified_at TEXT,
+				committed_at TEXT,
+				retired_at TEXT,
+				cleanup_state TEXT NOT NULL CHECK(cleanup_state IN ('not_required','clean','pending')),
+				PRIMARY KEY(installation_id,runtime_generation)
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS runtime_generations_one_active ON runtime_generations(installation_id) WHERE status='active';
+			CREATE INDEX IF NOT EXISTS runtime_generations_cleanup ON runtime_generations(cleanup_state,status);
+			CREATE TABLE IF NOT EXISTS runtime_components (
+				installation_id TEXT NOT NULL,
+				runtime_generation INTEGER NOT NULL,
+				component_id TEXT NOT NULL,
+				container_name TEXT NOT NULL,
+				observed_container_id TEXT NOT NULL DEFAULT '',
+				image_digest TEXT NOT NULL,
+				observed_image_id TEXT NOT NULL DEFAULT '',
+				configuration_hash TEXT NOT NULL DEFAULT '',
+				state TEXT NOT NULL CHECK(state IN ('unknown','created','stopped','running','missing','failed','removed')),
+				created_at TEXT NOT NULL,
+				started_at TEXT,
+				verified_at TEXT,
+				PRIMARY KEY(installation_id,runtime_generation,component_id),
+				FOREIGN KEY(installation_id,runtime_generation) REFERENCES runtime_generations(installation_id,runtime_generation) ON DELETE RESTRICT
+			);
+			INSERT OR IGNORE INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,cleanup_state)
+				SELECT instance_id,runtime_generation,'legacy-migration',application_id,release_id,'verification_required',network_name,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,'not_required'
+				FROM ownership WHERE runtime_generation > 0 AND container_id <> '';
+			INSERT OR IGNORE INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,state,created_at)
+				SELECT instance_id,runtime_generation,'app',container_name,container_id,image_digest,'unknown',created_at
+				FROM ownership WHERE runtime_generation > 0 AND container_id <> '';
+			INSERT OR IGNORE INTO runtime_generations(installation_id,runtime_generation,creating_operation_id,application_id,release_id,status,network_name,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,cleanup_state)
+				SELECT instance_id,runtime_generation,'legacy-migration',application_id,release_id,'removed',network_name,data_path,exposure_mode,service_id,host_address,host_port,container_port,service_protocol,created_at,'clean'
+				FROM ownership WHERE runtime_generation > 0 AND container_id = '';
+			INSERT OR IGNORE INTO runtime_components(installation_id,runtime_generation,component_id,container_name,observed_container_id,image_digest,state,created_at)
+				SELECT instance_id,runtime_generation,'app',container_name,container_id,image_digest,'removed',created_at
+				FROM ownership WHERE runtime_generation > 0 AND container_id = '';`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=10"); err != nil {
+			return err
+		}
+	}
+	if n < 11 {
+		if helper {
+			for _, statement := range []string{
+				`ALTER TABLE runtime_generations ADD COLUMN topology_hash TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE runtime_components ADD COLUMN dependencies_json TEXT NOT NULL DEFAULT '[]'`,
+				`ALTER TABLE runtime_components ADD COLUMN start_ordinal INTEGER NOT NULL DEFAULT 0`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS runtime_components_generation_ordinal ON runtime_components(installation_id,runtime_generation,start_ordinal)`,
+				`CREATE TABLE IF NOT EXISTS lifecycle_component_steps (
+					operation_id TEXT NOT NULL,
+					installation_id TEXT NOT NULL,
+					runtime_generation INTEGER NOT NULL,
+					component_id TEXT NOT NULL,
+					action TEXT NOT NULL,
+					attempt INTEGER NOT NULL,
+					expected_runtime_id TEXT NOT NULL DEFAULT '',
+					observed_runtime_id TEXT NOT NULL DEFAULT '',
+					intent_at TEXT NOT NULL,
+					dispatched_at TEXT,
+					verified_at TEXT,
+					outcome_confidence TEXT NOT NULL CHECK(outcome_confidence IN ('not_dispatched','confirmed_absent','confirmed_applied','unknown')),
+					error_detail TEXT NOT NULL DEFAULT '',
+					PRIMARY KEY(operation_id,runtime_generation,component_id,action,attempt),
+					FOREIGN KEY(operation_id) REFERENCES helper_operations(operation_id) ON DELETE RESTRICT,
+					FOREIGN KEY(installation_id,runtime_generation,component_id) REFERENCES runtime_components(installation_id,runtime_generation,component_id) ON DELETE RESTRICT
+				)`,
+				`CREATE INDEX IF NOT EXISTS lifecycle_component_steps_operation ON lifecycle_component_steps(operation_id,runtime_generation,component_id,action,attempt)`,
+			} {
+				if _, err = tx.ExecContext(ctx, statement); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=11"); err != nil {
+			return err
+		}
+	}
+	if n < 12 {
+		if helper {
+			if _, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS reconciliation (instance_id TEXT PRIMARY KEY, classification TEXT NOT NULL, observed_at TEXT NOT NULL, summary TEXT NOT NULL)`); err != nil {
+				return err
+			}
+			for _, statement := range []string{
+				`ALTER TABLE reconciliation ADD COLUMN checked_generation INTEGER NOT NULL DEFAULT 0`,
+				`ALTER TABLE reconciliation ADD COLUMN runtime_state TEXT NOT NULL DEFAULT 'unknown'`,
+				`ALTER TABLE reconciliation ADD COLUMN runtime_identity TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE reconciliation ADD COLUMN mismatch_codes_json TEXT NOT NULL DEFAULT '[]'`,
+				`ALTER TABLE reconciliation ADD COLUMN recommended_action TEXT NOT NULL DEFAULT 'none'`,
+				`ALTER TABLE reconciliation ADD COLUMN originating_operation_id TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE reconciliation ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'`,
+				`CREATE INDEX IF NOT EXISTS reconciliation_classification ON reconciliation(classification,observed_at)`,
+			} {
+				if _, err = tx.ExecContext(ctx, statement); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, statement := range []string{
+				`ALTER TABLE installations ADD COLUMN runtime_state TEXT NOT NULL DEFAULT 'unknown'`,
+				`ALTER TABLE installations ADD COLUMN reconciliation_state TEXT NOT NULL DEFAULT 'runtime_unknown'`,
+				`ALTER TABLE installations ADD COLUMN reconciliation_codes_json TEXT NOT NULL DEFAULT '[]'`,
+				`ALTER TABLE installations ADD COLUMN reconciled_at TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE installations ADD COLUMN projection_repaired_at TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE installations ADD COLUMN projection_source_operation_id TEXT NOT NULL DEFAULT ''`,
+			} {
+				if _, err = tx.ExecContext(ctx, statement); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=12"); err != nil {
+			return err
+		}
+	}
+	if n < 13 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS restore_operations (
+				operation_id TEXT PRIMARY KEY,
+				installation_id TEXT NOT NULL,
+				backup_id TEXT NOT NULL,
+				fencing_token INTEGER NOT NULL,
+				phase TEXT NOT NULL CHECK(phase IN ('validated','staged','swapping','runtime_restore_pending','committed','cleanup_pending','completed','rolled_back','action_required')),
+				running_components_json TEXT NOT NULL DEFAULT '[]',
+				original_secrets_json TEXT NOT NULL DEFAULT '{}',
+				restored_secrets_json TEXT NOT NULL DEFAULT '{}',
+				started_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				completed_at TEXT,
+				cleanup_error TEXT NOT NULL DEFAULT '',
+				error_detail TEXT NOT NULL DEFAULT '',
+				evidence_json TEXT NOT NULL DEFAULT '{}',
+				FOREIGN KEY(operation_id) REFERENCES helper_operations(operation_id) ON DELETE RESTRICT
+			);
+			CREATE INDEX IF NOT EXISTS restore_operations_installation_phase ON restore_operations(installation_id,phase);
+			CREATE TABLE IF NOT EXISTS restore_storage_steps (
+				operation_id TEXT NOT NULL,
+				storage_key TEXT NOT NULL,
+				original_path TEXT NOT NULL,
+				staged_path TEXT NOT NULL,
+				rollback_path TEXT NOT NULL,
+				original_device INTEGER NOT NULL,
+				original_inode INTEGER NOT NULL,
+				staged_device INTEGER NOT NULL,
+				staged_inode INTEGER NOT NULL,
+				phase TEXT NOT NULL CHECK(phase IN ('staged','original_to_rollback_prepared','original_to_rollback_dispatched','original_to_rollback_confirmed','staged_to_active_prepared','staged_to_active_dispatched','staged_to_active_confirmed','cleanup_pending','completed','rolled_back','action_required')),
+				original_to_rollback_dispatched INTEGER NOT NULL DEFAULT 0 CHECK(original_to_rollback_dispatched IN (0,1)),
+				original_to_rollback_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(original_to_rollback_confirmed IN (0,1)),
+				staged_to_active_dispatched INTEGER NOT NULL DEFAULT 0 CHECK(staged_to_active_dispatched IN (0,1)),
+				staged_to_active_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(staged_to_active_confirmed IN (0,1)),
+				cleanup_dispatched INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_dispatched IN (0,1)),
+				cleanup_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_confirmed IN (0,1)),
+				error_detail TEXT NOT NULL DEFAULT '',
+				evidence_json TEXT NOT NULL DEFAULT '{}',
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(operation_id,storage_key),
+				FOREIGN KEY(operation_id) REFERENCES restore_operations(operation_id) ON DELETE RESTRICT
+			);
+			CREATE INDEX IF NOT EXISTS restore_storage_steps_phase ON restore_storage_steps(operation_id,phase);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=13"); err != nil {
+			return err
+		}
+	}
+	if n < 14 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS runtime_generation_bindings (
+				installation_id TEXT NOT NULL,
+				runtime_generation INTEGER NOT NULL,
+				service_id TEXT NOT NULL,
+				transport TEXT NOT NULL CHECK(transport IN ('tcp','udp')),
+				container_port INTEGER NOT NULL CHECK(container_port BETWEEN 1 AND 65535),
+				mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')),
+				host_address TEXT NOT NULL DEFAULT '',
+				host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port BETWEEN 0 AND 65535),
+				PRIMARY KEY(installation_id,runtime_generation,service_id),
+				FOREIGN KEY(installation_id,runtime_generation) REFERENCES runtime_generations(installation_id,runtime_generation) ON DELETE RESTRICT
+			);
+			INSERT OR IGNORE INTO runtime_generation_bindings(installation_id,runtime_generation,service_id,transport,container_port,mode,host_address,host_port)
+				SELECT installation_id,runtime_generation,service_id,CASE WHEN service_protocol='udp' THEN 'udp' ELSE 'tcp' END,container_port,exposure_mode,host_address,host_port
+				FROM runtime_generations WHERE service_id<>'' AND container_port BETWEEN 1 AND 65535;`)
+		} else {
+			_, err = tx.ExecContext(ctx, `DROP INDEX IF EXISTS installation_service_exposure_binding_unique;
+			ALTER TABLE installation_service_exposure RENAME TO installation_service_exposure_v13;
+			CREATE TABLE installation_service_exposure (
+				installation_id TEXT NOT NULL,
+				service_id TEXT NOT NULL,
+				transport TEXT NOT NULL DEFAULT 'tcp' CHECK(transport IN ('tcp','udp')),
+				mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')),
+				host_address TEXT NOT NULL DEFAULT '',
+				host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port BETWEEN 0 AND 65535),
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(installation_id,service_id)
+			);
+			INSERT INTO installation_service_exposure(installation_id,service_id,transport,mode,host_address,host_port,created_at,updated_at)
+				SELECT installation_id,service_id,'tcp',mode,host_address,host_port,created_at,updated_at FROM installation_service_exposure_v13;
+			DROP TABLE installation_service_exposure_v13;
+			CREATE UNIQUE INDEX installation_service_exposure_binding_unique ON installation_service_exposure(host_address,host_port,transport) WHERE mode <> 'internal';`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=14"); err != nil {
+			return err
+		}
+	}
+	if n < 15 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ingress_generations (
+				generation INTEGER PRIMARY KEY,
+				operation_id TEXT NOT NULL UNIQUE,
+				configuration_sha256 TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('prepared','validated','activating','active','failed','rollback_pending','rolled_back','cleanup_pending')),
+				previous_generation INTEGER,
+				generation_path TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				validated_at TEXT,
+				activated_at TEXT,
+				failure_code TEXT NOT NULL DEFAULT '',
+				evidence_json TEXT NOT NULL DEFAULT '{}'
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS ingress_generations_one_active ON ingress_generations(status) WHERE status='active';
+			CREATE TABLE IF NOT EXISTS ingress_generation_routes (
+				generation INTEGER NOT NULL,
+				route_id TEXT NOT NULL,
+				installation_id TEXT NOT NULL,
+				service_id TEXT NOT NULL,
+				hostname TEXT NOT NULL,
+				backend_address TEXT NOT NULL,
+				exposure_mode TEXT NOT NULL CHECK(exposure_mode IN ('lan','managed-https','cloudflare-tunnel')),
+				tls_policy TEXT NOT NULL CHECK(tls_policy IN ('none','provided','acme','cloudflare')),
+				certificate_id TEXT NOT NULL DEFAULT '',
+				provider_id TEXT NOT NULL DEFAULT '',
+				PRIMARY KEY(generation,route_id),
+				UNIQUE(generation,hostname),
+				FOREIGN KEY(generation) REFERENCES ingress_generations(generation) ON DELETE RESTRICT
+			);
+			CREATE TABLE IF NOT EXISTS certificate_material (
+				certificate_id TEXT PRIMARY KEY,
+				hostname TEXT NOT NULL,
+				method TEXT NOT NULL CHECK(method IN ('provided','acme')),
+				certificate_sha256 TEXT NOT NULL,
+				public_key_sha256 TEXT NOT NULL,
+				state TEXT NOT NULL CHECK(state IN ('requested','issued','active','expiring','renewal-pending','renewal-failed','invalid','revoked')),
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS exposure_provider_credentials (
+				provider_id TEXT PRIMARY KEY,
+				provider_type TEXT NOT NULL CHECK(provider_type='cloudflare-tunnel'),
+				credential_sha256 TEXT NOT NULL,
+				credential_path TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				replaced_at TEXT
+			);
+			CREATE TABLE IF NOT EXISTS support_bundle_files (
+				bundle_id TEXT PRIMARY KEY,
+				archive_path TEXT NOT NULL UNIQUE,
+				archive_sha256 TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('complete','redaction_failed'))
+			);`)
+		} else {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ingress_routes (
+				route_id TEXT PRIMARY KEY,
+				installation_id TEXT NOT NULL,
+				service_id TEXT NOT NULL,
+				hostname TEXT NOT NULL UNIQUE,
+				exposure_mode TEXT NOT NULL CHECK(exposure_mode IN ('lan','managed-https','cloudflare-tunnel')),
+				upstream_protocol TEXT NOT NULL CHECK(upstream_protocol IN ('http','https')),
+				tls_policy TEXT NOT NULL CHECK(tls_policy IN ('none','provided','acme','cloudflare')),
+				certificate_id TEXT NOT NULL DEFAULT '',
+				provider_id TEXT NOT NULL DEFAULT '',
+				desired_state TEXT NOT NULL CHECK(desired_state IN ('disabled','enabled')),
+				applied_generation INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				FOREIGN KEY(installation_id) REFERENCES installations(installation_id) ON DELETE RESTRICT
+			);
+			CREATE INDEX IF NOT EXISTS ingress_routes_installation ON ingress_routes(installation_id,service_id);
+			CREATE TABLE IF NOT EXISTS ingress_generations (
+				generation INTEGER PRIMARY KEY,
+				operation_id TEXT NOT NULL UNIQUE,
+				configuration_sha256 TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('prepared','validated','activating','active','failed','rollback_pending','rolled_back','cleanup_pending')),
+				previous_generation INTEGER,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				failure_code TEXT NOT NULL DEFAULT ''
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS control_ingress_generations_one_active ON ingress_generations(status) WHERE status='active';
+			CREATE TABLE IF NOT EXISTS certificates (
+				certificate_id TEXT PRIMARY KEY,
+				hostname TEXT NOT NULL UNIQUE,
+				method TEXT NOT NULL CHECK(method IN ('provided','acme')),
+				state TEXT NOT NULL CHECK(state IN ('requested','issued','active','expiring','renewal-pending','renewal-failed','invalid','revoked')),
+				leaf_sha256 TEXT NOT NULL DEFAULT '',
+				issuer TEXT NOT NULL DEFAULT '',
+				not_before TEXT NOT NULL DEFAULT '',
+				not_after TEXT NOT NULL DEFAULT '',
+				last_renewal_at TEXT NOT NULL DEFAULT '',
+				last_error_code TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS exposure_providers (
+				provider_id TEXT PRIMARY KEY,
+				provider_type TEXT NOT NULL CHECK(provider_type='cloudflare-tunnel'),
+				account_id TEXT NOT NULL,
+				zone_id TEXT NOT NULL,
+				tunnel_id TEXT NOT NULL,
+				credential_sha256 TEXT NOT NULL,
+				desired_state TEXT NOT NULL CHECK(desired_state IN ('disabled','enabled','unlinked')),
+				runtime_state TEXT NOT NULL CHECK(runtime_state IN ('not-configured','offline','connecting','ready','degraded','failed','revoked')),
+				last_error_code TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS setup_steps (
+				step_id TEXT PRIMARY KEY,
+				state TEXT NOT NULL CHECK(state IN ('pending','in-progress','complete','attention','skipped')),
+				input_sha256 TEXT NOT NULL DEFAULT '',
+				evidence_json TEXT NOT NULL DEFAULT '{}',
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS readiness_observations (
+				entity_type TEXT NOT NULL CHECK(entity_type IN ('host','installation','route','certificate','provider')),
+				entity_id TEXT NOT NULL,
+				dimension TEXT NOT NULL CHECK(dimension IN ('desired','runtime','application','ingress','tls','provider','storage','network','firewall','helper')),
+				state TEXT NOT NULL CHECK(state IN ('not-configured','unknown','checking','ready','attention','degraded','failed','disabled')),
+				reason_code TEXT NOT NULL,
+				summary TEXT NOT NULL,
+				checked_at TEXT NOT NULL,
+				PRIMARY KEY(entity_type,entity_id,dimension)
+			);
+			CREATE TABLE IF NOT EXISTS audit_events (
+				event_id TEXT PRIMARY KEY,
+				event_type TEXT NOT NULL,
+				actor TEXT NOT NULL,
+				target_id TEXT NOT NULL,
+				outcome TEXT NOT NULL,
+				detail_json TEXT NOT NULL DEFAULT '{}',
+				created_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS support_bundles (
+				bundle_id TEXT PRIMARY KEY,
+				status TEXT NOT NULL CHECK(status IN ('requested','collecting','complete','redaction-failed','failed')),
+				filename TEXT NOT NULL DEFAULT '',
+				archive_sha256 TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				completed_at TEXT,
+				error_code TEXT NOT NULL DEFAULT ''
+			);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=15"); err != nil {
+			return err
+		}
+	}
+	if n < 16 {
+		certificateTable := "certificates"
+		if helper {
+			certificateTable = "certificate_material"
+			if _, err = tx.ExecContext(ctx, `ALTER TABLE ingress_generation_routes ADD COLUMN backend_port INTEGER NOT NULL DEFAULT 0 CHECK(backend_port BETWEEN 0 AND 65535)`); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS certificate_acme (
+			certificate_id TEXT PRIMARY KEY,
+			contact_email TEXT NOT NULL,
+			directory TEXT NOT NULL CHECK(directory IN ('letsencrypt-production','letsencrypt-staging')),
+			next_renewal_at TEXT NOT NULL,
+			last_attempt_at TEXT NOT NULL DEFAULT '',
+			last_success_at TEXT NOT NULL DEFAULT '',
+			last_error_code TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(certificate_id) REFERENCES `+certificateTable+`(certificate_id) ON DELETE CASCADE
+		);`)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=16"); err != nil {
+			return err
+		}
+	}
+	if n < 17 {
+		if helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cloudflare_provider_state (
+				provider_id TEXT PRIMARY KEY,
+				account_id TEXT NOT NULL,
+				zone_id TEXT NOT NULL,
+				tunnel_id TEXT NOT NULL,
+				desired_state TEXT NOT NULL CHECK(desired_state IN ('disabled','enabled','unlinked')),
+				runtime_state TEXT NOT NULL CHECK(runtime_state IN ('not-configured','offline','connecting','ready','degraded','failed','revoked')),
+				last_error_code TEXT NOT NULL DEFAULT '',
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS cloudflare_provider_routes (
+				provider_id TEXT NOT NULL,
+				hostname TEXT NOT NULL,
+				dns_record_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY(provider_id,hostname),
+				FOREIGN KEY(provider_id) REFERENCES cloudflare_provider_state(provider_id) ON DELETE CASCADE
+			);`)
+		} else {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS exposure_provider_routes (
+				provider_id TEXT NOT NULL,
+				hostname TEXT NOT NULL,
+				remote_state TEXT NOT NULL CHECK(remote_state IN ('configured','removal-pending','removed','conflict','failed')),
+				last_error_code TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(provider_id,hostname),
+				FOREIGN KEY(provider_id) REFERENCES exposure_providers(provider_id) ON DELETE CASCADE
+			);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=17"); err != nil {
+			return err
+		}
+	}
+	if n < 18 {
+		if !helper {
+			_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ingress_route_holds (
+				route_id TEXT PRIMARY KEY,
+				reason TEXT NOT NULL CHECK(reason IN ('application-restore')),
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(route_id) REFERENCES ingress_routes(route_id) ON DELETE CASCADE
+			);`)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE schema_version SET version=18"); err != nil {
 			return err
 		}
 	}

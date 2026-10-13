@@ -22,9 +22,9 @@ Standard Linux, systemd, Docker, and application data remain inspectable. KITPro
 is not a generic Docker or Compose dashboard, and it does not hide the server
 from its owner.
 
-## What alpha.12 changes for the user
+## What alpha.13 changes for the user
 
-KITPro Server `v0.1.0-alpha.12` provides one consistent path to:
+KITPro Server `v0.1.0-alpha.13` provides one consistent path to:
 
 - install applications from a trusted, digest-pinned catalog;
 - preserve installation identity and managed storage across runtime
@@ -36,19 +36,27 @@ KITPro Server `v0.1.0-alpha.12` provides one consistent path to:
   same-installation boundary; and
 - inspect durable operations and release provenance.
 
-Debian 13 and Arch Linux are the supported public baseline. Ubuntu has
-development and validation evidence only. Rocky Linux 10 and Podman remain
-Experimental.
+Debian 13, Ubuntu 26.04 LTS, and Arch Linux are Supported. Supported Docker
+hosts require an operator-selected, non-overlapping default address pool.
+Rocky Linux 10 and Podman remain Experimental.
+
+The alpha.13 catalog has exactly 20 visible applications. Forgejo has no SSH
+exposure, Plex is CPU-only with no automatic remote access, and Nextcloud,
+Pi-hole, and Syncthing use the constrained Experimental profiles documented in
+the [application catalog](docs/application-catalog.md).
 
 ## Alpha limitations
 
 KITPro Server is active alpha software. Breaking changes and incomplete
-workflows may occur. Alpha.12 does not provide application-aware readiness,
-imported-storage backup, host-to-host restore, bare-host recovery, automatic
-rollback of irreversible upstream schema changes, destructive application-data
-deletion, clustering, automatic failover, or public TLS and domain automation.
-Some repair and recovery actions require the API or root-local tooling rather
-than a complete browser workflow.
+workflows may occur. The alpha.14 development branch adds opt-in managed nginx
+ingress, application-aware readiness, ACME HTTP-01 certificates, and
+Cloudflare Tunnel. Alpha.14 does not provide imported-storage backup, general
+host-to-host restore, automatic rollback of irreversible upstream schema
+changes, destructive application-data deletion, clustering, automatic
+failover, router or firewall automation, domain registration, or a
+general-purpose reverse proxy. Some repair and recovery actions require the API
+or root-local tooling rather than a complete browser workflow. Alpha.14 is not
+released until its platform and final-artifact gates pass.
 
 Read the [current-state reference](docs/product/kitpro-server-current-state.md)
 and [known limitations](docs/release/known-limitations.md) before using KITPro
@@ -56,29 +64,29 @@ with important data.
 
 ![KITPro Server dashboard](docs/assets/screenshots/kitpro-server-dashboard.png)
 
-## Try alpha.12
+## Try alpha.13
 
 > Review the alpha limitations and keep an independent backup of important
 > data. Alpha software can contain breaking changes and incomplete recovery
 > paths.
 
-For a fresh supported host, follow the [alpha.12 quickstart](docs/release/quickstart.md).
-An existing alpha.11 installation must use the documented transition wrapper.
-Raw `apt install`, `dpkg -i`, and `pacman -U` transitions from alpha.11 are
-unsupported because they bypass KITPro's application-level safety checks.
+For a fresh Supported host, follow the [alpha.13 quickstart](docs/release/quickstart.md).
+Review the [Docker address-pool prerequisite](docs/docker-address-pool-prerequisite.md)
+before package installation. Existing alpha.12 installations must use the
+documented alpha.13 package transition for their platform.
 
 ## Documentation
 
 ### Start here
 
-- [What alpha.12 does today](docs/product/kitpro-server-current-state.md)
+- [What alpha.13 does today](docs/product/kitpro-server-current-state.md)
 - [Known limitations](docs/release/known-limitations.md)
 - [Platform support matrix](docs/support-matrix.md)
 
 ### Installation and first use
 
-- [Alpha.12 quickstart](docs/release/quickstart.md)
-- [Install on Debian 13](docs/install-debian-package.md)
+- [Alpha.13 quickstart](docs/release/quickstart.md)
+- [Install on Debian 13 or Ubuntu 26.04 LTS](docs/install-debian-package.md)
 - [Install on Arch Linux](docs/install-arch-package.md)
 - [Complete first use](docs/release/quickstart.md#first-run)
 
@@ -103,8 +111,10 @@ KITPro is licensed under the [Apache License 2.0](LICENSE).
 
 ## Release provenance
 
-The alpha.12 release includes SHA-256 checksums, a CycloneDX JSON SBOM, build
-metadata, a release manifest, and a frozen source revision. These artifacts let
+The published alpha.13 prerelease includes SHA-256 checksums, a CycloneDX JSON
+SBOM, build metadata, a release manifest, and a frozen source revision. Download
+them from the [v0.1.0-alpha.13 release](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
+These artifacts let
 an owner verify downloaded bytes, inspect packaged components, trace the
 release to reviewed source, and distinguish the official frozen files from an
 unverified replacement. They do not claim that every build is reproducible or
@@ -113,8 +123,8 @@ provide a formal supply-chain guarantee.
 ## Development transparency
 
 KITPro uses AI-assisted development tools as part of a human-directed
-engineering workflow. Project ownership, architecture, security decisions,
-review, and release approval remain human responsibilities. The source is
-available in this repository, and the project accepts reports through its
-public issue tracker. Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a
-change.
+engineering workflow. Maintainers review AI output rather than accepting it
+automatically. Architecture, product, security, testing, and release decisions
+remain human-controlled. The source is available in this repository, and the
+project accepts reports through its public issue tracker. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.

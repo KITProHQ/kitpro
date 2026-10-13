@@ -6,7 +6,7 @@ KITPro Server uses the same visual family as `os.kitpro.us`, adapted for an oper
 
 The primary product questions are answered in this order:
 
-1. Is the server healthy?
+1. Is the server operational?
 2. Which applications are installed?
 3. Does anything need attention?
 4. Are updates available?
@@ -59,7 +59,7 @@ Typography uses an offline system stack with strong, compact headings and quiet 
 
 ## Core components
 
-- Health hero: one dominant server state with Docker, helper, and update summaries.
+- System-status hero: one dominant server state with Docker, helper, and update summaries.
 - Summary strip: installed, running, private, and attention counts.
 - Application row: product identity, plain-language status, access state, and primary action.
 - Catalog card: purpose, category, trusted version, and install state; registry and digest details stay out of the primary view.
@@ -71,13 +71,26 @@ Typography uses an offline system stack with strong, compact headings and quiet 
 
 ## State language
 
+The interface keeps four dimensions separate: desired state, observed runtime
+state, reconciliation state, and application readiness. A running container is
+not enough evidence to call an application healthy. Readiness may be shown only
+when a trusted manifest defines a supported check and that check passes.
+
 | Internal state | Primary UI label |
 | --- | --- |
-| `running` / `exact` | Healthy |
+| runtime `running`, reconciliation `consistent` | Running |
 | `stopped` | Stopped |
 | `runtime_removed` | Runtime removed |
-| missing or inconsistent runtime | Needs attention |
-| security drift | Security issue detected |
+| reconciliation `repairable` | Repair available |
+| reconciliation `degraded` or `cleanup_pending` | Needs attention |
+| `runtime_missing` | Runtime missing |
+| `runtime_unknown` | Runtime unavailable |
+| `action_required` or security drift | Action required |
+
+Operation state is also independent. `accepted`, `executing`, and
+`reconciling` mean work is not terminal. `succeeded` is shown only after helper
+verification and control projection. A projection-pending result says that the
+privileged change completed while the dashboard state is being repaired.
 
 Status is never communicated by color alone.
 

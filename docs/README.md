@@ -6,14 +6,16 @@ operation and recovery.
 ## Start here
 
 - [KITPro Server current state](product/kitpro-server-current-state.md)
-- [Known alpha.12 limitations](release/known-limitations.md)
+- [Known alpha.14 limitations](release/known-limitations.md)
 - [Platform support matrix](support-matrix.md)
 
 ## Installation
 
 - [Public alpha quickstart](release/quickstart.md)
-- [Install on Debian 13](install-debian-package.md)
+- [Complete first run](operations/first-run.md)
+- [Install on Debian 13 or Ubuntu 26.04 LTS](install-debian-package.md)
 - [Install on Arch Linux](install-arch-package.md)
+- [Configure the Supported-host Docker address pool](docker-address-pool-prerequisite.md)
 - [Upgrade or remove the Debian package](upgrade-uninstall-debian-package.md)
 - [Rocky Linux 10 experimental notes](install-rocky-linux.md)
 
@@ -27,13 +29,16 @@ operation and recovery.
 ## Backup and restore
 
 - [Back up and restore an application](operations/application-backup-restore.md)
-- [Application backup format in the frozen alpha.12 source](https://github.com/KITProHQ/kitpro/blob/v0.1.0-alpha.12/docs/architecture/application-backup-format-v1.md)
+- [Back up and restore alpha.14 host state](operations/host-backup-restore.md)
+- [Application backup format](architecture/application-backup-format-v1.md)
 
 ## Recovery and troubleshooting
 
+- [Operate managed ingress](operations/managed-ingress.md)
+- [Recover an administrator and collect diagnostics](operations/admin-recovery-and-diagnostics.md)
 - [Recover application lifecycle state](operations/lifecycle-recovery.md)
 - [Debian installation troubleshooting](install-debian-package.md#troubleshooting)
-- [Known alpha.12 limitations](release/known-limitations.md)
+- [Known alpha.14 limitations](release/known-limitations.md)
 
 ## Concepts and architecture
 
@@ -47,11 +52,15 @@ operation and recovery.
 
 - [KITPro Server current state](product/kitpro-server-current-state.md)
 - [Platform support matrix](support-matrix.md)
-- [Known alpha.12 limitations](release/known-limitations.md)
+- [Known alpha.14 limitations](release/known-limitations.md)
 - [Current roadmap](roadmap.md)
 
 ## API and release reference
 
 - [API reference](api-reference.md)
-- [Alpha.12 release notes](release/0.1.0-alpha.12-release-notes.md)
+- [Frozen alpha.13 release notes](release/0.1.0-alpha.13-release-notes.md)
+- [Published alpha.13 release](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13)
+- [Alpha.14 release notes draft](release/0.1.0-alpha.14-release-notes.md)
+- [Upgrade published alpha.13 to alpha.14](release/upgrade-alpha13-to-alpha14.md)
+- [Alpha.13 platform qualification](testing/results/2026-09-26-alpha13-platform-qualification.md)
 - [Release checklist](release/release-checklist.md)

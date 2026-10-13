@@ -1,8 +1,13 @@
 {
-  "schema_version": 5,
+  "schema_version": 9,
   "id": "audiobookshelf",
   "name": "Audiobookshelf",
   "description": "Organize and stream audiobooks with managed metadata and a read-only library.",
+  "category": "Media",
+  "kind": "application",
+  "catalog_status": "standard",
+  "source_url": "https://github.com/advplyr/audiobookshelf",
+  "documentation_url": "https://www.audiobookshelf.org/docs/documentation/install/docker/",
   "releases": [
     {"version": "2.36.0", "registry": "ghcr.io", "repository": "advplyr/audiobookshelf", "digest": "sha256:e388e90e381ae3fa8660346612b2955f2c555ede81c9c286e2218bdf966b4de8", "platform": "linux/amd64"}
   ],
@@ -15,10 +20,12 @@
     {"id": "audiobooks", "container_path": "/audiobooks", "mode": "read-only", "required": true, "purpose": "Audiobook library"}
   ],
   "environment": [
-    {"name": "TZ", "value": "UTC"}
+    {"name": "TZ", "value": "UTC"},
+    {"name": "PORT", "value": "13378"}
   ],
   "services": [
-    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80}
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 13378, "ingress": {"exposure_modes": ["lan", "managed-https", "cloudflare-tunnel"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}
   ],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "config", "disposition": "include"}, {"component": "app", "id": "metadata", "disposition": "include"}]}
 }

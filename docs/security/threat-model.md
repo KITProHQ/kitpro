@@ -251,7 +251,7 @@ Attack path:
 2. The script reads displayed data and invokes API actions with the active session.
 3. The script attempts to steal persistent credentials or bypass confirmations.
 
-Required outcome: the frontend has no helper or runtime credential. Session secrets are unavailable to script where the authentication design permits. APIs do not return stored application or backup secrets. High-impact operations require server-enforced checks that UI code cannot remove.
+Required outcome: the frontend has no helper or runtime credential. Session secrets are unavailable to script where the authentication design permits. Ordinary APIs do not return stored application or backup secrets. One explicit authenticated, Origin-checked, CSRF-protected POST action may disclose a single generated application credential only when the trusted embedded manifest authorizes its public credential ID. The response is not cacheable and normal HTML never contains the value before that action. High-impact operations require server-enforced checks that UI code cannot remove.
 
 ### Scenario: exposed container-runtime socket
 
@@ -367,7 +367,7 @@ Attack path:
 2. After validation, the attacker replaces a path component with a symbolic link or changes the mount.
 3. The helper writes, changes ownership, archives, or deletes a protected host path.
 
-Required outcome: the helper uses approved roots, descriptor-relative operations where practical, no-follow semantics, mount identity checks, and operation-specific path types. It rechecks mutable facts at the point of use.
+Required outcome: the helper uses approved roots, descriptor-relative operations where practical, no-follow semantics, hardlink-count checks, mount identity checks, and operation-specific path types. It rechecks mutable facts at the point of use.
 
 ### Scenario: compromised privileged helper
 
@@ -544,7 +544,8 @@ Phase 1 treats every listener as a security decision:
 
 - show the protocol, bind address, port, purpose, and expected reach before deployment;
 - publish no runtime application port by default;
-- permit only an explicit, policy-approved, unprivileged loopback binding until the accepted ingress design replaces this rule;
+- permit only an explicit, policy-approved loopback or LAN binding, or a
+  catalog-authorized route through managed ingress;
 - never infer safety from `ufw` alone when Docker publishes a port;
 - test IPv4 and IPv6 separately;
 - detect port conflicts before mutation;
@@ -552,7 +553,10 @@ Phase 1 treats every listener as a security decision:
 - do not expose the Docker Engine API on TCP; and
 - do not support public dashboard exposure.
 
-The dashboard's LAN listener still requires authentication and TLS. Exact certificate and ingress choices remain open.
+The dashboard's LAN listener still requires authentication and appropriate
+transport protection. Managed application ingress uses a dedicated nginx
+instance, strict hostnames, loopback backends, and validated certificates. It
+does not expose the dashboard through application ingress.
 
 DNS rebinding deserves explicit tests. The server must reject unexpected Host values and validate the source and target origin for state-changing browser traffic. A private IP address does not prevent a public site from causing a browser to contact it.
 
@@ -576,13 +580,35 @@ Required behavior includes:
 - no credentials in URLs or browser storage that any same-origin script can read; and
 - server-enforced confirmation or recent authentication for selected high-impact operations.
 
-The exact credential, recovery, session, and multi-factor design remains for ADR-0008. Local account integration is not assumed.
+KITPro uses a local administrator, bounded sessions, password hashing, CSRF and
+origin checks, root-local password recovery, and a global session epoch for
+reset revocation. Multi-factor authentication and independent proof of recent
+human authorization remain open.
 
 ## 14. Secrets
 
 Secrets need an inventory, owner, consumer list, creation source, rotation path, deletion behavior, and backup policy. A value without these properties is unmanaged.
 
-The web process should receive a secret only when its product responsibility needs the plaintext. The frontend should not receive stored secret values. The helper receives only secrets required for the current privileged operation, and managed containers receive only their declared application secrets.
+The web process should receive a secret only when its product responsibility needs the plaintext. The frontend receives a stored application credential only in the response to an explicit manifest-authorized reveal action. The helper receives only secrets required for the current privileged operation, and managed containers receive only their declared application secrets.
+
+Alpha.13 stores generated application secrets as root-bound plaintext in the
+helper database and restrictive local backups. The helper state directory is
+root-only, the API cannot read it directly, and normal unprivileged processes
+cannot traverse it. KITPro does not claim encryption at rest. Host root and an
+attacker who compromises the privileged helper remain able to read these
+values.
+
+Alpha.14 also stores certificate private keys, ACME account material, and
+Cloudflare credentials in root-owned restrictive files. Host-state backups
+include those values and therefore share their confidentiality boundary.
+Ordinary projections and support bundles exclude them. KITPro does not claim
+encryption at rest for this material.
+
+Typed application configuration may temporarily run an exact pinned image
+offline so the application creates its own identity. The helper permits only a
+reviewed configuration type, exact managed paths, a bounded ownership handoff,
+and final owner and mode restoration. It preserves application-owned identity
+files and rejects generic templates, commands, or path input.
 
 Secret redaction happens before log and audit serialization. A display-time filter leaves copies in files and databases. Diagnostic exports apply the same rule.
 
@@ -688,7 +714,107 @@ Phase 1 does not claim to defend against:
 
 These non-goals do not permit silent insecure defaults. KITPro must state when an operation leaves the modeled boundary.
 
-## 20. Questions remaining
+## 20. Alpha.14 secure access threats
+
+Alpha.14 adds a managed ingress boundary without turning the control service or
+the helper into a general proxy, certificate client, cloud client, or remote
+shell.
+
+### Ingress
+
+Hostile `Host` headers, hostname injection, cross-installation routing, open
+proxy use, backend confusion, and failed configuration replacement are the main
+ingress threats.
+
+The API accepts one normalized DNS hostname and rejects wildcards, IP literals,
+ports, paths, control characters, and ambiguous encodings. A unique database
+constraint and helper validation prevent two routes from owning the same
+hostname. The catalog must authorize the selected HTTP service. The helper
+derives the exact loopback backend from the installation binding. The request
+cannot supply a backend address or port. The nginx default server rejects an
+unknown host instead of forwarding it.
+
+Each change creates a new generation. The helper checks the complete candidate
+before reload, keeps the prior generation, and verifies the active result. A
+validation, reload, or verification failure restores the known-good
+generation. Restore holds keep ingress closed until the same installation has
+restored and passed its readiness check. The helper cannot repair a route by
+selecting another installation.
+
+### Certificates and ACME
+
+Private-key disclosure, a wrong-host certificate, key mismatch, an invalid
+replacement, challenge confusion, and arbitrary domain issuance are the main
+certificate threats.
+
+KITPro validates the key match, hostname, lifetime, PEM structure, and validity
+period before installation. Root owns private keys with mode `0600`. Ordinary
+API responses, UI state, logs, audit events, and support bundles omit key
+material. The product does not claim encryption at rest.
+
+ACME accepts only a hostname already authorized for a catalog ingress service.
+It allows only the named Let's Encrypt production and staging directories and
+uses typed client calls instead of a shell command. HTTP-01 serves only the
+exact token for the exact hostname and challenge path. Issuance and renewal
+activate only after certificate validation and nginx candidate validation. A
+failed renewal records `renewal-failed` and leaves the current certificate in
+place.
+
+### Cloudflare Tunnel
+
+Token leakage, excessive permissions, route ownership confusion, unintended
+remote deletion, and provider outage are the main provider threats.
+
+The provider accepts a scoped API token and validates its access to the exact
+account, zone, and tunnel. The token is write-only, root-owned, mode `0600`,
+and absent from projections, logs, audits, errors, and diagnostics. A dedicated
+runtime receives the tunnel token through a protected file descriptor rather
+than its process arguments.
+
+Remote requests use fixed Cloudflare origins and typed resource identifiers.
+Route creation rejects a conflicting DNS owner. Token replacement cannot
+change the account, zone, or tunnel identity. Disablement and local unlink do
+not delete remote resources. Remote route or tunnel deletion requires an
+explicit remote confirmation. Provider failure affects provider readiness only
+and does not remove local ingress.
+
+### First-run setup
+
+First-visitor takeover, a lingering unauthenticated bootstrap route, and forged
+or replayed completion are the main setup threats.
+
+The one-time setup route closes after a local administrator exists. The guided
+flow requires that authenticated administrator. Critical steps derive their
+state from live helper, runtime, storage, network, certificate, provider, and
+application state. A client can record only the access-mode choice or defer an
+optional step. Durable setup state survives refresh, service restart, and
+reboot without reopening bootstrap registration.
+
+### Administrator recovery
+
+Remote execution, privilege bypass, surviving sessions, and plaintext logging
+are the main recovery threats.
+
+Password reset exists only as the root-local `kitpro-server admin
+reset-password` command. The HTTP API and helper do not expose it. A successful
+reset changes the password hash, advances the global session epoch, and revokes
+all sessions. Logs contain the event and username, not the password.
+
+### Diagnostics and host backups
+
+Passwords, application secrets, tokens, authorization headers, cookies,
+certificate keys, and sensitive environment variables are the main diagnostic
+disclosure threats. Support bundles use allowlisted projections and a final
+redaction scan. Bundle generation fails when the scan finds a private-key
+marker or a supplied synthetic secret.
+
+A host backup has a different confidentiality boundary. It deliberately
+contains certificate private keys, ACME account material, and Cloudflare
+credentials so local security state can be restored. The archive is root-owned
+and mode `0600`, but KITPro does not encrypt it. The manifest identifies those
+secret classes and states that remote Cloudflare resources are not included.
+
+## 21. Questions remaining
 
 The following questions remain open and belong in later ADRs:
 
@@ -698,13 +824,12 @@ The following questions remain open and belong in later ADRs:
 - Which receipt and audit mechanism provides useful tamper evidence without making recovery depend on KITPro cloud services?
 - Which exact systemd hardening and AppArmor or SELinux policy controls work without blocking required helper operations?
 - Which policy packaging, profile reload, file-context restoration, and upgrade behavior can fail closed on Debian and Rocky?
-- What authentication, recovery, session, and recent-authentication model will ADR-0008 choose?
-- How will ADR-0009 establish locally trusted TLS without teaching users to ignore warnings?
-- Which exact Host and origin values are valid across IP addresses, local DNS, and a future reverse proxy?
-- What ingress and egress policy applies between per-instance networks, KITPro, the LAN, and the internet?
+- Which alpha.14 operations require recent authentication beyond the existing
+  administrator session and CSRF boundary?
 - Which manifest fields and combinations will the catalog allow?
 - What final data-root layout and storage-slot policy will ADR-0006 choose?
-- Where do secret values live, and which component decrypts or reads each class?
+- Which future key-management design would protect backup secrets without
+  pretending that a key on the same compromised host protects them from root?
 - Which exact Docker Engine and API version range will release acceptance support?
 - Which reverse-DNS label namespace does KITPro own permanently?
 - How will update trust roots, delegation, expiry, revocation, and offline recovery work?

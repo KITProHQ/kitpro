@@ -16,9 +16,9 @@ The product succeeds when it reduces the knowledge needed to begin without limit
 
 The initial user has a Linux server or mini PC and wants to run self-hosted applications. The user may understand basic computing concepts but should not need prior experience with container engines, reverse proxies, certificate management, storage layout, or backup tooling.
 
-The alpha focuses on the supported Debian and Arch Linux baselines and a
-deliberately curated catalog. Ubuntu remains development and validation only.
-Rocky Linux and Podman remain Experimental. Supporting many environments or
+The alpha focuses on the Supported Debian, Ubuntu, and Arch Linux baselines and
+a deliberately curated catalog. Rocky Linux and Podman remain Experimental.
+Supporting many environments or
 applications before the lifecycle is safe and understandable would hide design
 problems behind catalog size.
 

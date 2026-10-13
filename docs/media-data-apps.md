@@ -18,6 +18,21 @@ Register the audiobook library read-only. KITPro keeps `/config` and
 `/metadata` locally in managed storage; do not relocate the SQLite database to
 a network filesystem. Complete the first-user setup in the web interface.
 
+## Stream media with Plex
+
+1. Register a media directory as read-only.
+2. Select it under **Media library** on the Plex catalog card.
+3. Install Plex and expose its web service on loopback for initial setup.
+4. Open Plex Web and complete the account sign-in or server-claim flow.
+5. Add a library using `/data` as the media path.
+
+KITPro manages Plex configuration, metadata, artwork, and SQLite state under
+`/config`. Application backup stops Plex and copies that managed tree. It does
+not copy the external media library. This profile exposes only TCP 32400, so
+automatic discovery, DLNA, and companion features may not work. It does not
+configure remote access, router ports, GPU transcoding, or a persistent
+`/transcode` directory.
+
 ## Manage files with SFTPGo
 
 Register a disposable or backed-up directory with **Read and write** access.

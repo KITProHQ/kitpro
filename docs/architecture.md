@@ -13,10 +13,12 @@ hardware, trusted-storage, and application-backup boundaries are implemented on 
 alpha platforms. TLS automation, general rollback, and off-host backup remain
 open.
 
-ADR-0017 selects Debian 13 as the primary/reference host. Fully updated Arch
-Linux amd64 hosts using official repositories and `linux-lts` are also in the
-supported alpha.12 baseline. Ubuntu Server 26.04 LTS has development and
-validation evidence only. Rocky Linux 10 and Podman remain Experimental. The core helper uses
+ADR-0017 selects Debian 13 as the primary/reference host. Ubuntu Server 26.04
+LTS and fully updated Arch Linux amd64 hosts using official repositories and
+`linux-lts` are also in the Supported alpha.13 baseline. Rocky Linux 10 and
+Podman remain Experimental. The alpha.13 Rocky package and host checks pass,
+but its Podman adapter does not implement the staged-generation application
+lifecycle. The core helper uses
 Linux, systemd, Unix sockets, normalized container plans, and a constrained
 Docker or Podman runtime adapter. Distribution packaging, orchestration,
 firewall integration, AppArmor profiles, and SELinux policy stay outside those
@@ -28,8 +30,8 @@ framed JSON.
 
 ## System boundary
 
-The alpha covers the supported Debian and Arch Linux baselines and trusted single- or
-multi-container applications. The product supports this complete local
+The alpha covers the Supported Debian, Ubuntu, and Arch Linux baselines and
+trusted single- or multi-container applications. The product supports this local
 workflow:
 
 1. Install KITPro Server on the host.
@@ -39,8 +41,15 @@ workflow:
 5. Deploy a supported single- or multi-container application from an immutable catalog release.
 6. Display runtime, storage, and optional accelerator state.
 7. Start, stop, recreate, and update it through typed operations.
-8. Choose internal, loopback, or exact-address LAN exposure for declared services.
+8. Choose internal, loopback, or exact-address LAN exposure for declared TCP
+   and UDP services.
 9. Remove the runtime without automatically deleting managed or imported user data.
+
+Each Supported Docker host must provide an operator-selected, non-overlapping
+default address pool for per-application and per-generation bridge networks.
+KITPro does not choose a universal CIDR, edit Docker daemon configuration,
+share application networks, or shorten generation retention to save address
+space.
 
 The alpha does not include fleet management, custom hardware, KITPro OS,
 mandatory accounts, a hosted control plane, a proprietary runtime, arbitrary
@@ -135,7 +144,7 @@ Each row is open unless its linked record says otherwise. A proposed record is n
 | ADR-0014 | Backup integration | Which backup responsibilities belong to KITPro? How will the product define data sets, consistency, scheduling, destinations, encryption, retention, verification, and restore tests while allowing standard external tools? |
 | [ADR-0015](decisions/0015-api-design.md) | API design, accepted | Versioned REST/JSON with operation resources. |
 | [ADR-0016](decisions/0016-durable-state-and-reconciliation.md) | Durable state and reconciliation, accepted | The control plane owns desired state. The helper independently owns trusted resource ownership, privileged receipts, leases, and audit events. Fresh observation resolves external reality. Unknown outcomes reconcile before retry. The database engine remains open. |
-| [ADR-0017](decisions/0017-phase-1-host-compatibility.md) | Host compatibility, accepted; public designation updated for alpha.12 | Debian 13 and fully updated Arch Linux with `linux-lts` are supported. Ubuntu Server 26.04 LTS is development and validation only. Rocky Linux 10 and Podman are Experimental. |
+| [ADR-0017](decisions/0017-phase-1-host-compatibility.md) | Host compatibility, accepted; designation updated for alpha.13 | Debian 13, Ubuntu Server 26.04 LTS, and fully updated Arch Linux with `linux-lts` are Supported. Rocky Linux 10 and Podman are Experimental. |
 | [ADR-0018](decisions/0018-security-boundaries.md) | Security boundaries, proposed | What assets and actors are in the threat model? Which inputs cross browser, network, manifest, runtime, host, update, backup, and optional cloud boundaries? What is the response to a compromised application, dashboard session, update source, or privileged component? |
 | [ADR-0019](decisions/0019-helper-mandatory-access-control.md) | Helper mandatory-access-control confinement, accepted | Debian, Ubuntu, and Arch production helpers require enforcing AppArmor; Rocky experimental helpers require an enforcing dedicated SELinux domain. Policy remains outside the common protocol. |
 | [ADR-0020](decisions/0020-production-state-database.md) | Phase 1 production state database, accepted | Two physically separate SQLite files; PostgreSQL remains the fallback if one-node requirements are disproven. |

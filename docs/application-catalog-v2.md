@@ -8,8 +8,9 @@ alpha release.
 ## V2 decisions
 
 Actual Budget and Vaultwarden were accepted as bounded single-container
-applications. Forgejo was retained in the catalog after its official image and
-service requirements were reviewed. Linkding was rejected because its initial
+applications. Forgejo was reviewed during V2 but was not part of that shipped
+inventory; alpha.13 later added a constrained web-only, SQLite profile after a
+fresh upstream review. Linkding was rejected because its initial
 administrator bootstrap requires secret-handling capabilities that KITPro does
 not expose. Home Assistant was evaluated as a safe replacement during the V2
 review; the current catalog inventory is authoritative for what ships today.

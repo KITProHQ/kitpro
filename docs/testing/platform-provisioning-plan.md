@@ -90,14 +90,16 @@ Use an operator-approved SSH public key or console credential. Do not place gues
 
 ## Snapshot sequence
 
-Use these exact snapshot names on both VMs:
+Use these snapshot roles, with the runtime-specific second name:
 
-1. `clean-os`: clean updated OS, guest access verified, Docker not installed.
-2. `docker-installed`: Docker installed and verified, no fixture identity or resource present.
-3. `helper-installed`: optional checkpoint after the test helper units and identities exist, before test Docker objects.
+1. `clean-os`: clean updated OS, guest access verified, no KITPro runtime prepared.
+2. `docker-installed` on Debian or `podman-installed` on Rocky: host runtime verified, no KITPro application present.
+3. `helper-installed`: optional checkpoint after KITPro units and identities exist, before test application objects.
 4. `managed-fixture`: optional checkpoint for snapshot-dependent ownership and recovery tests.
 
-Record the Proxmox snapshot identifier and creation time. Restore `clean-os` between fresh installer runs and `docker-installed` between independent fixture groups. A manually repaired guest is not clean-run evidence.
+Record the Proxmox snapshot identifier and creation time. Restore `clean-os`
+between fresh installer runs and the runtime-specific snapshot between
+independent groups. A manually repaired guest is not clean-run evidence.
 
 ## Baseline and Docker workflow
 
@@ -118,17 +120,22 @@ sudo tools/platform-validation/verify-host.sh --platform rocky10
 sudo tools/platform-validation/prepare-rocky.sh \
   --acknowledge-disposable-vm \
   --yes
-sudo tools/install-docker.sh --verify-only
+sudo tools/platform-validation/verify-host.sh \
+  --platform rocky10 \
+  --require-podman
 getenforce
 ```
 
 Do not use `--grant-user-access`. If a stock minimal image has a conflicting package, record it first and use `--remove-conflicts` only after reviewing the exact package transaction.
 
-Create `docker-installed` only after the installer and verification commands pass and Rocky still reports `Enforcing`.
+Create `podman-installed` only after verification passes, Rocky still reports
+`Enforcing`, firewalld is active/enabled, and Docker remains absent.
 
 ## Fixture and manual test workflow
 
-Start from `docker-installed` and follow [`../../prototypes/privilege-boundary/RUNBOOK.md`](../../prototypes/privilege-boundary/RUNBOOK.md). The automated core commands are:
+Start the Debian Docker fixture from `docker-installed` and follow
+[`../../prototypes/privilege-boundary/RUNBOOK.md`](../../prototypes/privilege-boundary/RUNBOOK.md).
+The Debian automated command is:
 
 ```sh
 sudo tools/platform-validation/run-privilege-fixture.sh \
@@ -136,15 +143,21 @@ sudo tools/platform-validation/run-privilege-fixture.sh \
   --acknowledge-disposable-vm
 ```
 
+Start Rocky from `podman-installed`, install the reviewed RPMs, then use:
+
 ```sh
-sudo tools/platform-validation/run-privilege-fixture.sh \
-  --platform rocky10 \
-  --acknowledge-disposable-vm
+sudo tools/platform-validation/validate-rocky-runtime.sh \
+  --acknowledge-disposable-vm --require-app
 ```
 
 Complete the runbook's snapshot-dependent label/record disagreement tests, mount-boundary and race cases, interruption case, full reboot, loopback IPv4 and IPv6 publication tests, second-host reachability checks, and final inventory. Do not convert an untested manual row to `PASS` because the automated core completed.
 
-For Rocky, collect [`selinux-rocky.md`](selinux-rocky.md) evidence before installation, while the container exists, after helper and Docker restarts, and after cleanup. Stop on a fixture-related AVC until the denied boundary is understood. Do not disable enforcement or generate a broad policy.
+For Rocky, follow
+[`rocky-linux-10-validation.md`](rocky-linux-10-validation.md) and
+[`../security/selinux-rocky-podman.md`](../security/selinux-rocky-podman.md).
+Collect AVC evidence before installation, while applications run, after
+service and host restarts, and after cleanup. Stop on a related AVC until the
+denied boundary is understood.
 
 ## Evidence and cleanup
 

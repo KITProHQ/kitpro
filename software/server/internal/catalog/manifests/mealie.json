@@ -1,8 +1,15 @@
 {
-  "schema_version": 1,
+  "schema_version": 9,
   "id": "mealie",
   "name": "Mealie",
   "description": "Organize recipes, meal plans, and shopping lists in a self-hosted kitchen hub.",
+  "category": "Food and recipes",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://mealie.io/",
+  "source_url": "https://github.com/mealie-recipes/mealie",
+  "documentation_url": "https://docs.mealie.io/",
+  "limitations": ["Public signup is disabled by default."],
   "releases": [{
     "version": "3.24.0",
     "registry": "ghcr.io",
@@ -15,6 +22,7 @@
     {"name": "ALLOW_SIGNUP", "value": "false"},
     {"name": "TZ", "value": "UTC"}
   ],
-  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 9000}],
-  "restart": "unless-stopped"
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 9000, "ingress": {"exposure_modes": ["lan", "managed-https", "cloudflare-tunnel"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}],
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
 }

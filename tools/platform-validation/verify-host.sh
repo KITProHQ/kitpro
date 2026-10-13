@@ -6,10 +6,11 @@ set -Eeuo pipefail
 
 PLATFORM=""
 REQUIRE_DOCKER=false
+REQUIRE_PODMAN=false
 
 usage() {
     cat <<'EOF'
-Usage: ./verify-host.sh --platform debian13|rocky10 [--require-docker]
+Usage: ./verify-host.sh --platform debian13|rocky10 [--require-docker|--require-podman]
 
 Print a structured host baseline and fail if a required platform invariant is
 not met. Resource sizes are recorded and warned on, because VM partitioning can
@@ -42,6 +43,7 @@ while (($#)); do
             shift
             ;;
         --require-docker) REQUIRE_DOCKER=true ;;
+        --require-podman) REQUIRE_PODMAN=true ;;
         --help|-h)
             usage
             exit 0
@@ -50,6 +52,10 @@ while (($#)); do
     esac
     shift
 done
+
+if [[ "$REQUIRE_DOCKER" == true && "$REQUIRE_PODMAN" == true ]]; then
+    die "choose only one required container runtime"
+fi
 
 case "$PLATFORM" in
     debian13|rocky10) ;;
@@ -112,8 +118,16 @@ else
     [[ "$selinux_mode" == "Enforcing" ]] || die "SELinux must remain Enforcing; found $selinux_mode"
     pass "selinux=Enforcing"
     if systemctl list-unit-files firewalld.service >/dev/null 2>&1; then
-        observe firewalld_active "$(systemctl is-active firewalld.service 2>/dev/null || true)"
-        observe firewalld_enabled "$(systemctl is-enabled firewalld.service 2>/dev/null || true)"
+        firewalld_active=$(systemctl is-active firewalld.service 2>/dev/null || true)
+        firewalld_enabled=$(systemctl is-enabled firewalld.service 2>/dev/null || true)
+        observe firewalld_active "$firewalld_active"
+        observe firewalld_enabled "$firewalld_enabled"
+        if [[ "$REQUIRE_PODMAN" == true ]]; then
+            [[ "$firewalld_active" == "active" ]] || die "firewalld must be active"
+            [[ "$firewalld_enabled" == "enabled" ]] || die "firewalld must be enabled"
+        fi
+    elif [[ "$REQUIRE_PODMAN" == true ]]; then
+        die "firewalld is unavailable"
     else
         observe firewalld "not-installed"
     fi
@@ -135,6 +149,31 @@ if [[ "$REQUIRE_DOCKER" == true ]]; then
     docker buildx version
     containerd --version
     pass "docker_verification=complete"
+fi
+
+if [[ "$REQUIRE_PODMAN" == true ]]; then
+    [[ "$PLATFORM" == "rocky10" ]] || die "the Podman acceptance path is currently certified only for Rocky Linux 10"
+    for required in podman crun rpm; do
+        command -v "$required" >/dev/null 2>&1 || die "$required is unavailable"
+    done
+    rpm -q podman crun container-selinux >/dev/null || die "required Rocky container packages are incomplete"
+    podman_major=$(podman version --format '{{.Client.Version}}' | cut -d. -f1)
+    [[ "$podman_major" =~ ^[0-9]+$ && "$podman_major" -ge 5 ]] || die "Podman 5 or newer is required"
+    runtime_name=$(podman info --format '{{.Host.OCIRuntime.Name}}')
+    [[ "$runtime_name" == "crun" ]] || die "expected crun, found $runtime_name"
+    runtime_cgroups=$(podman info --format '{{.Host.CgroupsVersion}}')
+    [[ "$runtime_cgroups" == "v2" ]] || die "Podman must use cgroup v2, found $runtime_cgroups"
+    storage_driver=$(podman info --format '{{.Store.GraphDriverName}}')
+    [[ -n "$storage_driver" ]] || die "Podman did not report a storage driver"
+    network_backend=$(podman info --format '{{.Host.NetworkBackend}}')
+    [[ -n "$network_backend" ]] || die "Podman did not report a network backend"
+    if [[ ! -x /usr/libexec/podman/quadlet && ! -x /usr/lib/systemd/system-generators/podman-system-generator ]]; then
+        die "the Quadlet systemd generator is unavailable"
+    fi
+    podman version
+    podman info --format 'Podman host: runtime={{.Host.OCIRuntime.Name}} cgroups={{.Host.CgroupsVersion}} network={{.Host.NetworkBackend}} storage={{.Store.GraphDriverName}}'
+    crun --version
+    pass "podman_verification=complete"
 fi
 
 pass "host_baseline=accepted"

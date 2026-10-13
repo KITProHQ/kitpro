@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 6,
   "id": "busybox",
   "name": "BusyBox validation workload",
   "description": "Internal lifecycle validation workload; not a user application.",
@@ -11,5 +11,6 @@
     "platform": "linux/amd64"
   }],
   "storage": [{"id": "data", "container_path": "/data", "persistent": true, "read_only": false}],
-  "restart": "unless-stopped"
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
 }

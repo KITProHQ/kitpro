@@ -1,8 +1,8 @@
 # ADR-0017: Phase 1 host compatibility
 
-> Public-status update for alpha.12: Debian 13 and Arch Linux with `linux-lts`
-> are the supported baseline. Ubuntu 26.04 LTS has development and validation
-> evidence only. Rocky Linux 10 and Podman are Experimental. The decision text
+> Public-status update for alpha.13: Debian 13, Ubuntu 26.04 LTS, and Arch
+> Linux with `linux-lts` are Supported. Rocky Linux 10 and Podman are
+> Experimental. The decision text
 > below preserves the earlier architecture decision and validation context.
 
 - Status: Accepted
@@ -99,7 +99,7 @@ An officially supported host satisfies every row in this table.
 
 | Area | Supported boundary |
 | --- | --- |
-| Distribution | Supported for alpha.12: Debian 13 stable or fully updated Arch Linux using current official repositories. Development and validation only: Ubuntu Server 26.04 LTS with current security updates. |
+| Distribution | Supported for alpha.13: Debian 13 stable, Ubuntu Server 26.04 LTS, or fully updated Arch Linux using current official repositories. |
 | CPU architecture | `amd64`/`x86_64` |
 | Init and service manager | systemd running as PID 1 |
 | Control groups | cgroup v2 unified hierarchy with the CPU, memory, I/O, and process-count controllers available to the runtime |
