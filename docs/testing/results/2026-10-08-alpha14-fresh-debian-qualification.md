@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: `FRESH_DEBIAN_PASS / ALPHA14_SCOPE_CORRECTION_REGRESSION_PENDING`
+Status: `FRESH_DEBIAN_PASS / SCOPE_CORRECTION_LOCAL_PASS / BLOCKED_LIVE_SCOPE_CORRECTED_PACKAGE_QUALIFICATION / BLOCKED_EXTERNAL_DIRECT_ACME_TEST_HOST`
 
 VM 500 is the authoritative Debian qualification host for this record. Its
 Debian operating system was wiped and reinstalled clean before alpha.14
@@ -41,6 +41,46 @@ The qualification package was rebuilt locally from that exact clean source:
 
 Both extracted binaries and the installed API reported the expected commit.
 This is a qualification candidate, not a final release artifact.
+
+## 2026-10-12 scope-corrected local candidate
+
+The Cloudflare scope correction produced two local commits:
+
+- `e6fdc5f02c8800d4184988a65b2a16a463a787fc` removes the provider API,
+  helper/runtime implementation, catalog modes, package services and policy,
+  setup/readiness projections, and new-backup credential coverage while
+  retaining generic ingress and ACME behavior.
+- `4e6573483f95f710172e8326ccbba68fe006bf72` updates the alpha.14 product,
+  operations, security, release, and qualification documentation.
+
+A clean local Debian candidate was built for static and metadata inspection:
+
+| Property | Value |
+| --- | --- |
+| Filename | `kitpro-server_0.1.0~alpha14_amd64.deb` |
+| Local path | `/tmp/kitpro-alpha14-scope-corrected/kitpro-server_0.1.0~alpha14_amd64.deb` |
+| SHA-256 | `f5ee7861b7cc5cb97801fb766332ea4efea228075c1f64a56d91233e14369cbd` |
+| Version/architecture | `0.1.0~alpha14` / `amd64` |
+| Embedded source commit | `4e6573483f95f710172e8326ccbba68fe006bf72` |
+| Source tree | `60afe0b2bb7ecf4a5ab9dbc112bb130d99847b98` |
+| Clean-source marker | `source_tree_dirty=false` |
+| Build time | `2026-10-13T06:21:49Z` |
+
+The Debian, Arch, and RPM static suites confirm that no Cloudflare binary,
+service, system user, tmpfiles entry, AppArmor profile, or SELinux domain is
+packaged. Full Go tests, Go vet, the Node UI test, migration tests, Debian
+incoming-preinstall tests, and Debian and Arch upgrade gates pass. A migration
+regression proves that unpublished alpha.14 Cloudflare setup state is removed,
+legacy tunnel routes become disabled and disappear from API projections, and
+the inert compatibility rows remain readable.
+
+VM 500 was normally powered off when this correction was reviewed. Proxmox
+reverification matched VM ID 500, UUID, MAC, VLAN 10, and the fresh Debian 13
+guest. Its current DHCP address was `10.10.10.115`; the earlier `.114` address
+was stale. The guest still contained the prior `4b12da0` candidate and its old
+Cloudflare service. The new candidate was not copied or installed because this
+scope-correction task explicitly prohibited upload and deployment. VM 500 was
+returned to its normally stopped state after read-only inspection.
 
 Earlier live qualification exposed two defects that are already included in
 the current source and have regression coverage:
