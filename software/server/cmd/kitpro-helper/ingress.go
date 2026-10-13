@@ -57,7 +57,7 @@ func applyIngressGeneration(ctx context.Context, db *sql.DB, request protocol.Re
 		if mode != "loopback" || transport != "tcp" || address != "127.0.0.1" {
 			return nil, fmt.Errorf("route target must be a managed loopback TCP binding")
 		}
-		route := ingress.Route{ID: candidate.RouteID, InstallationID: candidate.InstallationID, ServiceID: candidate.ServiceID, Hostname: candidate.Hostname, ExposureMode: ingress.ExposureMode(candidate.ExposureMode), UpstreamProtocol: candidate.UpstreamProtocol, TLSPolicy: ingress.TLSPolicy(candidate.TLSPolicy), CertificateID: candidate.CertificateID, ProviderID: candidate.ProviderID, DesiredState: ingress.Enabled}
+		route := ingress.Route{ID: candidate.RouteID, InstallationID: candidate.InstallationID, ServiceID: candidate.ServiceID, Hostname: candidate.Hostname, ExposureMode: ingress.ExposureMode(candidate.ExposureMode), UpstreamProtocol: candidate.UpstreamProtocol, TLSPolicy: ingress.TLSPolicy(candidate.TLSPolicy), CertificateID: candidate.CertificateID, DesiredState: ingress.Enabled}
 		if err = ingress.ValidateRoute(route, service.Ingress.ExposureModes, service.Ingress.External); err != nil {
 			return nil, err
 		}
@@ -231,6 +231,14 @@ func issueACMECertificate(ctx context.Context, db *sql.DB, request protocol.Requ
 		}
 	}
 	return metadata, nil
+}
+
+func acmeErrorCode(err error) string {
+	var lifecycleError *acmelifecycle.Error
+	if errors.As(err, &lifecycleError) && lifecycleError.Code != "" {
+		return lifecycleError.Code
+	}
+	return "issuance_failed"
 }
 
 func ingressErrorCode(err error) string {

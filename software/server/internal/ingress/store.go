@@ -29,10 +29,10 @@ func (s Store) GetRoute(ctx context.Context, routeID string) (Route, error) {
 }
 
 func (s Store) ListRoutes(ctx context.Context, installationID string) ([]Route, error) {
-	query := `SELECT route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,certificate_id,provider_id,desired_state,applied_generation,created_at,updated_at FROM ingress_routes`
+	query := `SELECT route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,certificate_id,provider_id,desired_state,applied_generation,created_at,updated_at FROM ingress_routes WHERE exposure_mode<>'cloudflare-tunnel'`
 	args := []any{}
 	if installationID != "" {
-		query += ` WHERE installation_id=?`
+		query += ` AND installation_id=?`
 		args = append(args, installationID)
 	}
 	query += ` ORDER BY hostname,route_id`

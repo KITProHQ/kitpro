@@ -23,22 +23,17 @@ grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$serv
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$server_dir/packaging/systemd/kitpro-helper.service"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$server_dir/packaging/systemd/kitpro-helper.service"
 grep -q 'go build .* -o kitpro-acme ./cmd/kitpro-acme' "$arch_dir/PKGBUILD"
-grep -q 'go build .* -o kitpro-cloudflare ./cmd/kitpro-cloudflare' "$arch_dir/PKGBUILD"
 grep -q 'go build .* -o kitpro-ingress-validator ./cmd/kitpro-ingress-validator' "$arch_dir/PKGBUILD"
 grep -q 'kitpro-acme.service' "$arch_dir/kitpro-server.install"
 grep -q 'usr.libexec.kitpro-acme' "$arch_dir/kitpro-server.install"
-grep -q 'kitpro-cloudflare.service' "$arch_dir/kitpro-server.install"
-grep -q 'usr.libexec.kitpro-cloudflare' "$arch_dir/kitpro-server.install"
 grep -q 'kitpro-ingress-validator.service' "$arch_dir/kitpro-server.install"
 grep -q 'usr.libexec.kitpro-ingress-validator' "$arch_dir/kitpro-server.install"
 grep -q 'kitpro-ingress-reload.path' "$arch_dir/kitpro-server.install"
 grep -q 'kitpro-ingress-reload.path' "$arch_dir/PKGBUILD"
 grep -q 'kitpro-ingress-reload.service' "$arch_dir/PKGBUILD"
-grep -q 'kitpro-cloudflared' "$arch_dir/kitpro-server.sysusers"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$server_dir/packaging/systemd/kitpro-acme.service"
-grep -q '^CapabilityBoundingSet=CAP_SETUID CAP_SETGID$' "$server_dir/packaging/systemd/kitpro-cloudflare.service"
-if grep -q '^AmbientCapabilities=' "$server_dir/packaging/systemd/kitpro-cloudflare.service"; then
-    printf 'Cloudflare tunnel runtime would inherit worker capabilities\n' >&2
+if grep -Rqi 'cloudflare' "$arch_dir/PKGBUILD" "$arch_dir/kitpro-server.install" "$arch_dir/kitpro-server.sysusers"; then
+    printf 'Arch package still exposes the deferred Cloudflare capability\n' >&2
     exit 1
 fi
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$server_dir/packaging/systemd/kitpro-helper.service"; then

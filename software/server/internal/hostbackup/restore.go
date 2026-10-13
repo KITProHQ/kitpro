@@ -34,7 +34,7 @@ type restoreJournal struct {
 	Phase string `json:"phase"`
 }
 
-var restoreTargets = []string{"helper.db", "ingress/certificates", "acme", "providers/cloudflare"}
+var restoreTargets = []string{"helper.db", "ingress/certificates", "acme"}
 
 func Restore(ctx context.Context, options RestoreOptions) error {
 	root := cleanRoot(options.StateRoot)
@@ -244,7 +244,7 @@ func extract(archive, destination string) (Manifest, error) {
 }
 
 func validateManifest(manifest Manifest, observed map[string]Entry) error {
-	if manifest.Format != Format || manifest.FormatVersion != FormatVersion || !manifest.CertificatePrivateKeysIncluded || !manifest.CloudflareCredentialsIncluded || len(manifest.Entries) != len(observed) {
+	if manifest.Format != Format || manifest.FormatVersion != FormatVersion || !manifest.CertificatePrivateKeysIncluded || len(manifest.Entries) != len(observed) {
 		return fmt.Errorf("unsupported host-state manifest")
 	}
 	sort.Slice(manifest.Entries, func(i, j int) bool { return manifest.Entries[i].Path < manifest.Entries[j].Path })

@@ -3,13 +3,12 @@ set -eu
 
 case ${1:-} in
     remove|purge)
-        deb-systemd-helper purge kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service >/dev/null 2>&1 || true
+        deb-systemd-helper purge kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service >/dev/null 2>&1 || true
         systemd-tmpfiles --remove /usr/lib/tmpfiles.d/kitpro.conf 2>/dev/null || true
         # Unload and remove the live conffile on uninstall. A future reinstall
         # restores it from the package's immutable /usr/share copy before load.
         rm -f /etc/apparmor.d/usr.libexec.kitpro-helper
         rm -f /etc/apparmor.d/usr.libexec.kitpro-acme
-        rm -f /etc/apparmor.d/usr.libexec.kitpro-cloudflare
         rm -f /etc/apparmor.d/usr.libexec.kitpro-ingress-validator
         rmdir /run/kitpro 2>/dev/null || true
         ;;

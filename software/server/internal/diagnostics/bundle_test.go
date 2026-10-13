@@ -12,13 +12,13 @@ import (
 
 func TestBundleRedactsSyntheticSecrets(t *testing.T) {
 	const password = "known-password-value"
-	const token = "known-cloudflare-token"
+	const token = "known-api-token"
 	const applicationSecret = "known-application-secret"
 	result, err := (Builder{OutputRoot: t.TempDir()}).Build(Input{
 		BundleID: "bundle-0123456789abcdef",
 		Created:  time.Unix(1, 0),
 		Sections: map[string]any{
-			"system": map[string]any{"version": "alpha.14", "password": password, "nested": []any{map[string]any{"cloudflare_token": token}}},
+			"system": map[string]any{"version": "alpha.14", "password": password, "nested": []any{map[string]any{"api_token": token}}},
 		},
 		Logs: []string{"healthy", "token=" + applicationSecret, "Authorization: Bearer " + token, "-----BEGIN PRIVATE KEY-----"},
 	}, []string{password, token, applicationSecret})

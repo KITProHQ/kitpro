@@ -44,29 +44,23 @@ func TestRenderNginxRejectsDuplicateHostAndInjection(t *testing.T) {
 	}
 }
 
-func TestRenderNginxAddsTLSAndCloudflareListeners(t *testing.T) {
+func TestRenderNginxAddsTLSAndRoutesACMEBeforeRedirect(t *testing.T) {
 	managed := baseRoute()
 	managed.ExposureMode, managed.TLSPolicy, managed.CertificateID = ManagedHTTPS, TLSACME, "cert-0123456789abcdef"
-	cloudflare := baseRoute()
-	cloudflare.ID, cloudflare.Hostname = "route-fedcba9876543210", "tunnel.example.com"
-	cloudflare.ExposureMode, cloudflare.TLSPolicy, cloudflare.ProviderID = CloudflareTunnel, TLSCloudflare, "provider-0123456789abcdef"
-	config, err := RenderNginx([]AppliedRoute{
-		{Route: managed, Backend: Backend{Address: "127.0.0.1", Port: 20000}},
-		{Route: cloudflare, Backend: Backend{Address: "127.0.0.1", Port: 20001}},
-	}, RenderOptions{})
+	config, err := RenderNginx([]AppliedRoute{{Route: managed, Backend: Backend{Address: "127.0.0.1", Port: 20000}}}, RenderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(config)
-	for _, required := range []string{"listen 443 ssl", "return 308 https://$host$request_uri", "/cert-0123456789abcdef/privkey.pem", "listen 127.0.0.1:18080", "listen 127.0.0.1:18080 default_server"} {
+	for _, required := range []string{"listen 80 default_server", "return 444", "ssl_reject_handshake on", "listen 443 ssl", "return 308 https://$host$request_uri", "/cert-0123456789abcdef/privkey.pem"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("generated config missing %q", required)
 		}
 	}
-	tunnelServer := text[strings.Index(text, "server_name tunnel.example.com"):]
-	challenge := strings.Index(tunnelServer, "location ^~ /.well-known/acme-challenge/")
-	application := strings.Index(tunnelServer, "proxy_pass http://127.0.0.1:20001")
-	if challenge == -1 || application == -1 || challenge > application {
-		t.Fatal("Cloudflare hostname does not route ACME HTTP-01 before the application backend")
+	hostServer := text[strings.Index(text, "server_name app.example.internal"):]
+	challenge := strings.Index(hostServer, "location ^~ /.well-known/acme-challenge/")
+	redirect := strings.Index(hostServer, "return 308 https://$host$request_uri")
+	if challenge == -1 || redirect == -1 || challenge > redirect {
+		t.Fatal("managed hostname does not route ACME HTTP-01 before the HTTPS redirect")
 	}
 }

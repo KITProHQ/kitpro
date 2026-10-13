@@ -36,7 +36,7 @@ func TestIngressCreateUsesTypedHelperAndCommitsGeneration(t *testing.T) {
 		return protocol.Response{OK: true, RequestID: request.ID, OperationID: request.OperationID, State: "succeeded", Result: map[string]any{"generation": 1, "previous_generation": 0, "configuration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, nil
 	}
 	recorder := httptest.NewRecorder()
-	body := `{"installation_id":"inst-ingress01","service_id":"web","hostname":"status.example.test","exposure_mode":"lan","upstream_protocol":"http","tls_policy":"none","certificate_id":"","provider_id":"","enabled":true}`
+	body := `{"installation_id":"inst-ingress01","service_id":"web","hostname":"status.example.test","exposure_mode":"lan","upstream_protocol":"http","tls_policy":"none","certificate_id":"","enabled":true}`
 	a.guard(a.ingressRoutes)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/ingress", body, session, csrf))
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -57,6 +57,7 @@ func TestIngressRejectsIneligibleServiceAndUnknownJSON(t *testing.T) {
 	for _, body := range []string{
 		`{"installation_id":"inst-pihole99","service_id":"admin","hostname":"dns.example.test","exposure_mode":"lan","upstream_protocol":"http","tls_policy":"none","enabled":true}`,
 		`{"installation_id":"inst-pihole99","service_id":"admin","hostname":"dns.example.test","exposure_mode":"lan","upstream_protocol":"http","tls_policy":"none","enabled":true,"configuration":"evil"}`,
+		`{"installation_id":"inst-pihole99","service_id":"admin","hostname":"dns.example.test","exposure_mode":"cloudflare-tunnel","upstream_protocol":"http","tls_policy":"cloudflare","provider_id":"provider-0123456789abcdef","enabled":true}`,
 	} {
 		recorder := httptest.NewRecorder()
 		a.guard(a.ingressRoutes)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/ingress", body, session, csrf))
@@ -176,89 +177,24 @@ func TestACMECertificateLifecycleIsTypedAndCredentialFree(t *testing.T) {
 	}
 }
 
-func TestCloudflareProviderCredentialIsWriteOnlyAndLocalDisablePreservesRemoteState(t *testing.T) {
+func TestACMEHTTP01FailureExplainsPublicPortRequirement(t *testing.T) {
 	a, session, csrf := newTestApp(t)
-	const token = "known-cloudflare-token-012345678901"
-	var operationsSeen []string
+	seedIngressInstallation(t, a, "inst-acme0002", "uptime-kuma")
 	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
-		operationsSeen = append(operationsSeen, request.Operation)
-		if request.Operation == "ConfigureCloudflareProvider" {
-			if request.ProviderToken != token || request.ProviderAccount == "" || request.ProviderZone == "" || request.ProviderTunnel == "" {
-				t.Fatalf("incomplete provider configuration: %#v", request)
-			}
+		if request.Operation != "IssueACMECertificate" {
+			t.Fatalf("unexpected helper request: %#v", request)
 		}
-		return protocol.Response{OK: true, Result: map[string]any{"provider_id": request.ProviderID}}, nil
+		return protocol.Response{ErrorCode: "challenge_failed", Error: "ACME operation failed"}, nil
 	}
-	body := `{"account_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","zone_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tunnel_id":"12345678-1234-4123-8123-123456789abc","api_token":"` + token + `"}`
 	recorder := httptest.NewRecorder()
-	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/exposure-providers", body, session, csrf))
-	if recorder.Code != http.StatusCreated || strings.Contains(recorder.Body.String(), token) {
-		t.Fatalf("configure status=%d body=%s", recorder.Code, recorder.Body.String())
+	body := `{"method":"acme","hostname":"unreachable.example.test","email":"admin@example.test","directory":"letsencrypt-staging","accept_terms":true,"installation_id":"inst-acme0002","service_id":"web"}`
+	a.guard(a.certificates)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/certificates", body, session, csrf))
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), `"error_code":"challenge_failed"`) || !strings.Contains(recorder.Body.String(), "TCP/80") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var created map[string]any
-	if json.Unmarshal(recorder.Body.Bytes(), &created) != nil {
-		t.Fatal("provider response is invalid")
-	}
-	providerID, _ := created["provider_id"].(string)
-	if providerID == "" {
-		t.Fatal("provider identity missing")
-	}
-	recorder = httptest.NewRecorder()
-	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/exposure-providers/"+providerID+"/enable", `{}`, session, csrf))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("enable status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	recorder = httptest.NewRecorder()
-	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/exposure-providers/"+providerID+"/disable", `{}`, session, csrf))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("disable status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var desired string
-	if err := a.db.QueryRow(`SELECT desired_state FROM exposure_providers WHERE provider_id=?`, providerID).Scan(&desired); err != nil || desired != "disabled" {
-		t.Fatalf("desired=%q err=%v", desired, err)
-	}
-	for _, operation := range operationsSeen {
-		if strings.Contains(operation, "Delete") || strings.Contains(operation, "Remove") {
-			t.Fatalf("ordinary disable invoked remote deletion: %v", operationsSeen)
-		}
-	}
-	recorder = httptest.NewRecorder()
-	a.guard(a.exposureProviders)(recorder, authenticatedRequest(http.MethodGet, "/api/v1/exposure-providers", "", session, csrf))
-	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), token) || strings.Contains(recorder.Body.String(), "credential_sha256") {
-		t.Fatalf("unsafe provider projection: %s", recorder.Body.String())
-	}
-}
-
-func TestCloudflareRouteFailureRollsBackLocalIngress(t *testing.T) {
-	a, session, csrf := newTestApp(t)
-	seedIngressInstallation(t, a, "inst-cloudflare1", "uptime-kuma")
-	const providerID = "provider-0123456789abcdef"
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := a.db.Exec(`INSERT INTO exposure_providers(provider_id,provider_type,account_id,zone_id,tunnel_id,credential_sha256,desired_state,runtime_state,created_at,updated_at) VALUES(?,'cloudflare-tunnel','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','12345678-1234-4123-8123-123456789abc','digest','enabled','ready',?,?)`, providerID, now, now); err != nil {
-		t.Fatal(err)
-	}
-	generation := 0
-	a.helperCall = func(request protocol.Request) (protocol.Response, error) {
-		switch request.Operation {
-		case "ApplyIngressGeneration":
-			generation++
-			return protocol.Response{OK: true, Result: map[string]any{"generation": generation, "previous_generation": generation - 1, "configuration_sha256": strings.Repeat("a", 64)}}, nil
-		case "AddCloudflareRoute":
-			return protocol.Response{ErrorCode: "CloudflareRejected", Error: "provider unavailable"}, nil
-		default:
-			t.Fatalf("unexpected operation %q", request.Operation)
-			return protocol.Response{}, nil
-		}
-	}
-	body := `{"installation_id":"inst-cloudflare1","service_id":"web","hostname":"remote.example.test","exposure_mode":"cloudflare-tunnel","upstream_protocol":"http","tls_policy":"cloudflare","provider_id":"` + providerID + `","enabled":true}`
-	recorder := httptest.NewRecorder()
-	a.guard(a.ingressRoutes)(recorder, authenticatedRequest(http.MethodPost, "/api/v1/ingress", body, session, csrf))
-	if recorder.Code != http.StatusBadGateway || generation != 2 {
-		t.Fatalf("status=%d generations=%d body=%s", recorder.Code, generation, recorder.Body.String())
-	}
-	var count int
-	if err := a.db.QueryRow(`SELECT COUNT(*) FROM ingress_routes`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("failed remote route left local ingress count=%d err=%v", count, err)
+	var stateValue, errorCode string
+	if err := a.db.QueryRow(`SELECT state,last_error_code FROM certificates WHERE hostname='unreachable.example.test'`).Scan(&stateValue, &errorCode); err != nil || stateValue != "invalid" || errorCode != "challenge_failed" {
+		t.Fatalf("state=%q error=%q err=%v", stateValue, errorCode, err)
 	}
 }
 
@@ -363,7 +299,7 @@ func TestFirstRunIsAuthenticatedResumableAndDoesNotSimulateCriticalSteps(t *test
 	if got := recorder.Header().Get("Referrer-Policy"); got != "same-origin" {
 		t.Fatalf("first-run forms need a same-origin Origin header; referrer policy=%q", got)
 	}
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Step 10") || !strings.Contains(recorder.Body.String(), "Docker address pool") || !strings.Contains(recorder.Body.String(), "requires attention") {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Step 9") || strings.Contains(recorder.Body.String(), "Cloudflare") || !strings.Contains(recorder.Body.String(), "Docker address pool") || !strings.Contains(recorder.Body.String(), "requires attention") {
 		t.Fatalf("first-run status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
@@ -394,6 +330,40 @@ func TestFirstRunIsAuthenticatedResumableAndDoesNotSimulateCriticalSteps(t *test
 	}
 	if err := a.db.QueryRow(`SELECT state FROM setup_steps WHERE step_id='docker-address-pool'`).Scan(&stateValue); err != nil || stateValue != "attention" {
 		t.Fatalf("Docker pool state=%q err=%v", stateValue, err)
+	}
+}
+
+func TestScopeCorrectionMakesLegacyCloudflareStateInert(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	seedIngressInstallation(t, a, "inst-legacycf1", "uptime-kuma")
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.Exec(`INSERT OR REPLACE INTO setup_steps(step_id,state,input_sha256,evidence_json,updated_at) VALUES('cloudflare','complete','','{}',?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec(`INSERT INTO exposure_providers(provider_id,provider_type,account_id,zone_id,tunnel_id,credential_sha256,desired_state,runtime_state,created_at,updated_at) VALUES('provider-0123456789abcdef','cloudflare-tunnel','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','12345678-1234-4123-8123-123456789abc','digest','enabled','ready',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec(`INSERT INTO ingress_routes(route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,provider_id,desired_state,created_at,updated_at) VALUES('route-fedcba9876543210','inst-legacycf1','web','legacy.example.test','cloudflare-tunnel','http','cloudflare','provider-0123456789abcdef','enabled',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := initializeSetupState(context.Background(), a.db, true); err != nil {
+		t.Fatal(err)
+	}
+	var setupCount int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM setup_steps WHERE step_id='cloudflare'`).Scan(&setupCount); err != nil || setupCount != 0 {
+		t.Fatalf("legacy setup row count=%d err=%v", setupCount, err)
+	}
+	var desired string
+	if err := a.db.QueryRow(`SELECT desired_state FROM ingress_routes WHERE route_id='route-fedcba9876543210'`).Scan(&desired); err != nil || desired != "disabled" {
+		t.Fatalf("legacy route desired=%q err=%v", desired, err)
+	}
+	routes, err := (ingress.Store{DB: a.db}).ListRoutes(context.Background(), "")
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("legacy route projected: routes=%#v err=%v", routes, err)
+	}
+	var providerCount int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM exposure_providers WHERE provider_id='provider-0123456789abcdef'`).Scan(&providerCount); err != nil || providerCount != 1 {
+		t.Fatalf("compatibility row count=%d err=%v", providerCount, err)
 	}
 }
 

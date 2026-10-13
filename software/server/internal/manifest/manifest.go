@@ -784,16 +784,13 @@ func validateIngressReadiness(service Service, schemaVersion int) error {
 		if service.Protocol != "http" && service.Protocol != "https" {
 			return fmt.Errorf("ingress requires an HTTP service")
 		}
-		if len(policy.ExposureModes) == 0 || len(policy.ExposureModes) > 3 {
+		if len(policy.ExposureModes) == 0 || len(policy.ExposureModes) > 2 {
 			return fmt.Errorf("invalid ingress exposure policy")
 		}
 		seen := map[string]bool{}
 		for _, mode := range policy.ExposureModes {
-			if seen[mode] || (mode != "lan" && mode != "managed-https" && mode != "cloudflare-tunnel") {
+			if seen[mode] || (mode != "lan" && mode != "managed-https") {
 				return fmt.Errorf("invalid ingress exposure policy")
-			}
-			if mode == "cloudflare-tunnel" && !policy.External {
-				return fmt.Errorf("Cloudflare exposure requires external access opt-in")
 			}
 			seen[mode] = true
 		}

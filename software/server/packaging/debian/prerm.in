@@ -3,15 +3,14 @@ set -eu
 
 case ${1:-} in
     remove|deconfigure)
-        deb-systemd-invoke stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service >/dev/null 2>&1 || true
-        deb-systemd-helper disable kitpro-api.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service >/dev/null 2>&1 || true
+        deb-systemd-invoke stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service >/dev/null 2>&1 || true
+        deb-systemd-helper disable kitpro-api.service kitpro-helper.socket kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service >/dev/null 2>&1 || true
         apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-helper 2>/dev/null || true
         apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-acme 2>/dev/null || true
-        apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-cloudflare 2>/dev/null || true
         apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-ingress-validator 2>/dev/null || true
         ;;
     upgrade)
-        deb-systemd-invoke stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-cloudflare.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service >/dev/null 2>&1 || true
+        deb-systemd-invoke stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service >/dev/null 2>&1 || true
         ;;
 esac
 

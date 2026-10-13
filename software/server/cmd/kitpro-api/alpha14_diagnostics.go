@@ -33,7 +33,7 @@ func (a *app) diagnostics(w http.ResponseWriter, r *http.Request) {
 			}
 			values = append(values, map[string]string{"bundle_id": id, "status": status, "filename": filename, "sha256": digest, "created_at": created, "completed_at": completed, "error_code": errorCode})
 		}
-		writeJSON(w, 200, map[string]any{"bundles": values, "includes": []string{"build and OS identity", "runtime status", "installations and service bindings", "ingress, certificate, and provider status", "recent operation outcomes"}, "excludes": []string{"passwords", "application secrets", "API tokens", "Cloudflare credentials", "certificate private keys", "cookies and session material", "authorization headers"}})
+		writeJSON(w, 200, map[string]any{"bundles": values, "includes": []string{"build and OS identity", "runtime status", "installations and service bindings", "ingress and certificate status", "recent operation outcomes"}, "excludes": []string{"passwords", "application secrets", "API tokens", "certificate private keys", "cookies and session material", "authorization headers"}})
 	case http.MethodPost:
 		a.generateSupportBundle(w, r)
 	default:
@@ -64,9 +64,8 @@ func (a *app) generateSupportBundle(w http.ResponseWriter, r *http.Request) {
 	queries := map[string]string{
 		"installations":    `SELECT installation_id,application_id,release_id,desired_state,runtime_generation,created_at,updated_at FROM installations ORDER BY installation_id`,
 		"service-bindings": `SELECT installation_id,service_id,transport,mode,host_address,host_port,created_at,updated_at FROM installation_service_exposure ORDER BY installation_id,service_id`,
-		"ingress":          `SELECT route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,certificate_id,provider_id,desired_state,applied_generation,created_at,updated_at FROM ingress_routes ORDER BY hostname`,
+		"ingress":          `SELECT route_id,installation_id,service_id,hostname,exposure_mode,upstream_protocol,tls_policy,certificate_id,desired_state,applied_generation,created_at,updated_at FROM ingress_routes WHERE exposure_mode<>'cloudflare-tunnel' ORDER BY hostname`,
 		"certificates":     `SELECT certificate_id,hostname,method,state,leaf_sha256,issuer,not_before,not_after,last_renewal_at,last_error_code,created_at,updated_at FROM certificates ORDER BY hostname`,
-		"providers":        `SELECT provider_id,provider_type,account_id,zone_id,tunnel_id,credential_sha256,desired_state,runtime_state,last_error_code,created_at,updated_at FROM exposure_providers ORDER BY provider_id`,
 		"operations":       `SELECT id AS operation_id,type AS operation_type,instance_id AS target_id,status,summary,requested_at AS created_at,requested_at AS updated_at FROM operations ORDER BY requested_at DESC LIMIT 100`,
 		"readiness":        `SELECT entity_type,entity_id,dimension,state,reason_code,summary,checked_at FROM readiness_observations ORDER BY entity_type,entity_id,dimension`,
 	}

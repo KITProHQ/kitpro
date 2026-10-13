@@ -253,7 +253,7 @@ func handleMaintenance(args []string) bool {
 		}
 		stateLock, err := acquireStateLock()
 		if err != nil {
-			fatal("KITPro helper is active; stop control, helper, ingress, ACME, and Cloudflare services before restore")
+			fatal("KITPro helper is active; stop control, helper, ingress, and ACME services before restore")
 		}
 		defer stateLock.Close()
 		if err = hostbackup.Restore(context.Background(), hostbackup.RestoreOptions{Archive: args[1], StateRoot: env("KITPRO_HELPER_STATE_ROOT", "/var/lib/kitpro-helper")}); err != nil {
@@ -456,13 +456,6 @@ func serve(c net.Conn, api uint32, db *sql.DB, coordinator helperops.Coordinator
 			} else {
 				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 			}
-		case "InspectCloudflareProvider":
-			result, err := inspectCloudflareProvider(context.Background(), db, r)
-			if err != nil {
-				protocol.Write(c, protocol.Response{RequestID: r.ID, ErrorCode: "CloudflareUnavailable", Error: "Cloudflare provider health unavailable", Result: result})
-			} else {
-				protocol.Write(c, protocol.Response{OK: true, RequestID: r.ID, Result: result})
-			}
 		default:
 			protocol.Write(c, protocol.Response{RequestID: r.ID, Error: "operation not permitted"})
 		}
@@ -501,7 +494,7 @@ func revealApplicationCredential(db *sql.DB, request protocol.Request) (protocol
 
 func isDurableMutation(operation string) bool {
 	switch operation {
-	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup", "ApplyIngressGeneration", "InstallCertificateMaterial", "IssueACMECertificate", "RenewACMECertificate", "ConfigureCloudflareProvider", "EnableCloudflareProvider", "DisableCloudflareProvider", "AddCloudflareRoute", "RemoveCloudflareRemoteRoute", "UnlinkCloudflareProvider", "DeleteCloudflareRemoteTunnel":
+	case "InstallApplication", "ConfigureServiceExposure", "UpdateApplication", "StopApplication", "RemoveApplication", "StartApplication", "RestartApplication", "ReconcileInstallation", "RepairInstallation", "RegisterStorageRoot", "RemoveStorageRoot", "BackupHelperState", "CreateApplicationBackup", "RestoreApplicationBackup", "ApplyIngressGeneration", "InstallCertificateMaterial", "IssueACMECertificate", "RenewACMECertificate":
 		return true
 	default:
 		return false
@@ -526,9 +519,6 @@ func operationScope(r protocol.Request) string {
 	}
 	if r.Operation == "ApplyIngressGeneration" || r.Operation == "InstallCertificateMaterial" || r.Operation == "IssueACMECertificate" || r.Operation == "RenewACMECertificate" {
 		return "host-ingress"
-	}
-	if strings.Contains(r.Operation, "Cloudflare") {
-		return "host-provider"
 	}
 	return "helper-state"
 }
@@ -593,7 +583,7 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 		if err != nil {
 			protocol.Write(w, protocol.Response{RequestID: r.ID, Error: err.Error()})
 		} else {
-			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"path": result.Path, "sha256": result.SHA256, "contains_secrets": true, "remote_cloudflare_resources_included": false, "generated_ingress_runtime_included": false}})
+			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: map[string]any{"path": result.Path, "sha256": result.SHA256, "contains_secrets": true, "generated_ingress_runtime_included": false}})
 		}
 	case "CreateApplicationBackup":
 		result, err := createApplicationBackup(context.Background(), db, r)
@@ -631,14 +621,7 @@ func executeMutation(w io.Writer, db *sql.DB, r protocol.Request, coordinator he
 	case "IssueACMECertificate", "RenewACMECertificate":
 		result, err := issueACMECertificate(context.Background(), db, r, r.Operation == "RenewACMECertificate")
 		if err != nil {
-			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "ACMERejected", Error: err.Error()})
-		} else {
-			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
-		}
-	case "ConfigureCloudflareProvider", "EnableCloudflareProvider", "DisableCloudflareProvider", "AddCloudflareRoute", "RemoveCloudflareRemoteRoute", "UnlinkCloudflareProvider", "DeleteCloudflareRemoteTunnel":
-		result, err := cloudflareOperation(context.Background(), db, r)
-		if err != nil {
-			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: "CloudflareRejected", Error: err.Error()})
+			protocol.Write(w, protocol.Response{RequestID: r.ID, ErrorCode: acmeErrorCode(err), Error: "ACME operation failed"})
 		} else {
 			protocol.Write(w, protocol.Response{OK: true, RequestID: r.ID, Result: result})
 		}

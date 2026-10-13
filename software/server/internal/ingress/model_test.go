@@ -29,24 +29,14 @@ func TestValidateRouteEnforcesCatalogAndTLSPolicy(t *testing.T) {
 	if err := ValidateRoute(managed, []string{"managed-https"}, false); err != nil {
 		t.Fatal(err)
 	}
-	cloudflare := route
-	cloudflare.ExposureMode, cloudflare.TLSPolicy, cloudflare.ProviderID = CloudflareTunnel, TLSCloudflare, "provider-0123456789abcdef"
-	if err := ValidateRoute(cloudflare, []string{"cloudflare-tunnel"}, true); err != nil {
-		t.Fatal(err)
-	}
 	invalid := []Route{
 		func() Route { r := route; r.Hostname = "Other.Example"; return r }(),
 		func() Route { r := route; r.ExposureMode = ManagedHTTPS; return r }(),
 		func() Route { r := route; r.ProviderID = "provider-0123456789abcdef"; return r }(),
-		func() Route { r := cloudflare; r.CertificateID = "cert-0123456789abcdef"; return r }(),
+		func() Route { r := route; r.ExposureMode = ExposureMode("tunnel"); return r }(),
 	}
 	for i, candidate := range invalid {
-		allowed := []string{"lan"}
-		external := false
-		if i == 3 {
-			allowed, external = []string{"cloudflare-tunnel"}, true
-		}
-		if err := ValidateRoute(candidate, allowed, external); err == nil {
+		if err := ValidateRoute(candidate, []string{"lan", "tunnel"}, false); err == nil {
 			t.Fatalf("invalid route %d accepted: %#v", i, candidate)
 		}
 	}

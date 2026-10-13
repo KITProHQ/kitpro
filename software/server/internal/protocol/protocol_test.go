@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 )
 
@@ -57,17 +56,6 @@ func TestCanonicalHashExcludesTransportAndGeneratedSecretValues(t *testing.T) {
 	}
 	if changedHash == firstHash {
 		t.Fatal("semantic command change did not alter hash")
-	}
-}
-
-func TestCanonicalProviderOperationNeverPersistsCredential(t *testing.T) {
-	request := Request{Version: 2, ID: "req-one", OperationID: "op-11111111111111111111111111111111", Operation: "ConfigureCloudflareProvider", OperationRevision: 1, ProviderID: "provider-0123456789abcdef", ProviderToken: "known-cloudflare-token-0123456789", ProviderAccount: strings.Repeat("a", 32), ProviderZone: strings.Repeat("b", 32), ProviderTunnel: "12345678-1234-4123-8123-123456789abc"}
-	canonical, err := Canonical(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(canonical), request.ProviderToken) || strings.Contains(string(canonical), "provider_token") {
-		t.Fatalf("canonical operation persisted provider credential: %s", canonical)
 	}
 }
 

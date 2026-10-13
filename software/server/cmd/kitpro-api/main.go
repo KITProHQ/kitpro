@@ -226,8 +226,6 @@ func main() {
 	http.HandleFunc("/api/v1/system/readiness", a.guard(a.systemReadiness))
 	http.HandleFunc("/api/v1/setup", a.guard(a.setupState))
 	http.HandleFunc("/api/v1/diagnostics", a.guard(a.diagnostics))
-	http.HandleFunc("/api/v1/exposure-providers", a.guard(a.exposureProviders))
-	http.HandleFunc("/api/v1/exposure-providers/", a.guard(a.exposureProviders))
 	http.HandleFunc("/api/v1/version", a.guard(a.version))
 	go a.runACMERenewalScheduler()
 	http.ListenAndServe(listenAddress, nil)
@@ -634,7 +632,7 @@ func (a *app) backup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "helper backup failed", 503)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]any{"backup_id": id, "control_database": cp, "helper_state": resp.Result, "contains_secrets": true, "remote_cloudflare_resources_included": false})
+	json.NewEncoder(w).Encode(map[string]any{"backup_id": id, "control_database": cp, "helper_state": resp.Result, "contains_secrets": true})
 }
 
 // version exposes non-sensitive build and schema metadata to authenticated

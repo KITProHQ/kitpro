@@ -13,18 +13,16 @@ import (
 type ExposureMode string
 
 const (
-	LAN              ExposureMode = "lan"
-	ManagedHTTPS     ExposureMode = "managed-https"
-	CloudflareTunnel ExposureMode = "cloudflare-tunnel"
+	LAN          ExposureMode = "lan"
+	ManagedHTTPS ExposureMode = "managed-https"
 )
 
 type TLSPolicy string
 
 const (
-	TLSNone       TLSPolicy = "none"
-	TLSProvided   TLSPolicy = "provided"
-	TLSACME       TLSPolicy = "acme"
-	TLSCloudflare TLSPolicy = "cloudflare"
+	TLSNone     TLSPolicy = "none"
+	TLSProvided TLSPolicy = "provided"
+	TLSACME     TLSPolicy = "acme"
 )
 
 type DesiredState string
@@ -35,15 +33,17 @@ const (
 )
 
 type Route struct {
-	ID                string       `json:"route_id"`
-	InstallationID    string       `json:"installation_id"`
-	ServiceID         string       `json:"service_id"`
-	Hostname          string       `json:"hostname"`
-	ExposureMode      ExposureMode `json:"exposure_mode"`
-	UpstreamProtocol  string       `json:"upstream_protocol"`
-	TLSPolicy         TLSPolicy    `json:"tls_policy"`
-	CertificateID     string       `json:"certificate_id,omitempty"`
-	ProviderID        string       `json:"provider_id,omitempty"`
+	ID               string       `json:"route_id"`
+	InstallationID   string       `json:"installation_id"`
+	ServiceID        string       `json:"service_id"`
+	Hostname         string       `json:"hostname"`
+	ExposureMode     ExposureMode `json:"exposure_mode"`
+	UpstreamProtocol string       `json:"upstream_protocol"`
+	TLSPolicy        TLSPolicy    `json:"tls_policy"`
+	CertificateID    string       `json:"certificate_id,omitempty"`
+	// ProviderID is retained only to read unpublished alpha.14 database rows.
+	// It is never accepted from or projected through the product API.
+	ProviderID        string       `json:"-"`
 	DesiredState      DesiredState `json:"desired_state"`
 	AppliedGeneration int64        `json:"applied_generation"`
 	CreatedAt         string       `json:"created_at"`
@@ -64,12 +64,11 @@ var (
 	identityPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
 	routePattern       = regexp.MustCompile(`^route-[a-f0-9]{16}$`)
 	certificatePattern = regexp.MustCompile(`^cert-[a-f0-9]{16}$`)
-	providerPattern    = regexp.MustCompile(`^provider-[a-f0-9]{16}$`)
 	labelPattern       = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
 func NewID(prefix string) (string, error) {
-	if prefix != "route" && prefix != "cert" && prefix != "provider" && prefix != "bundle" {
+	if prefix != "route" && prefix != "cert" && prefix != "bundle" {
 		return "", fmt.Errorf("unsupported identity prefix")
 	}
 	raw := make([]byte, 8)
@@ -98,7 +97,7 @@ func NormalizeHostname(value string) (string, error) {
 	return value, nil
 }
 
-func ValidateRoute(route Route, allowedModes []string, externalAllowed bool) error {
+func ValidateRoute(route Route, allowedModes []string, _ bool) error {
 	hostname, err := NormalizeHostname(route.Hostname)
 	if err != nil || hostname != route.Hostname || !routePattern.MatchString(route.ID) || !identityPattern.MatchString(route.InstallationID) || !identityPattern.MatchString(route.ServiceID) {
 		return fmt.Errorf("invalid route identity")
@@ -125,10 +124,6 @@ func ValidateRoute(route Route, allowedModes []string, externalAllowed bool) err
 		if route.TLSPolicy != TLSProvided && route.TLSPolicy != TLSACME {
 			return fmt.Errorf("managed HTTPS requires a certificate")
 		}
-	case CloudflareTunnel:
-		if !externalAllowed || route.TLSPolicy != TLSCloudflare || !providerPattern.MatchString(route.ProviderID) {
-			return fmt.Errorf("invalid Cloudflare route")
-		}
 	default:
 		return fmt.Errorf("invalid exposure mode")
 	}
@@ -139,7 +134,7 @@ func ValidateRoute(route Route, allowedModes []string, externalAllowed bool) err
 	} else if route.CertificateID != "" {
 		return fmt.Errorf("certificate is not allowed")
 	}
-	if route.ExposureMode != CloudflareTunnel && route.ProviderID != "" {
+	if route.ProviderID != "" {
 		return fmt.Errorf("provider is not allowed")
 	}
 	return nil
@@ -167,7 +162,7 @@ func NormalizeRoutes(routes []AppliedRoute) ([]AppliedRoute, error) {
 		if route.DesiredState != Enabled {
 			return nil, fmt.Errorf("disabled route included in active generation")
 		}
-		if err := ValidateRoute(route.Route, []string{string(LAN), string(ManagedHTTPS), string(CloudflareTunnel)}, true); err != nil {
+		if err := ValidateRoute(route.Route, []string{string(LAN), string(ManagedHTTPS)}, true); err != nil {
 			return nil, err
 		}
 		if err := ValidateBackend(route.Backend); err != nil {

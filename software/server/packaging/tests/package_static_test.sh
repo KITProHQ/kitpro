@@ -28,30 +28,27 @@ tar -xJf "$unpack/data.tar.xz" -C "$unpack/data"
 test -x "$unpack/data/usr/bin/kitpro-api"
 test -x "$unpack/data/usr/libexec/kitpro-helper"
 test -x "$unpack/data/usr/libexec/kitpro-acme"
-test -x "$unpack/data/usr/libexec/kitpro-cloudflare"
+test ! -e "$unpack/data/usr/libexec/kitpro-cloudflare"
 test -x "$unpack/data/usr/libexec/kitpro-ingress-validator"
 test -x "$unpack/data/usr/libexec/kitpro-debian-upgrade"
 test -x "$first/kitpro-debian-upgrade"
 test "$(sha256sum "$first/kitpro-debian-upgrade" | awk '{print $1}')" = "$(sha256sum "$second/kitpro-debian-upgrade" | awk '{print $1}')"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-acme"
-test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
+test ! -e "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
 test -f "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-helper"
 test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-acme"
 cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-acme" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-acme"
-test -f "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-cloudflare"
-cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-cloudflare"
 cmp -s "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator" "$unpack/data/usr/share/kitpro-server/apparmor/usr.libexec.kitpro-ingress-validator"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-helper "$unpack/control/conffiles"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-acme "$unpack/control/conffiles"
-grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-cloudflare "$unpack/control/conffiles"
 grep -Fxq /etc/apparmor.d/usr.libexec.kitpro-ingress-validator "$unpack/control/conffiles"
-grep -q 'for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare usr.libexec.kitpro-ingress-validator' "$unpack/control/postinst"
+grep -q 'for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme usr.libexec.kitpro-ingress-validator' "$unpack/control/postinst"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-helper.socket"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"
-test -f "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
+test ! -e "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.path"
 test -f "$unpack/data/usr/lib/systemd/system/kitpro-ingress-reload.service"
@@ -74,7 +71,6 @@ grep -q '^Depends: adduser, apparmor, nginx, systemd$' "$unpack/control/control"
 grep -q 'Environment=KITPRO_API_USER=kitpro-api' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-helper$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-acme$' "$unpack/data/usr/lib/systemd/system/kitpro-acme.service"
-grep -q '^AppArmorProfile=/usr/libexec/kitpro-cloudflare$' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
 grep -q '^AppArmorProfile=/usr/libexec/kitpro-ingress-validator$' "$unpack/data/usr/lib/systemd/system/kitpro-ingress-validator.service"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
 grep -q '^AmbientCapabilities=CAP_CHOWN CAP_DAC_READ_SEARCH$' "$unpack/data/usr/lib/systemd/system/kitpro-helper.service"
@@ -142,30 +138,17 @@ if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|DAC_READ_SEARC
     echo "ACME worker gained an unapproved capability" >&2
     exit 1
 fi
-grep -q '^CapabilityBoundingSet=CAP_SETUID CAP_SETGID$' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"
-if grep -q '^AmbientCapabilities=' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service"; then
-    echo "Cloudflare tunnel runtime would inherit worker capabilities" >&2
-    exit 1
-fi
-grep -Fq '/usr/bin/cloudflared ix,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
-grep -Fq 'network inet dgram,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
-grep -Fq 'network inet6 dgram,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
-if grep -Rq -- '--token ' "$unpack/data/usr/lib/systemd/system/kitpro-cloudflare.service" "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"; then
-    echo "Cloudflare token is exposed in packaged process arguments" >&2
-    exit 1
-fi
 grep -q '^  capability chown,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -q '^  capability dac_read_search,$' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  /etc/group r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  /etc/nsswitch.conf r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-ingress-validator"
 grep -Fqx '  /run/kitpro/helper-state.lock rwk,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
-for profile in usr.libexec.kitpro-acme usr.libexec.kitpro-cloudflare; do
+for profile in usr.libexec.kitpro-acme; do
     grep -Fqx '  /proc/*/cgroup r,' "$unpack/data/etc/apparmor.d/$profile"
     grep -Fqx '  /proc/*/mountinfo r,' "$unpack/data/etc/apparmor.d/$profile"
     grep -Fqx '  /proc/sys/net/core/somaxconn r,' "$unpack/data/etc/apparmor.d/$profile"
 done
 grep -Fqx '  /sys/fs/cgroup/system.slice/kitpro-acme.service/cpu.max r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-acme"
-grep -Fqx '  /sys/fs/cgroup/system.slice/kitpro-cloudflare.service/cpu.max r,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-cloudflare"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"
 grep -Fqx '  link subset /var/lib/kitpro-helper/backups/.host-backup-*/helper.db -> /var/lib/kitpro-helper/backups/.host-backup-*/.helper.db.partial-*,' "$unpack/data/etc/apparmor.d/usr.libexec.kitpro-helper"

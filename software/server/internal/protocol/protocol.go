@@ -65,12 +65,6 @@ type Request struct {
 	ACMEEmail       string                   `json:"acme_email,omitempty"`
 	ACMEDirectory   string                   `json:"acme_directory,omitempty"`
 	AcceptACMETerms bool                     `json:"accept_acme_terms,omitempty"`
-	ProviderID      string                   `json:"provider_id,omitempty"`
-	ProviderToken   string                   `json:"provider_token,omitempty"`
-	ProviderAccount string                   `json:"provider_account,omitempty"`
-	ProviderZone    string                   `json:"provider_zone,omitempty"`
-	ProviderTunnel  string                   `json:"provider_tunnel,omitempty"`
-	ConfirmRemote   bool                     `json:"confirm_remote,omitempty"`
 }
 type IngressRoute struct {
 	RouteID          string `json:"route_id"`
@@ -81,7 +75,6 @@ type IngressRoute struct {
 	UpstreamProtocol string `json:"upstream_protocol"`
 	TLSPolicy        string `json:"tls_policy"`
 	CertificateID    string `json:"certificate_id,omitempty"`
-	ProviderID       string `json:"provider_id,omitempty"`
 }
 type EnvVar struct {
 	Name     string `json:"name"`
@@ -185,7 +178,6 @@ func Canonical(r Request) ([]byte, error) {
 	r.Deadline = ""
 	r.CertificatePEM = ""
 	r.PrivateKeyPEM = ""
-	r.ProviderToken = ""
 	for i := range r.Environment {
 		if r.Environment[i].Secret {
 			r.Environment[i].Value = ""

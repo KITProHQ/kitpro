@@ -40,15 +40,17 @@ type Entry struct {
 }
 
 type Manifest struct {
-	Format                          string    `json:"format"`
-	FormatVersion                   int       `json:"format_version"`
-	CreatedAt                       time.Time `json:"created_at"`
-	HelperSchemaVersion             int       `json:"helper_schema_version"`
-	CertificatePrivateKeysIncluded  bool      `json:"certificate_private_keys_included"`
-	CloudflareCredentialsIncluded   bool      `json:"cloudflare_credentials_included"`
-	RemoteCloudflareStateIncluded   bool      `json:"remote_cloudflare_resources_included"`
-	GeneratedIngressRuntimeIncluded bool      `json:"generated_ingress_runtime_included"`
-	Entries                         []Entry   `json:"entries"`
+	Format                         string    `json:"format"`
+	FormatVersion                  int       `json:"format_version"`
+	CreatedAt                      time.Time `json:"created_at"`
+	HelperSchemaVersion            int       `json:"helper_schema_version"`
+	CertificatePrivateKeysIncluded bool      `json:"certificate_private_keys_included"`
+	// Legacy alpha.14 fields remain decodable so qualification archives created
+	// before the scope correction can still be restored. New backups omit them.
+	CloudflareCredentialsIncluded   bool    `json:"cloudflare_credentials_included,omitempty"`
+	RemoteCloudflareStateIncluded   bool    `json:"remote_cloudflare_resources_included,omitempty"`
+	GeneratedIngressRuntimeIncluded bool    `json:"generated_ingress_runtime_included"`
+	Entries                         []Entry `json:"entries"`
 }
 
 type CreateOptions struct {
@@ -117,7 +119,6 @@ func Create(ctx context.Context, options CreateOptions) (Result, error) {
 	}{
 		{"ingress/certificates", filepath.Join(stateRoot, "ingress", "certificates")},
 		{"acme", filepath.Join(stateRoot, "acme")},
-		{"providers/cloudflare", filepath.Join(stateRoot, "providers", "cloudflare")},
 	} {
 		found, walkErr := collect(source.archive, source.path)
 		if walkErr != nil {
@@ -130,7 +131,7 @@ func Create(ctx context.Context, options CreateOptions) (Result, error) {
 	if err = options.DB.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&schema); err != nil {
 		return Result{}, err
 	}
-	manifest := Manifest{Format: Format, FormatVersion: FormatVersion, CreatedAt: now, HelperSchemaVersion: schema, CertificatePrivateKeysIncluded: true, CloudflareCredentialsIncluded: true, RemoteCloudflareStateIncluded: false, GeneratedIngressRuntimeIncluded: false}
+	manifest := Manifest{Format: Format, FormatVersion: FormatVersion, CreatedAt: now, HelperSchemaVersion: schema, CertificatePrivateKeysIncluded: true, GeneratedIngressRuntimeIncluded: false}
 	for index := range files {
 		entry, hashErr := inspectFile(files[index].path, files[index].archive, files[index].archive != "helper.db")
 		if hashErr != nil {

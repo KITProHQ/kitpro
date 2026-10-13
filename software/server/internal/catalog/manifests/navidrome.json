@@ -24,7 +24,7 @@
     {"name": "ND_SCANSCHEDULE", "value": "1h"}
   ],
   "services": [
-    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 4533, "ingress": {"exposure_modes": ["lan", "managed-https", "cloudflare-tunnel"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}
+    {"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 4533, "ingress": {"exposure_modes": ["lan", "managed-https"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}
   ],
   "restart": "unless-stopped",
   "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}

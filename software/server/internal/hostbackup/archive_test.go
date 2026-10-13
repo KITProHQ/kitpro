@@ -62,7 +62,7 @@ func fixture(t *testing.T) (string, string, Result) {
 
 func TestCreateAndRestoreSensitiveHostStateFailClosed(t *testing.T) {
 	root, databasePath, result := fixture(t)
-	if len(result.SHA256) != 64 || !result.Manifest.CertificatePrivateKeysIncluded || !result.Manifest.CloudflareCredentialsIncluded || result.Manifest.RemoteCloudflareStateIncluded || result.Manifest.GeneratedIngressRuntimeIncluded {
+	if len(result.SHA256) != 64 || !result.Manifest.CertificatePrivateKeysIncluded || result.Manifest.CloudflareCredentialsIncluded || result.Manifest.RemoteCloudflareStateIncluded || result.Manifest.GeneratedIngressRuntimeIncluded {
 		t.Fatalf("unsafe manifest: %+v", result.Manifest)
 	}
 	if info, err := os.Stat(result.Path); err != nil || info.Mode().Perm() != 0600 {
@@ -71,16 +71,19 @@ func TestCreateAndRestoreSensitiveHostStateFailClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "acme/account.key"), []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "providers/cloudflare/provider-0123456789abcdef/api-token"), []byte("local-provider-state"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := Restore(context.Background(), RestoreOptions{Archive: result.Path, StateRoot: root}); err != nil {
 		t.Fatal(err)
 	}
 	if value, err := os.ReadFile(filepath.Join(root, "acme/account.key")); err != nil || string(value) != "acme-account-private-key" {
 		t.Fatalf("restored ACME key=%q err=%v", value, err)
 	}
-	if value, err := os.ReadFile(filepath.Join(root, "providers/cloudflare/provider-0123456789abcdef/api-token")); err != nil || string(value) != "cloudflare-api-token-0123456789" {
-		t.Fatalf("restored provider token=%q err=%v", value, err)
+	if value, err := os.ReadFile(filepath.Join(root, "providers/cloudflare/provider-0123456789abcdef/api-token")); err != nil || string(value) != "local-provider-state" {
+		t.Fatalf("retired provider state was unexpectedly restored: value=%q err=%v", value, err)
 	}
-	for _, path := range []string{"acme/account.key", "providers/cloudflare/provider-0123456789abcdef/api-token", "ingress/certificates/cert-0123456789abcdef/key.pem"} {
+	for _, path := range []string{"acme/account.key", "ingress/certificates/cert-0123456789abcdef/key.pem"} {
 		if info, err := os.Stat(filepath.Join(root, path)); err != nil || info.Mode().Perm() != 0600 {
 			t.Fatalf("restored mode for %s: %v err=%v", path, info, err)
 		}
