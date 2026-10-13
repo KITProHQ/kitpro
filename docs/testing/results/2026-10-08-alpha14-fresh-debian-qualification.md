@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: `FRESH_DEBIAN_PASS / SCOPE_CORRECTION_LOCAL_PASS / BLOCKED_LIVE_SCOPE_CORRECTED_PACKAGE_QUALIFICATION / BLOCKED_EXTERNAL_DIRECT_ACME_TEST_HOST`
+Status: `FRESH_DEBIAN_PASS / SCOPE_CORRECTED_LIVE_PASS / BLOCKED_EXTERNAL_DIRECT_ACME_TEST_HOST / FINAL_ARTIFACTS_PENDING`
 
 VM 500 is the authoritative Debian qualification host for this record. Its
 Debian operating system was wiped and reinstalled clean before alpha.14
@@ -12,13 +12,127 @@ current KITPro state was created by this qualification run.
 
 A snapshot is recovery tooling, not proof of whether an operating system was
 freshly installed. The fresh baseline was established by the rebuild and guest
-inspection. A convenience snapshot named `clean-os-alpha14-20261008` was also
-created before qualification mutations; its presence or absence would not
-change the fresh-install conclusion.
+inspection. No usable pre-qualification snapshot was required or treated as baseline
+evidence. Snapshot availability affects rollback convenience only; it does not
+change the verified fresh-install conclusion.
 
 This record qualifies Debian-local alpha.14 behavior. It does not declare final
 release readiness, qualify other operating systems, or authorize publication
 staging.
+
+## 2026-10-13 authoritative scope-corrected requalification
+
+The scope-corrected product was installed and exercised live on the same
+freshly rebuilt Debian VM 500. The guest now uses DHCP address
+`10.10.10.115`; Proxmox and guest observations still match VM ID 500, UUID
+`25f40ea4-0365-4ad3-a763-0d0d35b96b20`, MAC
+`BC:24:11:53:7E:3D`, `vmbr0`, VLAN tag 10, hostname `debian`, Debian 13.7,
+and kernel `6.12.111+deb13-amd64`. No unrelated production workload was
+present. Existing KITPro state belongs to this qualification and does not
+contaminate the original fresh-OS baseline.
+
+The installed requalification candidate was built from clean source at
+`68403cd9bcf0c6d88293a0b677b95c1fdeeb13f7`, tree
+`4e5e9a2776b29035743913d4eac8b35b223cb105`:
+
+| Property | Value |
+| --- | --- |
+| Filename | `kitpro-server_0.1.0~alpha14_amd64.deb` |
+| Local path | `/tmp/kitpro-alpha14-requal-68403cd/kitpro-server_0.1.0~alpha14_amd64.deb` |
+| SHA-256 | `128b435547b6617bbc21ceb70082c1e315f4c01f7ff5c38cbe8baa77277d2120` |
+| Version/architecture | `0.1.0~alpha14` / `amd64` |
+| Embedded source commit | `68403cd9bcf0c6d88293a0b677b95c1fdeeb13f7` |
+| Clean-source marker | `source_tree_dirty=false` |
+| Build time | `2026-10-13T07:23:34Z` |
+
+The package installed through its normal incoming `preinst` and `postinst`
+transaction. Dependencies remained satisfied. The installed API and extracted
+metadata reported the same source identity. After a real reboot, Docker and all
+expected KITPro units were active, the failed-unit count was zero, no genuine
+ordering cycle was present, AppArmor was enabled with the helper, ACME,
+ingress-validator, and `docker-default` profiles enforcing, and no denial was
+recorded for the current candidate. Root storage was 74 GiB with about 68 GiB
+available. Docker retained the operator-configured `172.30.0.0/16` pool with
+`/24` children, no reported conflict, at least 64 required subnets available,
+and no restart requirement. KITPro did not rewrite Docker configuration.
+
+The live transition found and fixed four bounded defects:
+
+- `d7e1707a27a9c5a42150dbd7ab686d9c2e7130a2` makes a Debian upgrade from the
+  development-era provider build stop, disable, unload, and remove the retired
+  Cloudflare service, profile, and system identity. The final guest has no
+  Cloudflare unit, binary, AppArmor profile, or system account.
+- `9742faf1b2bd4dbed50660fa9c7bb7a348488724` seals the staged control and
+  helper databases before archive and restore so WAL state cannot be omitted.
+- `ca66417695cc70187e1445e7d732d5c8d0c6db09` uses SQLite `VACUUM INTO` for
+  sealing. This removed the hard-link operation denied by the existing narrow
+  AppArmor policy, so no policy expansion was needed.
+- `68403cd9bcf0c6d88293a0b677b95c1fdeeb13f7` swaps helper WAL/SHM sidecars
+  with the database and restores them during journal rollback. This prevents a
+  stale target WAL from being replayed against a newly restored database.
+
+Regression coverage recreates standalone database sealing, stale target
+sidecars, and interrupted journal recovery. The live backup
+`op-8fbef2e1a0badde141632a76f33e2652` produced a mode-`0600` helper archive
+with SHA-256
+`966bdf35446a171ac13bb7d72572890b2797947857adf1b0645c6905876dcdd8`.
+The archived helper database independently passed integrity verification and
+the archive contained no Cloudflare state. Offline restore then passed for both
+databases, ownership and mode checks, secret-file handling, journal cleanup,
+ingress bootstrap hold, application-first recovery, and explicit ingress
+reconciliation to generation 13. Both databases independently verified after
+the swap, no helper WAL/SHM remained, HTTPS returned 200, and a subsequent
+backup `op-a6f74630243aebcc5c4131e0e835af72` succeeded.
+
+The durable first-run model now has exactly nine steps: host readiness, runtime,
+storage, network, Docker address pool, administrator, access mode, HTTPS, and
+first application. All nine remained complete across service restart, offline
+restore, and reboot. No Cloudflare step or product projection remains. Typed
+readiness after reboot reported helper, runtime, address pool, storage, disk,
+LAN, ingress, and HTTPS ready; host-firewall inspection remained explicitly
+unknown because it is outside the constrained helper observation.
+
+The packaged root-local administrator recovery flow revoked an active session.
+The old session and password returned HTTP 401, the new password returned 303,
+administrator `updated_at` advanced, and only the new session remained active.
+An in-place scan found neither disposable plaintext password in the system
+journal or control database. The post-reboot support bundle
+`bundle-90415983e7eccb39.tar.gz`, SHA-256
+`02d0d9d42beaf20aeed479c6a9b54d93255bcefb4a6da60e7d5ebc8c7a35e599`,
+was mode `0600`, contained expected safe runtime/readiness data, and excluded
+password, authorization, cookie, CSRF, token, and private-key markers.
+
+A real reboot preserved the package identity, nine-step setup, databases,
+provided certificate, generation-13 managed ingress, HTTPS, Docker pool, and
+Memos generation-3 runtime on loopback port 20000. Unknown HTTP/TLS hosts were
+rejected. API/helper restart, nginx reload, stopped-backend behavior, invalid
+certificate replacement, invalid nginx candidate, activation failure, and
+interrupted restore recovery were covered without losing known-good state.
+Local ACME allowlist, validation, scheduling, failure, rollback, and
+known-certificate retention coverage passed; public staging issuance was not
+attempted because this environment cannot accept inbound TCP/80 and no separate
+authorized public test host was supplied.
+
+Repository-wide regression passed: `go test ./...`, `go vet ./...`, the Node UI
+test, Debian package static and incoming-preinstall tests, Debian and Arch
+upgrade gates, Arch and RPM static tests, and `git diff --check`. The first
+Debian gate invocation reached its `/var/tmp` cache restriction after its own
+gate passed; the unchanged test passed in full with `GOCACHE` under `/tmp`.
+
+The Debian-local release gates are complete. Cloudflare Tunnel is outside
+alpha.14 scope and is not a blocker. Live direct Let's Encrypt staging remains
+`BLOCKED_EXTERNAL_DIRECT_ACME_TEST_HOST` if it is retained as a mandatory
+release gate. It needs a separate authorized disposable Internet-reachable
+Debian host, public hostname, TCP/80, contact address, and staging subscriber
+terms authorization. VM 500's successful fresh-Debian result remains valid.
+Final source freeze, cross-platform gates, final artifact rebuild, exact-byte
+artifact qualification, SBOM/manifest generation, and local publication
+staging remain pending. No push, tag, publication, upload, or production
+deployment occurred.
+
+The sections below retain the earlier 2026-10-08 and 2026-10-12 evidence for
+traceability. Where identities differ, the 2026-10-13 section above is the
+current authoritative result.
 
 ## Source and candidate identity
 
