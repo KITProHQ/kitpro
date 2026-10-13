@@ -75,6 +75,11 @@ func TestCreateAndRestoreSensitiveHostStateFailClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "providers/cloudflare/provider-0123456789abcdef/api-token"), []byte("local-provider-state"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	for _, suffix := range databaseSidecarSuffixes {
+		if err := os.WriteFile(databasePath+suffix, []byte("stale-sidecar"+suffix), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := Restore(context.Background(), RestoreOptions{Archive: result.Path, StateRoot: root}); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +190,12 @@ func TestInterruptedRestoreRecoversPreRestoreState(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "acme/account.key"), []byte("pre-restore-current"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	sidecars := map[string][]byte{"-wal": []byte("pre-restore-wal"), "-shm": []byte("pre-restore-shm")}
+	for suffix, contents := range sidecars {
+		if err = os.WriteFile(databasePath+suffix, contents, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	err = Restore(context.Background(), RestoreOptions{Archive: result.Path, StateRoot: root, Fault: func(point string) error {
 		if point == "after-helper.db" {
 			return ErrInterrupted
@@ -196,6 +207,15 @@ func TestInterruptedRestoreRecoversPreRestoreState(t *testing.T) {
 	}
 	if err = Recover(root); err != nil {
 		t.Fatal(err)
+	}
+	for suffix, expected := range sidecars {
+		actual, readErr := os.ReadFile(databasePath + suffix)
+		if readErr != nil || string(actual) != string(expected) {
+			t.Fatalf("pre-restore sidecar %s not recovered: %q err=%v", suffix, actual, readErr)
+		}
+		if err = os.Remove(databasePath + suffix); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db, err = state.Open(databasePath)
 	if err != nil {

@@ -35,6 +35,7 @@ type restoreJournal struct {
 }
 
 var restoreTargets = []string{"helper.db", "ingress/certificates", "acme"}
+var databaseSidecarSuffixes = []string{"-wal", "-shm"}
 
 func Restore(ctx context.Context, options RestoreOptions) error {
 	root := cleanRoot(options.StateRoot)
@@ -77,6 +78,24 @@ func Restore(ctx context.Context, options RestoreOptions) error {
 	if err = os.MkdirAll(rollback, 0700); err != nil {
 		return err
 	}
+	for _, suffix := range databaseSidecarSuffixes {
+		if _, statErr := os.Lstat(filepath.Join(staging, "helper.db") + suffix); statErr == nil {
+			return fmt.Errorf("restored helper database contains an unexpected %s sidecar", suffix)
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+	}
+	if _, mainErr := os.Lstat(filepath.Join(root, "helper.db")); os.IsNotExist(mainErr) {
+		for _, suffix := range databaseSidecarSuffixes {
+			if _, sidecarErr := os.Lstat(filepath.Join(root, "helper.db") + suffix); sidecarErr == nil {
+				return fmt.Errorf("helper database sidecar exists without its database")
+			} else if !os.IsNotExist(sidecarErr) {
+				return sidecarErr
+			}
+		}
+	} else if mainErr != nil {
+		return mainErr
+	}
 	if err = writeJournal(root, restoreJournal{ID: id, Phase: "swapping"}); err != nil {
 		return err
 	}
@@ -93,6 +112,13 @@ func Restore(ctx context.Context, options RestoreOptions) error {
 			}
 			if err = os.Rename(target, previous); err != nil {
 				return err
+			}
+			if relative == "helper.db" {
+				for _, suffix := range databaseSidecarSuffixes {
+					if err = moveIfPresent(target+suffix, previous+suffix); err != nil {
+						return err
+					}
+				}
 			}
 		} else if !os.IsNotExist(statErr) {
 			return statErr
@@ -145,16 +171,35 @@ func Recover(root string) error {
 			target, previous, candidate := filepath.Join(root, relative), filepath.Join(rollback, relative), filepath.Join(staging, relative)
 			if _, previousErr := os.Lstat(previous); previousErr == nil {
 				_ = os.RemoveAll(target)
+				if relative == "helper.db" {
+					for _, suffix := range databaseSidecarSuffixes {
+						_ = os.RemoveAll(target + suffix)
+					}
+				}
 				if err = os.MkdirAll(filepath.Dir(target), 0700); err == nil {
 					err = os.Rename(previous, target)
 				}
 				if err != nil {
 					return err
 				}
+				if relative == "helper.db" {
+					for _, suffix := range databaseSidecarSuffixes {
+						if err = moveIfPresent(previous+suffix, target+suffix); err != nil {
+							return err
+						}
+					}
+				}
 			} else if os.IsNotExist(previousErr) {
 				if _, candidateErr := os.Lstat(candidate); os.IsNotExist(candidateErr) {
 					if err = os.RemoveAll(target); err != nil {
 						return err
+					}
+					if relative == "helper.db" {
+						for _, suffix := range databaseSidecarSuffixes {
+							if err = os.RemoveAll(target + suffix); err != nil {
+								return err
+							}
+						}
 					}
 				}
 			} else {
@@ -172,6 +217,15 @@ func Recover(root string) error {
 		return err
 	}
 	return syncDirectory(root)
+}
+
+func moveIfPresent(source, destination string) error {
+	if _, err := os.Lstat(source); err == nil {
+		return os.Rename(source, destination)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func extract(archive, destination string) (Manifest, error) {
