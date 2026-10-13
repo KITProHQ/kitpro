@@ -217,8 +217,30 @@ func completeBackupOperationSnapshot(ctx context.Context, databasePath, operatio
 // staged database has been modified. Verifying an open WAL database is not
 // sufficient when only its main file will be archived or atomically moved.
 func sealStandaloneDatabase(ctx context.Context, db *sql.DB, databasePath string) error {
-	directory, name := filepath.Dir(databasePath), filepath.Base(databasePath)+".sealed"
-	sealedPath, err := controlbackup.Vacuum(ctx, db, directory, name)
+	directory := filepath.Dir(databasePath)
+	sealedPath := databasePath + ".sealed"
+	if _, err := os.Lstat(sealedPath); err == nil {
+		return fmt.Errorf("database sealing target already exists")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	_, err := db.ExecContext(ctx, "VACUUM INTO ?", sealedPath)
+	if err == nil {
+		err = os.Chmod(sealedPath, 0600)
+	}
+	if err == nil {
+		err = controlbackup.Verify(ctx, sealedPath)
+	}
+	if err == nil {
+		var sealed *os.File
+		sealed, err = os.Open(sealedPath)
+		if err == nil {
+			err = sealed.Sync()
+			if closeErr := sealed.Close(); err == nil {
+				err = closeErr
+			}
+		}
+	}
 	closeErr := db.Close()
 	if err != nil {
 		return err
