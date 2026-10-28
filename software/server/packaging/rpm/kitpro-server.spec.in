@@ -122,6 +122,19 @@ if [ "$1" -gt 1 ] && [ -x %{_bindir}/kitpro-api ] && [ -x %{_libexecdir}/kitpro-
 fi
 
 %post
+systemctl stop kitpro-cloudflare.service >/dev/null 2>&1 || true
+systemctl disable kitpro-cloudflare.service >/dev/null 2>&1 || true
+rm -f %{_unitdir}/kitpro-cloudflare.service \
+    %{_sysusersdir}/kitpro-cloudflare.conf \
+    %{_libexecdir}/kitpro-cloudflare \
+    %{_sysconfdir}/systemd/system/multi-user.target.wants/kitpro-cloudflare.service \
+    %{_datadir}/selinux/packages/kitpro-cloudflare/kitpro-cloudflare.pp.bz2
+if command -v semodule >/dev/null 2>&1; then
+    semodule -r kitpro_cloudflare >/dev/null 2>&1 || true
+fi
+userdel kitpro-cloudflared >/dev/null 2>&1 || true
+groupdel kitpro-cloudflared >/dev/null 2>&1 || true
+systemctl daemon-reload
 %systemd_post kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service
 systemd-sysusers %{_sysusersdir}/kitpro-server.conf
 systemd-tmpfiles --create %{_tmpfilesdir}/kitpro.conf

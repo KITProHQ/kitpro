@@ -58,10 +58,19 @@ grep -Fq 'files_pid_filetrans(kitpro_acme_t, kitpro_acme_runtime_t, sock_file, "
 grep -Fq 'files_pid_filetrans(kitpro_acme_t, kitpro_acme_runtime_t, sock_file, "acme.sock")' "$packaging_dir/selinux/kitpro.te"
 grep -q 'corenet_tcp_connect_http_port(kitpro_acme_t)' "$packaging_dir/selinux/kitpro.te"
 grep -q '^allow kitpro_acme_t self:capability chown;$' "$packaging_dir/selinux/kitpro.te"
-if grep -Rqi 'cloudflare' "$spec" "$packaging_dir/rpm/kitpro-server.sysusers" "$packaging_dir/selinux"; then
+if grep -Rqi 'cloudflare' "$packaging_dir/rpm/kitpro-server.sysusers" "$packaging_dir/selinux"; then
     printf 'RPM package still exposes the deferred Cloudflare capability\n' >&2
     exit 1
 fi
+if grep -Eqi '^(Source|Requires|BuildRequires):.*cloudflare|^%\{_.*\}/.*cloudflare' "$spec"; then
+    printf 'RPM payload or dependency still exposes the deferred Cloudflare capability\n' >&2
+    exit 1
+fi
+grep -Fq 'systemctl stop kitpro-cloudflare.service' "$spec"
+grep -Fq 'systemctl disable kitpro-cloudflare.service' "$spec"
+grep -Fq 'semodule -r kitpro_cloudflare' "$spec"
+grep -Fq 'userdel kitpro-cloudflared' "$spec"
+grep -Fq 'groupdel kitpro-cloudflared' "$spec"
 grep -q '^d /var/lib/kitpro-helper/application-backups 0700 root root -$' "$packaging_dir/tmpfiles/kitpro.conf"
 grep -Fxq 'PIDFile=/var/lib/kitpro-helper/ingress/run/nginx.pid' "$packaging_dir/systemd/kitpro-ingress.service"
 grep -Fxq 'pid run/nginx.pid;' "$packaging_dir/nginx/bootstrap.conf"
