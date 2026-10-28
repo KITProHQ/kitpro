@@ -63,4 +63,5 @@ operation and recovery.
 - [Alpha.14 release notes draft](release/0.1.0-alpha.14-release-notes.md)
 - [Upgrade published alpha.13 to alpha.14](release/upgrade-alpha13-to-alpha14.md)
 - [Alpha.13 platform qualification](testing/results/2026-09-26-alpha13-platform-qualification.md)
+- [Alpha.14 supported-platform and upgrade qualification](testing/results/2026-10-28-alpha14-platform-and-upgrade-qualification.md)
 - [Release checklist](release/release-checklist.md)
