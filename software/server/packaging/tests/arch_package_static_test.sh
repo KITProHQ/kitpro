@@ -32,10 +32,17 @@ grep -q 'kitpro-ingress-reload.path' "$arch_dir/kitpro-server.install"
 grep -q 'kitpro-ingress-reload.path' "$arch_dir/PKGBUILD"
 grep -q 'kitpro-ingress-reload.service' "$arch_dir/PKGBUILD"
 grep -q '^CapabilityBoundingSet=CAP_CHOWN$' "$server_dir/packaging/systemd/kitpro-acme.service"
-if grep -Rqi 'cloudflare' "$arch_dir/PKGBUILD" "$arch_dir/kitpro-server.install" "$arch_dir/kitpro-server.sysusers"; then
+if grep -Rqi 'cloudflare' "$arch_dir/PKGBUILD" "$arch_dir/kitpro-server.sysusers"; then
     printf 'Arch package still exposes the deferred Cloudflare capability\n' >&2
     exit 1
 fi
+grep -Fq 'retire_deferred_cloudflare' "$arch_dir/kitpro-server.install"
+grep -Fq 'systemctl disable --now kitpro-cloudflare.service' "$arch_dir/kitpro-server.install"
+grep -Fq "profile /usr/libexec/kitpro-cloudflare {}" "$arch_dir/kitpro-server.install"
+grep -Fq 'apparmor_parser -R "$removal_profile"' "$arch_dir/kitpro-server.install"
+grep -Fq 'rm -f -- "$profile"' "$arch_dir/kitpro-server.install"
+grep -Fq 'userdel kitpro-cloudflared' "$arch_dir/kitpro-server.install"
+grep -Fq 'groupdel kitpro-cloudflared' "$arch_dir/kitpro-server.install"
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(SYS_ADMIN|DAC_OVERRIDE|MKNOD)' "$server_dir/packaging/systemd/kitpro-helper.service"; then
     printf 'helper gained an unapproved capability\n' >&2
     exit 1

@@ -64,7 +64,37 @@ restore_previous_services() {
     [[ "$api_was_active" != true ]] || systemctl start kitpro-api.service
 }
 
+retire_deferred_cloudflare() {
+    local profile=/etc/apparmor.d/usr.libexec.kitpro-cloudflare
+    local removal_profile=$profile
+
+    # Cloudflare Tunnel shipped only in unpublished alpha.14 candidates. Pacman
+    # removes files that disappear from the new package, but it does not stop a
+    # service that the new package no longer knows about. Retire that executable
+    # state while preserving inert provider data for migration compatibility.
+    systemctl disable --now kitpro-cloudflare.service >/dev/null 2>&1 || true
+    if [[ ! -r "$profile" ]]; then
+        removal_profile=$(mktemp /run/kitpro-cloudflare-retire.XXXXXX) || removal_profile=
+        if [[ -n "$removal_profile" ]]; then
+            printf '#include <tunables/global>\nprofile /usr/libexec/kitpro-cloudflare {}\n' > "$removal_profile"
+        fi
+    fi
+    if [[ -n "$removal_profile" ]]; then
+        apparmor_parser -R "$removal_profile" >/dev/null 2>&1 || true
+        [[ "$removal_profile" == "$profile" ]] || rm -f -- "$removal_profile"
+    fi
+    rm -f -- "$profile"
+    if getent passwd kitpro-cloudflared >/dev/null; then
+        userdel kitpro-cloudflared
+    fi
+    if getent group kitpro-cloudflared >/dev/null; then
+        groupdel kitpro-cloudflared
+    fi
+    systemctl daemon-reload
+}
+
 configure_package() {
+    retire_deferred_cloudflare
     if [[ ! -e /etc/conf.d/kitpro-server ]]; then
         if [[ -f /etc/conf.d/kitpro-server.pacsave ]]; then
             install -Dm0644 /etc/conf.d/kitpro-server.pacsave /etc/conf.d/kitpro-server
