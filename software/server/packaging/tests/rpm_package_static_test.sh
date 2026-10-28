@@ -68,6 +68,8 @@ if grep -Eqi '^(Source|Requires|BuildRequires):.*cloudflare|^%\{_.*\}/.*cloudfla
 fi
 grep -Fq 'systemctl stop kitpro-cloudflare.service' "$spec"
 grep -Fq 'systemctl disable kitpro-cloudflare.service' "$spec"
+grep -Fq "pkill -TERM -f '^/usr/libexec/kitpro-cloudflare( |$)'" "$spec"
+grep -Fq "pkill -KILL -f '^/usr/libexec/kitpro-cloudflare( |$)'" "$spec"
 grep -Fq 'semodule -r kitpro_cloudflare' "$spec"
 grep -Fq 'userdel kitpro-cloudflared' "$spec"
 grep -Fq 'groupdel kitpro-cloudflared' "$spec"

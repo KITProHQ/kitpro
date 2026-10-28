@@ -124,6 +124,12 @@ fi
 %post
 systemctl stop kitpro-cloudflare.service >/dev/null 2>&1 || true
 systemctl disable kitpro-cloudflare.service >/dev/null 2>&1 || true
+pkill -TERM -f '^/usr/libexec/kitpro-cloudflare( |$)' >/dev/null 2>&1 || true
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -f '^/usr/libexec/kitpro-cloudflare( |$)' >/dev/null 2>&1 || break
+    sleep 0.1
+done
+pkill -KILL -f '^/usr/libexec/kitpro-cloudflare( |$)' >/dev/null 2>&1 || true
 rm -f %{_unitdir}/kitpro-cloudflare.service \
     %{_sysusersdir}/kitpro-cloudflare.conf \
     %{_libexecdir}/kitpro-cloudflare \
