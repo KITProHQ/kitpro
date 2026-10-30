@@ -1,0 +1,187 @@
+#!/bin/bash
+
+check_prerequisites() {
+    if ! systemctl is-active --quiet docker.service; then
+        printf 'kitpro-server: a compatible, active Docker Engine is required\n' >&2
+        return 1
+    fi
+    if [[ ! -S /run/docker.sock && ! -S /var/run/docker.sock ]]; then
+        printf 'kitpro-server: Docker Engine socket is unavailable\n' >&2
+        return 1
+    fi
+    if ! aa-enabled >/dev/null 2>&1; then
+        printf 'kitpro-server: AppArmor must be enabled in the kernel before installation\n' >&2
+        return 1
+    fi
+}
+
+require_upgrade_approval() {
+    local old_version=$1 new_version=$2
+    local approval=/run/kitpro/upgrade-approved
+    local key value format='' approved_old='' approved_target='' created_at=''
+    if [[ ! -f "$approval" || -L "$approval" ]]; then
+        printf 'kitpro-server: upgrade preflight approval is missing; use the checksummed KITPro upgrade wrapper\n' >&2
+        return 1
+    fi
+    if [[ $(stat -c '%u:%a' "$approval") != 0:600 ]]; then
+        printf 'kitpro-server: upgrade preflight approval has unsafe ownership or permissions\n' >&2
+        return 1
+    fi
+    while IFS='=' read -r key value; do
+        case "$key" in
+            format) format=$value ;;
+            old_version) approved_old=$value ;;
+            target_version) approved_target=$value ;;
+            created_at) created_at=$value ;;
+        esac
+    done < "$approval"
+    if [[ "$format" != 1 || "$approved_old" != "$old_version" || \
+        ( "$approved_target" != pending && "$approved_target" != "$new_version" ) || \
+        ! "$created_at" =~ ^[0-9]+$ ]]; then
+        printf 'kitpro-server: upgrade preflight approval is invalid or stale\n' >&2
+        return 1
+    fi
+    local approval_age=$(( $(date +%s) - 10#$created_at ))
+    if (( approval_age < 0 || approval_age > 3600 )); then
+        printf 'kitpro-server: upgrade preflight approval is invalid or stale\n' >&2
+        return 1
+    fi
+}
+
+restore_previous_services() {
+    local approval=/run/kitpro/upgrade-approved
+    local key value api_was_active=false helper_was_active=false socket_was_active=false
+    [[ -f "$approval" && ! -L "$approval" ]] || return 0
+    while IFS='=' read -r key value; do
+        case "$key" in
+            api_was_active) api_was_active=$value ;;
+            helper_was_active) helper_was_active=$value ;;
+            socket_was_active) socket_was_active=$value ;;
+        esac
+    done < "$approval"
+    [[ "$socket_was_active" != true ]] || systemctl start kitpro-helper.socket
+    [[ "$helper_was_active" != true ]] || systemctl start kitpro-helper.service
+    [[ "$api_was_active" != true ]] || systemctl start kitpro-api.service
+}
+
+retire_deferred_cloudflare() {
+    local profile=/etc/apparmor.d/usr.libexec.kitpro-cloudflare
+    local removal_profile=$profile
+
+    # Cloudflare Tunnel shipped only in unpublished alpha.14 candidates. Pacman
+    # removes files that disappear from the new package, but it does not stop a
+    # service that the new package no longer knows about. Retire that executable
+    # state while preserving inert provider data for migration compatibility.
+    systemctl disable --now kitpro-cloudflare.service >/dev/null 2>&1 || true
+    if [[ ! -r "$profile" ]]; then
+        removal_profile=$(mktemp /run/kitpro-cloudflare-retire.XXXXXX) || removal_profile=
+        if [[ -n "$removal_profile" ]]; then
+            printf '#include <tunables/global>\nprofile /usr/libexec/kitpro-cloudflare {}\n' > "$removal_profile"
+        fi
+    fi
+    if [[ -n "$removal_profile" ]]; then
+        apparmor_parser -R "$removal_profile" >/dev/null 2>&1 || true
+        [[ "$removal_profile" == "$profile" ]] || rm -f -- "$removal_profile"
+    fi
+    rm -f -- "$profile"
+    if getent passwd kitpro-cloudflared >/dev/null; then
+        userdel kitpro-cloudflared
+    fi
+    if getent group kitpro-cloudflared >/dev/null; then
+        groupdel kitpro-cloudflared
+    fi
+    systemctl daemon-reload
+}
+
+configure_package() {
+    retire_deferred_cloudflare
+    if [[ ! -e /etc/conf.d/kitpro-server ]]; then
+        if [[ -f /etc/conf.d/kitpro-server.pacsave ]]; then
+            install -Dm0644 /etc/conf.d/kitpro-server.pacsave /etc/conf.d/kitpro-server
+            rm -f /etc/conf.d/kitpro-server.pacsave
+        else
+            install -Dm0644 /usr/share/kitpro-server/kitpro-server.conf /etc/conf.d/kitpro-server
+        fi
+    fi
+    systemd-sysusers /usr/lib/sysusers.d/kitpro-server.conf
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
+    install -m 0640 -o root -g root /usr/share/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new
+    mv -fT /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
+    [[ -e /var/lib/kitpro-helper/ingress/current ]] || ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
+    apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-helper
+    apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-acme
+    apparmor_parser -Q -T /etc/apparmor.d/usr.libexec.kitpro-ingress-validator
+    apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-helper
+    apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-acme
+    apparmor_parser -r -W -T /etc/apparmor.d/usr.libexec.kitpro-ingress-validator
+    if ! aa-status --enabled; then
+        printf 'kitpro-server: AppArmor is not enabled\n' >&2
+        return 1
+    fi
+    /usr/libexec/kitpro-helper --verify-host-prerequisites
+    if [[ -r /etc/conf.d/kitpro-server ]]; then
+        # shellcheck disable=SC1091
+        source /etc/conf.d/kitpro-server
+    fi
+    export KITPRO_CONTROL_DB="${KITPRO_CONTROL_DB:-/var/lib/kitpro-api/control.db}"
+    export KITPRO_HELPER_DB="${KITPRO_HELPER_DB:-/var/lib/kitpro-helper/helper.db}"
+    export KITPRO_CONTROL_BACKUP_DIR="${KITPRO_CONTROL_BACKUP_DIR:-/var/lib/kitpro-api/backups}"
+    export KITPRO_HELPER_BACKUP_DIR="${KITPRO_HELPER_BACKUP_DIR:-/var/lib/kitpro-helper/backups}"
+    local backup_dir
+    for backup_dir in "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"; do
+        [[ ! -d "$backup_dir" ]] || find "$backup_dir" -type f -exec chmod 0600 {} +
+    done
+    runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
+    /usr/libexec/kitpro-helper --migrate-only
+    chown kitpro-api:kitpro-api "$KITPRO_CONTROL_DB"
+    chmod 0600 "$KITPRO_CONTROL_DB"
+    chown root:root "$KITPRO_HELPER_DB"
+    chmod 0600 "$KITPRO_HELPER_DB"
+    systemctl daemon-reload
+    systemctl enable --now kitpro-ingress-validator.service kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress.service kitpro-ingress-reload.path
+}
+
+pre_install() {
+    check_prerequisites
+}
+
+post_install() {
+    configure_package
+}
+
+pre_upgrade() {
+    local new_version=$1 old_version=$2
+    check_prerequisites
+    if (( $(vercmp "$old_version" "$new_version") > 0 )); then
+        printf 'kitpro-server: downgrade from %s to %s is unsupported\n' "$old_version" "$new_version" >&2
+        return 1
+    fi
+    require_upgrade_approval "$old_version" "$new_version"
+    systemctl stop kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service 2>/dev/null || true
+}
+
+post_upgrade() {
+    local new_version=$1 old_version=$2
+    require_upgrade_approval "$old_version" "$new_version"
+    if ! configure_package; then
+        restore_previous_services || printf 'kitpro-server: address-pool preflight failed and prior service state could not be fully restored\n' >&2
+        return 1
+    fi
+    rm -f /run/kitpro/upgrade-approved
+}
+
+pre_remove() {
+    systemctl disable --now kitpro-api.service kitpro-helper.service kitpro-helper.socket kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress-reload.service kitpro-ingress.service 2>/dev/null || true
+    apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-helper 2>/dev/null || true
+    apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-acme 2>/dev/null || true
+    apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-ingress-validator 2>/dev/null || true
+}
+
+post_remove() {
+    systemctl daemon-reload
+    systemd-tmpfiles --remove /usr/lib/tmpfiles.d/kitpro.conf 2>/dev/null || true
+    rmdir /run/kitpro 2>/dev/null || true
+    # Persistent application data, control/helper databases, backups, logs,
+    # and the service identity are deliberately retained. Arch has no separate
+    # purge transaction; data deletion remains a future explicit operation.
+}

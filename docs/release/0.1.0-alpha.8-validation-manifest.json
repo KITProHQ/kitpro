@@ -1,0 +1,16 @@
+{
+  "kitpro_version": "0.1.0-alpha.8",
+  "status": "validation-only-blocked-on-live-gpu-hardware",
+  "source_checkpoint": "d9d3656eb4a601f716db463af7d14680945a0704",
+  "source_tree_dirty": true,
+  "supported_platforms": ["debian-13-amd64", "ubuntu-26.04-amd64", "arch-x86_64-linux-lts"],
+  "schema_version": 6,
+  "catalog_schema_version": 3,
+  "artifacts": [
+    {"path": "/tmp/kitpro-final-a/kitpro-server_0.1.0~alpha8_amd64.deb", "architecture": "amd64", "sha256": "525811f50237c3de63846496411fa80313beec76a0aef640ff3a34524636ec67"},
+    {"path": "/tmp/kitpro-final-a/kitpro-server-0.1.0_alpha8-1-x86_64.pkg.tar.zst", "architecture": "x86_64", "sha256": "2283bd30957b5c9b0cedbf35211a29491c82b304b28044c9b0551ac1ba17ac6c"}
+  ],
+  "sbom": {"path": "/tmp/kitpro-final-a/kitpro-server_0.1.0~alpha8_amd64.cdx.json", "sha256": "efd4757931317562c8275d5604f5584b3dfd64cd5bfcaa00b4b5c1e9f55eb8bf"},
+  "reproducible": true,
+  "publishable": false
+}

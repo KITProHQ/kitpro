@@ -1,0 +1,26 @@
+# KITPro Server constrained ACME worker profile.
+#include <tunables/global>
+/usr/libexec/kitpro-acme flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /usr/libexec/kitpro-acme rix,
+  capability chown,
+  /etc/ssl/certs/** r,
+  /run/kitpro/ rw,
+  /run/kitpro/acme-client.sock rw,
+  /run/kitpro-ingress/ rw,
+  /run/kitpro-ingress/acme.sock rw,
+  /var/lib/kitpro-helper/acme/ rw,
+  /var/lib/kitpro-helper/acme/** rwk,
+  /proc/*/cgroup r,
+  /proc/*/mountinfo r,
+  /proc/sys/net/core/somaxconn r,
+  /sys/fs/cgroup/system.slice/kitpro-acme.service/cpu.max r,
+  network unix stream,
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  deny /home/** r,
+  deny /root/** r,
+}

@@ -1,0 +1,6 @@
+u kitpro-api - "KITPro Server API" /var/lib/kitpro-api /usr/sbin/nologin
+g kitpro-api -
+m kitpro-api kitpro-api
+u kitpro-ingress - "KITPro managed ingress" /nonexistent /usr/sbin/nologin
+g kitpro-ingress -
+m kitpro-ingress kitpro-ingress

@@ -1,0 +1,23 @@
+{
+  "schema_version": 9,
+  "id": "vaultwarden",
+  "name": "Vaultwarden",
+  "description": "A lightweight self-hosted Bitwarden-compatible password server.",
+  "category": "Security",
+  "kind": "application",
+  "catalog_status": "standard",
+  "source_url": "https://github.com/dani-garcia/vaultwarden",
+  "documentation_url": "https://github.com/dani-garcia/vaultwarden/wiki",
+  "limitations": ["Public TLS is outside KITPro's current publishing model."],
+  "releases": [{
+    "version": "1.37.2",
+    "registry": "docker.io",
+    "repository": "vaultwarden/server",
+    "digest": "sha256:5d326778c22f063d093d6b0c9c766a28249561632266776f2c93132ab0ad3a80",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/data", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 80, "ingress": {"exposure_modes": ["lan", "managed-https"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}],
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
+}

@@ -1,0 +1,49 @@
+[Unit]
+Description=Disposable KITPro privilege-boundary test helper
+Documentation=file:/opt/kitpro-privilege-boundary-test/README.md
+# Do not require or activate Docker on behalf of a caller. The helper must stay
+# available and return a bounded DockerUnavailable error while the runtime is
+# intentionally stopped.
+After=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+SupplementaryGroups=
+WorkingDirectory=/opt/kitpro-privilege-boundary-test
+Environment=PATH=/usr/bin:/bin
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY PYTHONPATH PYTHONHOME
+ExecStart=/usr/bin/python3 -m fixture.helper --socket-activation --allowed-user kitpro-pb-api-test --state-file /var/lib/kitpro-pb-test/state.json --run-id-file /var/lib/kitpro-pb-test/run-id --image-file /var/lib/kitpro-pb-test/image --storage-root /var/lib/kitpro-pb-test/storage
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kitpro-pb-test
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+PrivateDevices=yes
+RestrictNamespaces=yes
+# Rocky Linux 10's systemd 257 seccomp handling for RestrictSUIDSGID makes the
+# fixture's required openat2 call return ENOSYS. Keep descriptor-relative path
+# enforcement operational and revisit this defense-in-depth control before a
+# production unit is designed.
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=0077
+LimitNOFILE=1024
+TasksMax=32
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

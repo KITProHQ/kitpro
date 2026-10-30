@@ -1,0 +1,76 @@
+# KITPro Server production helper profile.
+#include <tunables/global>
+/usr/libexec/kitpro-helper flags=(attach_disconnected) {
+  #include <abstractions/base>
+  /usr/libexec/kitpro-helper rix,
+  capability chown,
+  capability dac_read_search,
+  /etc/passwd r,
+  /etc/kitpro/storage-management.json r,
+  /etc/kitpro/network-management.json r,
+  /dev/disk/by-uuid/ r,
+  /dev/disk/by-uuid/* r,
+  /run/kitpro/helper-state.lock rwk,
+  /run/kitpro/** rw,
+  /run/udev/data/b* r,
+  /var/lib/kitpro-helper/ rw,
+  /var/lib/kitpro-helper/** rwk,
+  /etc/systemd/system/ r,
+  /etc/systemd/system/*.mount rw,
+  /etc/systemd/system/.kitpro-*.mount-* rw,
+  /etc/systemd/system/multi-user.target.wants/ rw,
+  /etc/systemd/system/multi-user.target.wants/*.mount rwl,
+  /etc/systemd/system/multi-user.target.wants/.kitpro-*.mount-* rwl,
+  /etc/systemd/network/ r,
+  /etc/systemd/network/90-kitpro-*.network rw,
+  /etc/systemd/network/.kitpro-90-kitpro-*.network-* rw,
+  /run/systemd/system/ r,
+  /run/systemd/system/kitpro-network-rollback-*.service rw,
+  /run/systemd/system/kitpro-network-rollback-*.timer rw,
+  /run/systemd/system/.kitpro-kitpro-network-rollback-* rw,
+  /run/kitpro-ingress/acme.sock rw,
+  # backup.Vacuum atomically publishes verified upgrade and host-state database
+  # snapshots by hard-linking private temporary files to fixed final names in
+  # root-owned backup directories. No other helper path gains link authority.
+  link subset /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.kitpro-upgrade-*.partial/.pre-upgrade-helper-to-*.db.partial-*,
+  link subset /var/lib/kitpro-helper/backups/pre-upgrade-helper-to-*.db -> /var/lib/kitpro-helper/backups/.pre-upgrade-helper-to-*.db.partial-*,
+  link subset /var/lib/kitpro-helper/backups/.host-backup-*/helper.db -> /var/lib/kitpro-helper/backups/.host-backup-*/.helper.db.partial-*,
+  /srv/kitpro/** rwk,
+  # Directory metadata only. The helper validates registered roots but never
+  # reads imported content; Docker performs the constrained bind mount.
+  /mnt/ r,
+  /mnt/**/ r,
+  /media/ r,
+  /media/**/ r,
+  /data/ r,
+  /data/**/ r,
+  /srv/ r,
+  /srv/**/ r,
+  /var/run/docker.sock rw,
+  /run/docker.sock rw,
+  /run/dbus/system_bus_socket rw,
+  # Go's read-only interface index/address inspection uses NETLINK_ROUTE.
+  # The helper has no CAP_NET_ADMIN; mutations remain typed networkd D-Bus calls.
+  network netlink raw,
+  # A D-Bus client must register with the bus and manage the match used for
+  # bounded systemd job-completion signals. No bus-name ownership is needed.
+  dbus send bus=system path=/org/freedesktop/DBus interface=org.freedesktop.DBus member=Hello peer=(name=org.freedesktop.DBus),
+  dbus send bus=system path=/org/freedesktop/DBus interface=org.freedesktop.DBus member=AddMatch peer=(name=org.freedesktop.DBus),
+  dbus send bus=system path=/org/freedesktop/DBus interface=org.freedesktop.DBus member=RemoveMatch peer=(name=org.freedesktop.DBus),
+  dbus receive bus=system peer=(name=org.freedesktop.DBus),
+  # Signals carry systemd's unique bus name, so constrain the receive side by
+  # the exact systemd manager object, interface, and completion member.
+  dbus receive bus=system path=/org/freedesktop/systemd1 interface=org.freedesktop.systemd1.Manager member=JobRemoved,
+  # Typed service-management requests otherwise use only the systemd peer.
+  # The helper protocol and shared policy independently constrain unit/action.
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.systemd1),
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.network1),
+  /proc/** r,
+  /sys/** r,
+  deny /bin/** x,
+  deny /usr/bin/** x,
+  deny /home/** r,
+  deny /root/** r,
+  deny network inet,
+  deny network inet6,
+}

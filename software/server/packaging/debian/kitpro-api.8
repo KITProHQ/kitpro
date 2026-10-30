@@ -1,0 +1,34 @@
+.TH KITPRO-API 8 "September 2026" "KITPro Server" "System Administration"
+.SH NAME
+kitpro-api \- authenticated local KITPro Server control plane
+.SH SYNOPSIS
+.B kitpro-api
+.br
+.B kitpro-api --version
+.br
+.B kitpro-server admin permissions USERNAME PERMISSION[,PERMISSION...] --confirm USERNAME
+.br
+.B kitpro-server admin service-scope USERNAME UNIT ACTION[,ACTION...] --confirm USERNAME
+.SH DESCRIPTION
+.B kitpro-api
+serves the loopback-only KITPro dashboard and communicates with the privileged
+helper over its Unix socket. It is normally started by systemd as the
+unprivileged kitpro-api account.
+.PP
+The root-only
+.B admin permissions
+command replaces a local administrator's Host Administration permissions and
+revokes its active sessions. The root-only
+.B admin service-scope
+command replaces the exact systemd unit/action scopes for a restricted service
+operator and also revokes active sessions. Permission changes are audited. The
+final security administrator cannot be demoted.
+.SH FILES
+.TP
+.I /etc/default/kitpro-server
+Package configuration.
+.TP
+.I /var/lib/kitpro-api/control.db
+Control-plane SQLite database.
+.SH SEE ALSO
+.BR kitpro-helper (8)

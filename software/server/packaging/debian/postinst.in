@@ -1,0 +1,270 @@
+#!/bin/sh
+set -eu
+
+package_version='@VERSION@'
+package_source_commit='@SOURCE_COMMIT@'
+test_mode=false
+root_prefix=
+trusted_uid=0
+if [ "${KITPRO_POSTINST_TESTING:-}" = 1 ]; then
+    [ "$(id -u)" -ne 0 ] || { echo 'postinst test overrides are not accepted when running as root' >&2; exit 1; }
+    test_mode=true
+    root_prefix=${KITPRO_TEST_ROOT:?KITPRO_TEST_ROOT is required in test mode}
+    trusted_uid=$(id -u)
+fi
+approval="$root_prefix/run/kitpro/debian-upgrade-approved"
+old_version=${2:-}
+control_backup=
+helper_backup=
+
+approval_value() {
+    key=$1
+    [ "$(grep -c "^$key=" "$approval")" -eq 1 ] || return 1
+    value=$(sed -n "s/^$key=//p" "$approval")
+    printf '%s\n' "$value"
+}
+
+restore_previous_services() {
+    preserve_approval=${1:-false}
+    [ -f "$approval" ] || return 0
+    api_was_active=$(approval_value api_was_active || true)
+    helper_was_active=$(approval_value helper_was_active || true)
+    socket_was_active=$(approval_value socket_was_active || true)
+    restoration_failed=false
+    if [ "$socket_was_active" = true ] && ! systemctl start kitpro-helper.socket; then
+        echo 'kitpro-server: failed to restore previously active helper socket' >&2
+        restoration_failed=true
+    fi
+    if [ "$helper_was_active" = true ] && ! systemctl start kitpro-helper.service; then
+        echo 'kitpro-server: failed to restore previously active helper service' >&2
+        restoration_failed=true
+    fi
+    if [ "$api_was_active" = true ] && ! systemctl start kitpro-api.service; then
+        echo 'kitpro-server: failed to restore previously active API service' >&2
+        restoration_failed=true
+    fi
+    if [ "$restoration_failed" = false ]; then
+        [ "$preserve_approval" = true ] || rm -f -- "$approval"
+        return 0
+    fi
+    return 1
+}
+
+load_package_paths() {
+    config_path="$root_prefix/etc/default/kitpro-server"
+    if [ -r "$config_path" ]; then
+        # shellcheck disable=SC1090
+        . "$config_path"
+    fi
+    KITPRO_CONTROL_DB=${KITPRO_CONTROL_DB:-$root_prefix/var/lib/kitpro-api/control.db}
+    KITPRO_HELPER_DB=${KITPRO_HELPER_DB:-$root_prefix/var/lib/kitpro-helper/helper.db}
+    KITPRO_CONTROL_BACKUP_DIR=${KITPRO_CONTROL_BACKUP_DIR:-$root_prefix/var/lib/kitpro-api/backups}
+    KITPRO_HELPER_BACKUP_DIR=${KITPRO_HELPER_BACKUP_DIR:-$root_prefix/var/lib/kitpro-helper/backups}
+    export KITPRO_CONTROL_DB KITPRO_HELPER_DB KITPRO_CONTROL_BACKUP_DIR KITPRO_HELPER_BACKUP_DIR
+}
+
+database_set_hash() {
+    base=$1
+    found=false
+    {
+        for suffix in '' -wal -shm; do
+            if [ -f "$base$suffix" ] && [ ! -L "$base$suffix" ]; then
+                found=true
+                printf '%s  %s\n' "$(sha256sum "$base$suffix" | awk '{print $1}')" "${suffix:-database}"
+            fi
+        done
+        [ "$found" = true ]
+    } | sha256sum | awk '{print $1}'
+}
+
+verify_upgrade_approval_metadata() {
+    [ -n "$old_version" ] || {
+        [ ! -e "$approval" ] || {
+            echo 'kitpro-server: stale upgrade approval exists during fresh installation' >&2
+            return 1
+        }
+        return 0
+    }
+    [ -f "$approval" ] && [ ! -L "$approval" ] || {
+        echo 'kitpro-server: incoming preflight approval is missing' >&2
+        return 1
+    }
+    [ "$(stat -c '%u:%a' "$approval")" = "$trusted_uid:600" ] || {
+        echo 'kitpro-server: incoming preflight approval has unsafe ownership or permissions' >&2
+        return 1
+    }
+
+    approved_format=$(approval_value format)
+    approved_old=$(approval_value old_version)
+    approved_target=$(approval_value target_version)
+    backup_set_id=$(approval_value backup_set_id)
+    approved_at=$(approval_value created_at)
+    case $backup_set_id in *[!0-9TZ-]*|'') return 1 ;; esac
+    case $approved_at in *[!0-9]*|'') return 1 ;; esac
+    approval_age=$(($(date +%s) - approved_at))
+    [ "$approved_old" = "$old_version" ] && [ "$approved_target" = "$package_version" ] \
+        && [ "$approval_age" -ge 0 ] && [ "$approval_age" -le 900 ] || {
+        echo 'kitpro-server: incoming preflight approval does not match this package transition' >&2
+        return 1
+    }
+
+    case $approved_format in
+        1)
+            approved_sha256=$(approval_value package_sha256)
+            case $approved_sha256 in *[!0-9a-f]*|'') return 1 ;; esac
+            [ "${#approved_sha256}" -eq 64 ] || return 1
+            control_backup="$KITPRO_CONTROL_BACKUP_DIR/pre-upgrade-control-set-$backup_set_id-to-$package_version.db"
+            helper_backup="$KITPRO_HELPER_BACKUP_DIR/pre-upgrade-helper-set-$backup_set_id-to-$package_version.db"
+            control_owner=$(id -u kitpro-api)
+            helper_owner=$trusted_uid
+            ;;
+        2)
+            approved_source=$(approval_value source_commit)
+            control_sha256=$(approval_value control_set_sha256)
+            helper_sha256=$(approval_value helper_set_sha256)
+            case $approved_source in *[!0-9a-f]*|'') return 1 ;; esac
+            case $control_sha256 in *[!0-9a-f]*|'') return 1 ;; esac
+            case $helper_sha256 in *[!0-9a-f]*|'') return 1 ;; esac
+            [ "$approved_source" = "$package_source_commit" ] && [ "${#control_sha256}" -eq 64 ] && [ "${#helper_sha256}" -eq 64 ] || return 1
+            transition_dir="$KITPRO_HELPER_BACKUP_DIR/package-transitions/set-$backup_set_id-to-$package_version"
+            [ -d "$transition_dir" ] && [ ! -L "$transition_dir" ] && [ "$(stat -c '%u:%a' "$transition_dir")" = "$trusted_uid:700" ] || return 1
+            control_backup="$transition_dir/control.db"
+            helper_backup="$transition_dir/helper.db"
+            control_owner=$trusted_uid
+            helper_owner=$trusted_uid
+            [ "$(database_set_hash "$control_backup")" = "$control_sha256" ] || return 1
+            [ "$(database_set_hash "$helper_backup")" = "$helper_sha256" ] || return 1
+            ;;
+        *)
+            echo 'kitpro-server: unsupported incoming preflight approval format' >&2
+            return 1
+            ;;
+    esac
+    [ -f "$control_backup" ] && [ ! -L "$control_backup" ] && [ "$(stat -c '%u:%a' "$control_backup")" = "$control_owner:600" ] || return 1
+    [ -f "$helper_backup" ] && [ ! -L "$helper_backup" ] && [ "$(stat -c '%u:%a' "$helper_backup")" = "$helper_owner:600" ] || return 1
+    for sidecar in "$control_backup-wal" "$control_backup-shm"; do
+        [ ! -e "$sidecar" ] || { [ -f "$sidecar" ] && [ ! -L "$sidecar" ] && [ "$(stat -c '%u:%a' "$sidecar")" = "$control_owner:600" ]; } || return 1
+    done
+    for sidecar in "$helper_backup-wal" "$helper_backup-shm"; do
+        [ ! -e "$sidecar" ] || { [ -f "$sidecar" ] && [ ! -L "$sidecar" ] && [ "$(stat -c '%u:%a' "$sidecar")" = "$helper_owner:600" ]; } || return 1
+    done
+}
+
+if [ "$test_mode" = true ]; then
+    load_package_paths
+    verify_upgrade_approval_metadata
+    if [ -n "$old_version" ]; then
+        env KITPRO_CONTROL_DB="$control_backup" "$root_prefix/usr/bin/kitpro-api" --verify-database
+        env KITPRO_HELPER_DB="$helper_backup" "$root_prefix/usr/libexec/kitpro-helper" --verify-database
+    fi
+    exit 0
+fi
+
+case ${1:-} in
+    abort-upgrade|abort-install|abort-remove|abort-deconfigure)
+        # The old package is being restored. Never migrate with code that was
+        # not successfully installed, especially after a failed preflight.
+        restore_previous_services
+        exit $?
+        ;;
+    configure)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+# Cloudflare Tunnel was present only in unpublished alpha.14 candidates. A
+# same-version qualification upgrade can therefore retain dpkg/systemd/AppArmor
+# state even though the scope-corrected package no longer ships the runtime.
+# Retire that executable state without deleting inert provider data that an
+# older qualification database or archive may still reference.
+deb-systemd-invoke stop kitpro-cloudflare.service >/dev/null 2>&1 || true
+deb-systemd-helper disable kitpro-cloudflare.service >/dev/null 2>&1 || true
+deb-systemd-helper purge kitpro-cloudflare.service >/dev/null 2>&1 || true
+apparmor_parser -R /etc/apparmor.d/usr.libexec.kitpro-cloudflare >/dev/null 2>&1 || true
+rm -f -- /etc/apparmor.d/usr.libexec.kitpro-cloudflare
+if getent passwd kitpro-cloudflared >/dev/null; then
+    deluser --system kitpro-cloudflared >/dev/null
+fi
+if getent group kitpro-cloudflared >/dev/null; then
+    delgroup --system kitpro-cloudflared >/dev/null
+fi
+systemctl daemon-reload
+
+if ! getent group kitpro-api >/dev/null; then
+    addgroup --system kitpro-api >/dev/null
+fi
+if ! getent passwd kitpro-api >/dev/null; then
+    adduser --system --ingroup kitpro-api --home /var/lib/kitpro-api \
+        --no-create-home --shell /usr/sbin/nologin kitpro-api >/dev/null
+fi
+if ! getent group kitpro-ingress >/dev/null; then
+    addgroup --system kitpro-ingress >/dev/null
+fi
+if ! getent passwd kitpro-ingress >/dev/null; then
+    adduser --system --ingroup kitpro-ingress --home /nonexistent \
+        --no-create-home --shell /usr/sbin/nologin kitpro-ingress >/dev/null
+fi
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/kitpro.conf
+install -m 0640 -o root -g root /usr/share/kitpro-server/ingress-bootstrap.conf /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new
+mv -fT /var/lib/kitpro-helper/ingress/bootstrap/.nginx.conf.new /var/lib/kitpro-helper/ingress/bootstrap/nginx.conf
+if [ ! -e /var/lib/kitpro-helper/ingress/current ]; then
+    ln -s /var/lib/kitpro-helper/ingress/bootstrap /var/lib/kitpro-helper/ingress/current
+fi
+load_package_paths
+verify_upgrade_approval_metadata
+
+for profile_name in usr.libexec.kitpro-helper usr.libexec.kitpro-acme usr.libexec.kitpro-ingress-validator; do
+    profile=/etc/apparmor.d/$profile_name
+    profile_source=/usr/share/kitpro-server/apparmor/$profile_name
+    if [ ! -f "$profile" ]; then
+        # dpkg remembers a conffile deleted during package removal. Restore the
+        # package policy from its immutable copy before the fail-closed load.
+        install -m 0644 -o root -g root "$profile_source" "$profile"
+    fi
+    apparmor_parser -Q -T "$profile"
+    apparmor_parser -r -W -T "$profile"
+done
+if ! aa-status --enabled; then
+    echo "kitpro-server: AppArmor is not enabled" >&2
+    exit 1
+fi
+
+if ! /usr/libexec/kitpro-helper --verify-host-prerequisites; then
+    if ! restore_previous_services true; then
+        echo 'kitpro-server: address-pool preflight failed and prior service state could not be fully restored' >&2
+    fi
+    exit 1
+fi
+
+systemctl disable --now nginx.service
+
+if [ -n "$old_version" ]; then
+    env KITPRO_CONTROL_DB="$control_backup" /usr/bin/kitpro-api --verify-database
+    env KITPRO_HELPER_DB="$helper_backup" /usr/libexec/kitpro-helper --verify-database
+fi
+
+for backup_dir in "$KITPRO_CONTROL_BACKUP_DIR" "$KITPRO_HELPER_BACKUP_DIR"; do
+    [ ! -d "$backup_dir" ] || find "$backup_dir" -type f -exec chmod 0600 {} +
+done
+
+runuser -u kitpro-api -- /usr/bin/kitpro-api --migrate-only
+/usr/libexec/kitpro-helper --migrate-only
+chown kitpro-api:kitpro-api "$KITPRO_CONTROL_DB"
+chmod 0600 "$KITPRO_CONTROL_DB"
+chown root:root "$KITPRO_HELPER_DB"
+chmod 0600 "$KITPRO_HELPER_DB"
+
+deb-systemd-helper unmask kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service >/dev/null || true
+deb-systemd-helper enable kitpro-helper.socket kitpro-api.service kitpro-acme.service kitpro-ingress-validator.service kitpro-ingress-reload.path kitpro-ingress.service >/dev/null
+systemctl daemon-reload
+deb-systemd-invoke restart kitpro-ingress-validator.service
+deb-systemd-invoke restart kitpro-helper.socket
+deb-systemd-invoke restart kitpro-api.service
+deb-systemd-invoke restart kitpro-acme.service
+deb-systemd-invoke restart kitpro-ingress.service
+deb-systemd-invoke restart kitpro-ingress-reload.path
+rm -f -- "$approval"
+
+exit 0

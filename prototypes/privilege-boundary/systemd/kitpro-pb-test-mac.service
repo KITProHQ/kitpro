@@ -1,0 +1,46 @@
+[Unit]
+Description=Disposable KITPro MAC-confined privilege-boundary helper
+Documentation=file:/opt/kitpro-privilege-boundary-test/README.md
+After=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+SupplementaryGroups=
+WorkingDirectory=/opt/kitpro-privilege-boundary-test
+Environment=PATH=/usr/bin:/bin
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY PYTHONPATH PYTHONHOME
+ExecStart=/opt/kitpro-privilege-boundary-test/bin/kitpro-pb-helper -m fixture.helper --socket-activation --allowed-user kitpro-pb-api-test --state-file /var/lib/kitpro-pb-test/state.json --run-id-file /var/lib/kitpro-pb-test/run-id --image-file /var/lib/kitpro-pb-test/image --storage-root /var/lib/kitpro-pb-test/storage
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kitpro-pb-test
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+PrivateDevices=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+LimitNOFILE=1024
+TasksMax=32
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=2s
+
+# RestrictSUIDSGID is intentionally absent. The MAC runbook retests the
+# systemd 257 openat2 interaction before the production-unit decision.
+
+[Install]
+WantedBy=multi-user.target

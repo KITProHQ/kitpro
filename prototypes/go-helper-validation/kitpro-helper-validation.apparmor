@@ -1,0 +1,30 @@
+# Disposable Debian AppArmor profile for the compiled Go helper probe.
+# Not a production profile.
+#include <tunables/global>
+profile kitpro-helper-validation /usr/libexec/kitpro-helper-validation flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  /usr/libexec/kitpro-helper-validation mr,
+  /run/kitpro/ rw,
+  /run/kitpro/** rw,
+  /var/lib/kitpro-helper/ rw,
+  /var/lib/kitpro-helper/** rwk,
+  /var/log/kitpro/ rw,
+  /var/log/kitpro/** rw,
+  /srv/kitpro/validation/ rw,
+  /srv/kitpro/validation/** rwk,
+  /var/run/docker.sock rw,
+  /proc/ r,
+  /proc/** r,
+  /sys/ r,
+  /sys/** r,
+  network unix stream,
+  deny network inet,
+  deny network inet6,
+  deny /home/** rwklmx,
+  deny /root/** rwklmx,
+  deny /etc/** wklmx,
+  deny /srv/** rwklmx,
+  audit deny /bin/** x,
+  audit deny /usr/bin/** x,
+  audit deny /usr/sbin/** x,
+}

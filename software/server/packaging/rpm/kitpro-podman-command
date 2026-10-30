@@ -1,0 +1,62 @@
+#!/usr/bin/bash
+set -Eeuo pipefail
+
+# Podman's local client initializes rootful overlay storage even for inventory
+# commands. Keep that CAP_SYS_ADMIN requirement out of the long-lived helper by
+# allowing only KITPro's four read-only command shapes in a transient service.
+valid_name='^kitpro-[a-z0-9-]{3,220}$'
+valid_container_ref='^(kitpro-[a-z0-9-]{3,220}|[a-f0-9]{64})$'
+case "${1-}" in
+    version|info)
+        [[ $# -eq 3 && "$2" == --format && "$3" == json ]] || exit 64
+        ;;
+    inspect)
+        [[ $# -eq 4 && "$2" == --format && "$3" == json && "$4" =~ $valid_container_ref ]] || exit 64
+        ;;
+    ps)
+        if [[ $# -eq 4 && "$2" == --all && "$3" == --format && "$4" == json ]]; then
+            :
+        elif [[ $# -eq 6 && "$2" == --all && "$3" == --filter && "$4" == network=* && "$5" == --format && "$6" == json && "${4#network=}" =~ $valid_name ]]; then
+            :
+        else
+            exit 64
+        fi
+        ;;
+    *) exit 64 ;;
+esac
+
+runtime_output=$(mktemp /run/kitpro/podman-output.XXXXXXXX)
+runtime_error=$(mktemp /run/kitpro/podman-error.XXXXXXXX)
+cleanup() {
+    rm -f -- "$runtime_output" "$runtime_error"
+}
+trap cleanup EXIT
+
+if ! /usr/bin/systemd-run \
+    --quiet --wait --collect --service-type=exec \
+    --setenv=HOME=/var/lib/kitpro-helper \
+    --property="StandardOutput=truncate:$runtime_output" \
+    --property="StandardError=truncate:$runtime_error" \
+    --property=NoNewPrivileges=no \
+    --property=CapabilityBoundingSet=CAP_SYS_ADMIN \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=ProtectSystem=strict \
+    --property=ProtectHome=yes \
+    --property=ProtectKernelTunables=yes \
+    --property=ProtectKernelModules=yes \
+    --property=ProtectKernelLogs=yes \
+    --property=ProtectControlGroups=yes \
+    --property='RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
+    --property=LockPersonality=yes \
+    --property=MemoryDenyWriteExecute=yes \
+    --property='SystemCallFilter=@system-service' \
+    --property='SystemCallFilter=open_tree fsopen fsconfig fsmount move_mount mount_setattr mount umount2' \
+    --property='ReadWritePaths=-/run/containers -/run/libpod -/var/lib/containers /var/lib/kitpro-helper' \
+    --property=UMask=0077 \
+    /usr/bin/podman "$@"; then
+    cat -- "$runtime_error" >&2
+    cat -- "$runtime_output" >&2
+    exit 1
+fi
+cat -- "$runtime_output"

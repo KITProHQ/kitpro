@@ -1,0 +1,21 @@
+# KITPro Server package configuration.
+# The dashboard is loopback-only by default. Use an SSH tunnel for first setup.
+KITPRO_API_ADDR=127.0.0.1:8080
+KITPRO_ALLOWED_HOSTS=127.0.0.1:8080,localhost:8080
+KITPRO_SECURE_COOKIES=0
+
+# Set to one non-loopback address assigned to this host before enabling LAN
+# exposure for catalog application services. Wildcard addresses are rejected.
+KITPRO_LAN_BIND_ADDRESS=
+
+# Optional exact hosts, IPs, or CIDRs approved for Network diagnostics.
+# Configured host gateways and resolvers are approved automatically.
+KITPRO_HOST_DIAGNOSTIC_TARGETS=
+# Empty uses the bounded default TCP ports 53,80,443.
+KITPRO_HOST_DIAGNOSTIC_PORTS=
+
+# Privileged host service operations are disabled by default. When enabled,
+# only exact reviewed units are considered. Use unit.service=start|reload to
+# restrict actions, and separate entries with semicolons. Protection still wins.
+KITPRO_HOST_SERVICE_MANAGEMENT_ENABLED=0
+KITPRO_HOST_SERVICE_MANAGEMENT_UNITS=

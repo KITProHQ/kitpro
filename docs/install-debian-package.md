@@ -1,0 +1,120 @@
+# Install KITPro Server on Debian 13 or Ubuntu 26.04 LTS
+
+KITPro Server alpha.13 supports Debian 13 and Ubuntu Server 26.04 LTS on amd64
+with the same qualified `.deb`. Rocky Linux 10 remains Experimental. Use the
+filename and checksum from the published
+[alpha.13 prerelease](https://github.com/KITProHQ/kitpro/releases/tag/v0.1.0-alpha.13).
+
+> KITPro Server is active alpha software. Breaking changes and incomplete
+> workflows may occur. Review the [alpha.13 current state](product/kitpro-server-current-state.md)
+> and [known limitations](release/known-limitations.md) before using it with
+> important data.
+
+## Prerequisites
+
+- Debian 13 or Ubuntu 26.04 LTS on amd64, with systemd and AppArmor enabled
+- a compatible rootful Docker Engine that is running and exposes its local Unix
+  socket
+- an explicit, operator-selected Docker default address pool that passes the
+  [KITPro address-pool prerequisite](docker-address-pool-prerequisite.md)
+- root or sudo access for package installation
+
+The package deliberately does not depend on a distribution-specific Docker
+package. Debian's `docker.io` and Docker Inc.'s `docker-ce` can both provide a
+compatible engine. KITPro verifies that Docker is active and that its network
+allocator has sufficient non-overlapping capacity before package activation.
+It never installs Docker, rewrites `/etc/docker/daemon.json`, or adds
+`kitpro-api` to the `docker` group.
+
+## Install
+
+These commands are for a fresh alpha.13 installation. If this host runs
+alpha.12, use the [alpha.12 to alpha.13 transition](upgrade-uninstall-debian-package.md#upgrade-from-alpha12-to-alpha13).
+
+Verify the adjacent checksum, then install the local artifact:
+
+```sh
+sha256sum -c kitpro-server-0.1.0-alpha.13-SHA256SUMS --ignore-missing
+sudo apt install ./kitpro-server_0.1.0.alpha13_amd64.deb
+```
+
+Installation creates the `kitpro-api` system account, loads the helper's
+AppArmor profile, creates state directories through tmpfiles, initializes both
+SQLite databases through the production migration code, and enables the helper
+socket and API service. The root helper resolves the packaged API account to a
+numeric UID at startup and verifies it with `SO_PEERCRED`; the account is not a
+member of the Docker group.
+
+The API listens only on `127.0.0.1:8080` by default. From an administrator
+workstation, create an SSH tunnel:
+
+```sh
+ssh -L 8080:127.0.0.1:8080 server.example
+```
+
+Then open `http://127.0.0.1:8080/setup` and create the first administrator.
+The package does not enable public or LAN access to the KITPro control plane.
+
+Configuration is in `/etc/default/kitpro-server`. Set
+`KITPRO_LAN_BIND_ADDRESS` only to a non-wildcard LAN address assigned to the
+server when catalog application LAN exposure is required. After changing this
+value while no application mutation is active, restart both services so the
+API and privileged helper enforce the same address:
+
+```sh
+sudo systemctl restart kitpro-helper.service
+sudo systemctl restart kitpro-api.service
+```
+
+## Filesystem layout
+
+| Path | Owner | Purpose | Package removal |
+| --- | --- | --- | --- |
+| `/usr/bin/kitpro-api` | root | Unprivileged control-plane binary | Removed |
+| `/usr/libexec/kitpro-helper` | root | Root helper binary | Removed |
+| `/etc/default/kitpro-server` | root | Administrator configuration | Kept on remove; removed on purge |
+| `/etc/apparmor.d/usr.libexec.kitpro-helper` | root | Helper policy | Removed and unloaded |
+| `/usr/share/kitpro-server/apparmor/` | root | Immutable reinstall copy of helper policy | Removed |
+| `/usr/lib/systemd/system/kitpro-*` | root | Services and socket | Removed |
+| `/usr/lib/tmpfiles.d/kitpro.conf` | root | Runtime/state directory policy | Removed |
+| `/var/lib/kitpro-api` | kitpro-api | Control DB and backups | Always preserved |
+| `/var/lib/kitpro-helper` | root | Trusted helper DB and backups | Always preserved |
+| `/run/kitpro` | root:kitpro-api | Runtime socket directory | Recreated at boot/install |
+| `/srv/kitpro/apps` | root | Persistent application data | Always preserved |
+
+## Troubleshooting
+
+If installation reports that Docker is unavailable, verify both the service
+and Unix socket before retrying:
+
+```sh
+systemctl status docker.service
+test -S /run/docker.sock
+sudo /usr/libexec/kitpro-helper --verify-host-prerequisites
+```
+
+An address-pool failure is actionable host configuration, not permission to
+remove KITPro generation networks or merge application networks. Select a pool
+for this environment, preserve unrelated Docker settings, validate the JSON,
+and restart Docker. The new pool applies only to networks created afterward.
+
+If package configuration fails, inspect `journalctl -u kitpro-api -u
+kitpro-helper` and AppArmor denials. Do not place the API user in the Docker
+group and do not switch the helper profile to complain mode. Fix the narrow
+package or policy rule instead.
+
+Check embedded build metadata with:
+
+```sh
+/usr/bin/kitpro-api --version
+/usr/libexec/kitpro-helper --version
+```
+
+## Ubuntu firewall note
+
+Ubuntu 26.04 qualification used the same package and rootful Docker path as
+Debian. Exact-address loopback and LAN publications created no wildcard
+binding. Docker-published traffic can bypass UFW's normal INPUT and OUTPUT
+paths, so do not treat UFW alone as the policy boundary for a published
+application. A host with custom UFW or nftables policy needs a separate
+compatibility check before LAN exposure.

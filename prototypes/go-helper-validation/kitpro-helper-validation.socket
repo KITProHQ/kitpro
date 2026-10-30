@@ -1,0 +1,14 @@
+[Unit]
+Description=Disposable KITPro Go helper validation socket
+PartOf=kitpro-helper-validation.service
+
+[Socket]
+ListenStream=/run/kitpro/helper.sock
+SocketUser=root
+SocketGroup=kitpro-api-test
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

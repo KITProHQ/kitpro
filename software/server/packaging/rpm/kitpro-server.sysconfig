@@ -1,0 +1,17 @@
+# KITPro Server package configuration for Rocky Linux 10.
+KITPRO_API_ADDR=127.0.0.1:8080
+KITPRO_ALLOWED_HOSTS=127.0.0.1:8080,localhost:8080
+KITPRO_SECURE_COOKIES=0
+KITPRO_LAN_BIND_ADDRESS=
+KITPRO_CONTAINER_RUNTIME=podman
+
+# Optional exact hosts, IPs, or CIDRs approved for Network diagnostics.
+# Configured host gateways and resolvers are approved automatically.
+KITPRO_HOST_DIAGNOSTIC_TARGETS=
+# Empty uses the bounded default TCP ports 53,80,443.
+KITPRO_HOST_DIAGNOSTIC_PORTS=
+
+# Experimental Rocky support keeps privileged host service operations off.
+# Exact entries can scope actions: worker.service=start|restart.
+KITPRO_HOST_SERVICE_MANAGEMENT_ENABLED=0
+KITPRO_HOST_SERVICE_MANAGEMENT_UNITS=

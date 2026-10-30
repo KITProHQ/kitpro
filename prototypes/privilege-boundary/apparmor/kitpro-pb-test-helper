@@ -1,0 +1,37 @@
+#include <tunables/global>
+
+profile kitpro-pb-test-helper /opt/kitpro-privilege-boundary-test/bin/kitpro-pb-helper flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  /opt/kitpro-privilege-boundary-test/bin/kitpro-pb-helper mr,
+  /opt/kitpro-privilege-boundary-test/ r,
+  /opt/kitpro-privilege-boundary-test/fixture/ r,
+  /opt/kitpro-privilege-boundary-test/fixture/** r,
+  /usr/lib/python3.13/ r,
+  /usr/lib/python3.13/** mr,
+  /usr/lib/python3/dist-packages/ r,
+  /usr/lib/python3/dist-packages/** mr,
+  /usr/local/lib/python3.13/dist-packages/ r,
+  /usr/local/lib/python3.13/dist-packages/** mr,
+
+  /etc/group r,
+  /etc/nsswitch.conf r,
+  /etc/passwd r,
+
+  /var/lib/kitpro-pb-test/ rw,
+  /var/lib/kitpro-pb-test/** rwk,
+  /run/kitpro-pb-test/helper.sock rw,
+  /run/docker.sock rw,
+
+  network unix stream,
+  deny network inet,
+  deny network inet6,
+
+  deny /home/** rwklmx,
+  deny /root/** rwklmx,
+  deny /etc/** wklmx,
+  deny /var/lib/docker/** rwklmx,
+  deny /var/lib/kitpro-pb-unrelated/** rwklmx,
+  deny /bin/** x,
+  deny /usr/bin/** x,
+}

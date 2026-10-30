@@ -1,0 +1,17 @@
+CREATE TABLE schema_version (version INTEGER NOT NULL);
+INSERT INTO schema_version VALUES(7);
+CREATE TABLE operations (id TEXT PRIMARY KEY, type TEXT NOT NULL, requested_at TEXT NOT NULL, status TEXT NOT NULL, instance_id TEXT NOT NULL, summary TEXT NOT NULL);
+CREATE TABLE installation_service_exposure (installation_id TEXT NOT NULL, service_id TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('internal','loopback','lan')), host_address TEXT NOT NULL DEFAULT '', host_port INTEGER NOT NULL DEFAULT 0 CHECK(host_port = 0 OR host_port BETWEEN 20000 AND 29999), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(installation_id,service_id));
+CREATE UNIQUE INDEX installation_service_exposure_binding_unique ON installation_service_exposure(host_address,host_port) WHERE mode <> 'internal';
+CREATE TABLE installations (installation_id TEXT PRIMARY KEY, application_id TEXT NOT NULL, release_id TEXT NOT NULL, desired_state TEXT NOT NULL, runtime_generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE installation_storage_selections (installation_id TEXT NOT NULL, component_id TEXT NOT NULL DEFAULT '', slot_id TEXT NOT NULL, root_id TEXT NOT NULL, PRIMARY KEY(installation_id,component_id,slot_id));
+CREATE TABLE administrator (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, administrator_id INTEGER NOT NULL, csrf_hash TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT);
+CREATE TABLE login_throttle (key_hash TEXT PRIMARY KEY, failures INTEGER NOT NULL, next_allowed_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+INSERT INTO administrator VALUES(1,'admin','$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','2026-09-15T00:00:00Z','2026-09-15T00:00:00Z');
+INSERT INTO installations VALUES('inst-busybox01','busybox','1.37.0','running',1,'2026-09-15T00:00:00Z','2026-09-15T00:00:00Z');
+INSERT INTO installations VALUES('inst-paperless1','paperless-ngx','2.20.15','running',1,'2026-09-15T00:00:00Z','2026-09-15T00:00:00Z');
+INSERT INTO installation_service_exposure VALUES('inst-busybox01','shell','internal','',0,'2026-09-15T00:00:00Z','2026-09-15T00:00:00Z');
+INSERT INTO installation_service_exposure VALUES('inst-paperless1','web','loopback','127.0.0.1',20000,'2026-09-15T00:00:00Z','2026-09-15T00:00:00Z');
+INSERT INTO installation_storage_selections VALUES('inst-paperless1','web','consume','storage-0123456789abcdef');
+INSERT INTO operations VALUES('op-alpha11-control','InstallApplication','2026-09-15T00:00:00Z','succeeded','inst-paperless1','helper accepted');

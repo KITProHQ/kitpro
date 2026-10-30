@@ -1,0 +1,24 @@
+{
+  "schema_version": 9,
+  "id": "home-assistant",
+  "name": "Home Assistant",
+  "description": "A local home automation dashboard and device control hub.",
+  "category": "Home automation",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://www.home-assistant.io/",
+  "source_url": "https://github.com/home-assistant/core",
+  "documentation_url": "https://www.home-assistant.io/docs/",
+  "limitations": ["Host networking and arbitrary device passthrough are not available."],
+  "releases": [{
+    "version": "stable",
+    "registry": "ghcr.io",
+    "repository": "home-assistant/home-assistant",
+    "digest": "sha256:542890f4a7ef9269b7a5ac23ada303b327537c62fa0f866e49daebc61cb44caa",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "config", "container_path": "/config", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 8123, "ingress": {"exposure_modes": ["lan", "managed-https"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}],
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "config", "disposition": "include"}]}
+}

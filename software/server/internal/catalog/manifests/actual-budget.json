@@ -1,0 +1,22 @@
+{
+  "schema_version": 9,
+  "id": "actual-budget",
+  "name": "Actual Budget",
+  "description": "Private, local-first budgeting and financial planning.",
+  "category": "Finance",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://actualbudget.org/",
+  "documentation_url": "https://actualbudget.org/docs/",
+  "releases": [{
+    "version": "26.9.0",
+    "registry": "docker.io",
+    "repository": "actualbudget/actual-server",
+    "digest": "sha256:06080cca505895fffd5736089920001e979bf9595f757d1d5b9ebfc99722c410",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/data", "persistent": true, "read_only": false}],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 5006, "ingress": {"exposure_modes": ["lan", "managed-https"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}],
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
+}

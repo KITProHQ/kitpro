@@ -1,0 +1,12 @@
+[Unit]
+Description=KITPro Server helper socket
+
+[Socket]
+ListenStream=/run/kitpro/helper.sock
+SocketUser=root
+SocketGroup=kitpro-api
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

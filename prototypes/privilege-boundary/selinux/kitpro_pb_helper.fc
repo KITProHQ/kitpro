@@ -1,0 +1,4 @@
+/opt/kitpro-privilege-boundary-test/bin/kitpro-pb-helper -- gen_context(system_u:object_r:kitpro_pb_helper_exec_t,s0)
+/var/lib/kitpro-pb-test(/.*)? gen_context(system_u:object_r:kitpro_pb_state_t,s0)
+/var/lib/kitpro-pb-test/storage(/.*)? gen_context(system_u:object_r:kitpro_pb_storage_t,s0)
+/run/kitpro-pb-test(/.*)? gen_context(system_u:object_r:kitpro_pb_runtime_t,s0)

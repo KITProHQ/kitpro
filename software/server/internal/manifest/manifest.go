@@ -1,0 +1,969 @@
+package manifest
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"github.com/kitpro/kitpro/software/server/internal/hardware"
+)
+
+const SchemaVersion = 1
+const MultiContainerSchemaVersion = 2
+const HardwareSchemaVersion = 3
+const ExternalStorageSchemaVersion = 4
+const RuntimeIdentitySchemaVersion = 5
+const BackupSchemaVersion = 6
+const CatalogMetadataSchemaVersion = 7
+const NetworkBindingSchemaVersion = 8
+const IngressReadinessSchemaVersion = 9
+
+var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
+var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+var logoPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
+var legacyEnvPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
+var v8EnvPattern = regexp.MustCompile(`^[A-Z_][A-Za-z0-9_]{0,63}$`)
+
+var catalogCategories = map[string]bool{
+	"AI": true, "Developer Tools": true, "Documents": true,
+	"Files": true, "Finance": true, "Food and recipes": true,
+	"Home automation": true, "Media": true, "Monitoring": true,
+	"Music": true, "Networking": true, "Notes": true, "Productivity": true,
+	"Reading": true, "Security": true,
+}
+
+type Manifest struct {
+	SchemaVersion    int                  `json:"schema_version"`
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	Description      string               `json:"description,omitempty"`
+	Releases         []Release            `json:"releases"`
+	Storage          []Storage            `json:"storage,omitempty"`
+	Environment      []Env                `json:"environment,omitempty"`
+	Command          []string             `json:"command,omitempty"`
+	Restart          string               `json:"restart,omitempty"`
+	Services         []Service            `json:"services,omitempty"`
+	Components       []Component          `json:"components,omitempty"`
+	Hardware         []Accelerator        `json:"hardware,omitempty"`
+	ExternalStorage  []ExternalStorage    `json:"external_storage,omitempty"`
+	RunAs            *RuntimeIdentity     `json:"run_as,omitempty"`
+	Backup           *BackupPolicy        `json:"backup,omitempty"`
+	Category         string               `json:"category,omitempty"`
+	Kind             string               `json:"kind,omitempty"`
+	CatalogStatus    string               `json:"catalog_status,omitempty"`
+	WebsiteURL       string               `json:"website_url,omitempty"`
+	SourceURL        string               `json:"source_url,omitempty"`
+	DocumentationURL string               `json:"documentation_url,omitempty"`
+	Logo             string               `json:"logo,omitempty"`
+	Limitations      []string             `json:"limitations,omitempty"`
+	LifecycleNotice  *LifecycleNotice     `json:"lifecycle_notice,omitempty"`
+	Configuration    *ConfigurationPolicy `json:"configuration,omitempty"`
+}
+
+// LifecycleNotice supplies trusted display text and opts infrastructure-sensitive
+// application kinds into the API's generic lifecycle acknowledgement policy.
+type LifecycleNotice struct {
+	Install                string `json:"install,omitempty"`
+	Stop                   string `json:"stop,omitempty"`
+	Remove                 string `json:"remove,omitempty"`
+	RequireAcknowledgement bool   `json:"require_acknowledgement,omitempty"`
+}
+
+// ConfigurationPolicy selects a reviewed, helper-owned structured bootstrap.
+// It cannot carry templates, commands, file paths, or arbitrary configuration.
+type ConfigurationPolicy struct {
+	Type      string `json:"type"`
+	StorageID string `json:"storage_id"`
+}
+type Release struct {
+	Version    string `json:"version"`
+	Registry   string `json:"registry"`
+	Repository string `json:"repository"`
+	Digest     string `json:"digest"`
+	Platform   string `json:"platform"`
+}
+type Storage struct {
+	ID            string `json:"id"`
+	ContainerPath string `json:"container_path"`
+	Persistent    bool   `json:"persistent"`
+	ReadOnly      bool   `json:"read_only"`
+	// SystemConfig explicitly marks a trusted managed application directory
+	// below /etc. Ordinary storage declarations remain unable to target /etc.
+	SystemConfig bool `json:"system_config,omitempty"`
+	OwnerUID     int  `json:"owner_uid,omitempty"`
+	OwnerGID     int  `json:"owner_gid,omitempty"`
+}
+
+// RuntimeIdentity is a trusted numeric primary identity. Supplementary groups,
+// host-name lookup, and user-supplied identities are intentionally absent.
+type RuntimeIdentity struct {
+	UID int `json:"uid"`
+	GID int `json:"gid"`
+}
+
+// ExternalStorage declares a logical imported-data slot. Host paths and bind
+// options are deliberately absent and are resolved by the privileged helper.
+type ExternalStorage struct {
+	ID            string `json:"id"`
+	ContainerPath string `json:"container_path"`
+	Mode          string `json:"mode"`
+	Required      bool   `json:"required,omitempty"`
+	Purpose       string `json:"purpose"`
+}
+
+// BackupPolicy identifies authoritative managed storage without exposing an
+// application-controlled command surface. External storage is intentionally
+// absent: format version 1 records those bindings but never copies their data.
+type BackupPolicy struct {
+	Strategy string          `json:"strategy"`
+	Storage  []BackupStorage `json:"storage,omitempty"`
+}
+
+type BackupStorage struct {
+	Component   string `json:"component"`
+	ID          string `json:"id"`
+	Disposition string `json:"disposition"`
+}
+type Env struct {
+	Name       string                  `json:"name"`
+	Value      string                  `json:"value,omitempty"`
+	Secret     bool                    `json:"secret,omitempty"`
+	Generate   string                  `json:"generate,omitempty"`
+	Required   bool                    `json:"required,omitempty"`
+	Credential *CredentialPresentation `json:"credential,omitempty"`
+}
+
+// CredentialPresentation opts one generated secret into deliberate
+// administrator disclosure. Its public ID is distinct from the environment
+// name so browser markup never exposes the runtime's internal secret name.
+type CredentialPresentation struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Username string `json:"username,omitempty"`
+}
+
+// PresentedCredential is derived only from a validated embedded manifest.
+// ComponentID and EnvironmentName remain helper-side lookup details.
+type PresentedCredential struct {
+	ID, Label, Username, ComponentID, EnvironmentName string
+}
+type Service struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Protocol      string `json:"protocol"`
+	ContainerPort int    `json:"container_port"`
+	// DefaultExposure is trusted install policy. It selects only an existing
+	// constrained exposure mode; it cannot supply a host address or port.
+	DefaultExposure string `json:"default_exposure,omitempty"`
+	// FixedHostPort authorizes KITPro to bind this exact host port. It is a
+	// trusted catalog policy, never a user-selected value.
+	FixedHostPort int `json:"fixed_host_port,omitempty"`
+	// Ingress is an explicit catalog grant. A declared HTTP service remains
+	// ineligible unless this policy is present.
+	Ingress *IngressEligibility `json:"ingress,omitempty"`
+	// Readiness is a typed observation. It cannot contain commands, host paths,
+	// headers, or arbitrary request methods.
+	Readiness *ReadinessCheck `json:"readiness,omitempty"`
+}
+
+type IngressEligibility struct {
+	ExposureModes []string `json:"exposure_modes"`
+	External      bool     `json:"external_access,omitempty"`
+}
+
+type ReadinessCheck struct {
+	Type           string `json:"type"`
+	Path           string `json:"path,omitempty"`
+	ExpectedStatus []int  `json:"expected_status,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+}
+type Component struct {
+	ID              string            `json:"id"`
+	Release         string            `json:"release"`
+	Storage         []Storage         `json:"storage,omitempty"`
+	Environment     []Env             `json:"environment,omitempty"`
+	Command         []string          `json:"command,omitempty"`
+	Services        []Service         `json:"services,omitempty"`
+	DependsOn       []string          `json:"depends_on,omitempty"`
+	Restart         string            `json:"restart,omitempty"`
+	Hardware        []Accelerator     `json:"hardware,omitempty"`
+	ExternalStorage []ExternalStorage `json:"external_storage,omitempty"`
+	RunAs           *RuntimeIdentity  `json:"run_as,omitempty"`
+}
+
+// Accelerator names a helper-owned device class. Host paths, groups, Docker
+// runtime arguments, and capabilities are deliberately not representable.
+type Accelerator struct {
+	Class       string `json:"class"`
+	Optional    bool   `json:"optional,omitempty"`
+	CPUFallback bool   `json:"cpu_fallback,omitempty"`
+}
+type Plan struct {
+	ApplicationID, ReleaseID, InstanceID, ImageDigest, NetworkName, DataPath, Restart string
+	Command                                                                           []string
+	Environment                                                                       []Env
+	Storage                                                                           []Storage
+	Services                                                                          []Service
+	Components                                                                        []Component
+	ResolvedComponents                                                                []ResolvedComponent
+	Hardware                                                                          []Accelerator
+	ExternalStorage                                                                   []ExternalStorage
+	RunAs                                                                             *RuntimeIdentity
+	Backup                                                                            *BackupPolicy
+	Configuration                                                                     *ConfigurationPolicy
+}
+
+// ResolvedComponent is the helper-facing, digest-pinned component plan. It is
+// intentionally explicit so a catalog cannot smuggle arbitrary Docker fields.
+type ResolvedComponent struct {
+	ID              string
+	ImageDigest     string
+	Command         []string
+	Environment     []Env
+	Storage         []Storage
+	Services        []Service
+	DependsOn       []string
+	Restart         string
+	Hardware        []Accelerator
+	ExternalStorage []ExternalStorage
+	RunAs           *RuntimeIdentity
+}
+
+func Parse(data []byte) (Manifest, error) {
+	if len(data) > 64*1024 {
+		return Manifest{}, fmt.Errorf("manifest exceeds 64 KiB")
+	}
+	if err := uniqueJSON(data); err != nil {
+		return Manifest{}, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var m Manifest
+	if err := dec.Decode(&m); err != nil {
+		return m, fmt.Errorf("manifest JSON: %w", err)
+	}
+	if err := Validate(m); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+func Validate(m Manifest) error {
+	if m.SchemaVersion < SchemaVersion || m.SchemaVersion > IngressReadinessSchemaVersion {
+		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
+	}
+	if m.SchemaVersion == SchemaVersion && len(m.Components) != 0 {
+		return fmt.Errorf("components require schema version 2")
+	}
+	if m.SchemaVersion == MultiContainerSchemaVersion && len(m.Components) < 2 {
+		return fmt.Errorf("multi-container manifest requires at least two components")
+	}
+	if m.SchemaVersion == HardwareSchemaVersion && len(m.Components) == 1 {
+		return fmt.Errorf("multi-container manifest requires at least two components")
+	}
+	if m.SchemaVersion < HardwareSchemaVersion && (len(m.Hardware) != 0 || componentsHaveHardware(m.Components)) {
+		return fmt.Errorf("hardware requires schema version 3")
+	}
+	if m.SchemaVersion < ExternalStorageSchemaVersion && (len(m.ExternalStorage) != 0 || componentsHaveExternalStorage(m.Components)) {
+		return fmt.Errorf("external storage requires schema version 4")
+	}
+	if m.SchemaVersion < RuntimeIdentitySchemaVersion && (m.RunAs != nil || storageHasOwnership(m.Storage) || componentsHaveRuntimeIdentity(m.Components)) {
+		return fmt.Errorf("runtime identity requires schema version 5")
+	}
+	if m.SchemaVersion < BackupSchemaVersion && m.Backup != nil {
+		return fmt.Errorf("backup policy requires schema version 6")
+	}
+	if m.SchemaVersion >= BackupSchemaVersion && m.Backup == nil {
+		return fmt.Errorf("schema version %d requires backup policy", m.SchemaVersion)
+	}
+	if m.SchemaVersion < CatalogMetadataSchemaVersion && hasCatalogMetadata(m) {
+		return fmt.Errorf("catalog metadata requires schema version 7")
+	}
+	if m.SchemaVersion >= CatalogMetadataSchemaVersion {
+		if err := validateCatalogMetadata(m); err != nil {
+			return err
+		}
+	}
+	if err := validateRuntimeIdentity(m.RunAs); err != nil {
+		return err
+	}
+	if err := validateExternalStorage(m.ExternalStorage, m.Storage); err != nil {
+		return err
+	}
+	if err := validateHardware(m.Hardware); err != nil {
+		return err
+	}
+	if !idPattern.MatchString(m.ID) || len(m.Name) == 0 || len(m.Name) > 128 || len(m.Description) > 280 || strings.ContainsAny(m.Description, "\r\n") {
+		return fmt.Errorf("invalid application identity")
+	}
+	if len(m.Releases) == 0 || len(m.Releases) > 16 {
+		return fmt.Errorf("release list invalid")
+	}
+	seen := map[string]bool{}
+	for _, r := range m.Releases {
+		if r.Version == "" || seen[r.Version] {
+			return fmt.Errorf("duplicate/invalid release version")
+		}
+		seen[r.Version] = true
+		if r.Registry != "docker.io" && r.Registry != "ghcr.io" && r.Registry != "codeberg.org" {
+			return fmt.Errorf("registry not allowed")
+		}
+		if strings.ContainsAny(r.Repository, " \t\n") || !digestPattern.MatchString(r.Digest) || r.Platform != "linux/amd64" {
+			return fmt.Errorf("invalid release image")
+		}
+	}
+	seen = map[string]bool{}
+	for _, s := range m.Storage {
+		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath, s.SystemConfig) {
+			return fmt.Errorf("invalid storage declaration")
+		}
+		if err := validateSystemConfigStorage(s, m.SchemaVersion); err != nil {
+			return err
+		}
+		seen[s.ID] = true
+		if err := validateStorageOwnership(s); err != nil {
+			return err
+		}
+	}
+	seen = map[string]bool{}
+	for _, e := range m.Environment {
+		if !validEnvironmentName(e.Name, m.SchemaVersion) || seen[e.Name] || (e.Required && e.Value != "") {
+			return fmt.Errorf("invalid environment declaration")
+		}
+		seen[e.Name] = true
+		if e.Secret && e.Value != "" {
+			return fmt.Errorf("secret values may not be embedded")
+		}
+		if (e.Generate != "" && (!e.Secret || !e.Required)) || (e.Generate != "" && e.Generate != "random-hex-32") {
+			return fmt.Errorf("invalid generated secret declaration")
+		}
+	}
+	if m.Restart != "" && m.Restart != "no" && m.Restart != "unless-stopped" {
+		return fmt.Errorf("invalid restart policy")
+	}
+	if len(m.Command) > 16 {
+		return fmt.Errorf("command too long")
+	}
+	for _, c := range m.Command {
+		if c == "" || len(c) > 256 || strings.ContainsAny(c, "\r\n") {
+			return fmt.Errorf("invalid command")
+		}
+	}
+	if len(m.Services) > 8 {
+		return fmt.Errorf("too many services")
+	}
+	seen = map[string]bool{}
+	seenPort := map[string]bool{}
+	for _, s := range m.Services {
+		portProtocol := fmt.Sprintf("%d/%s", s.ContainerPort, s.Protocol)
+		if !idPattern.MatchString(s.ID) || s.Name == "" || len(s.Name) > 128 || seen[s.ID] || seenPort[portProtocol] || s.ContainerPort < 1 || s.ContainerPort > 65535 || (s.Protocol != "http" && s.Protocol != "https" && s.Protocol != "tcp" && s.Protocol != "udp") {
+			return fmt.Errorf("invalid port")
+		}
+		if s.FixedHostPort != 0 && (m.SchemaVersion < NetworkBindingSchemaVersion || s.FixedHostPort < 1 || s.FixedHostPort > 65535) {
+			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
+		}
+		if err := validateDefaultExposure(s, m.SchemaVersion); err != nil {
+			return err
+		}
+		if err := validateIngressReadiness(s, m.SchemaVersion); err != nil {
+			return err
+		}
+		seen[s.ID] = true
+		seenPort[portProtocol] = true
+	}
+	if len(m.Components) > 16 {
+		return fmt.Errorf("too many components")
+	}
+	componentIDs := map[string]bool{}
+	releaseIDs := map[string]bool{}
+	for _, release := range m.Releases {
+		releaseIDs[release.Version] = true
+	}
+	for _, c := range m.Components {
+		if !idPattern.MatchString(c.ID) || componentIDs[c.ID] || c.Release == "" || len(c.Release) > 64 || !releaseIDs[c.Release] {
+			return fmt.Errorf("invalid component declaration")
+		}
+		componentIDs[c.ID] = true
+		if c.Restart != "" && c.Restart != "no" && c.Restart != "unless-stopped" {
+			return fmt.Errorf("invalid component restart policy")
+		}
+		if err := validateComponentFields(c, m.SchemaVersion); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
+		if err := validateHardware(c.Hardware); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
+		if err := validateExternalStorage(c.ExternalStorage, c.Storage); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
+		if err := validateRuntimeIdentity(c.RunAs); err != nil {
+			return fmt.Errorf("component %s: %w", c.ID, err)
+		}
+	}
+	if err := validateCredentialPresentations(m); err != nil {
+		return err
+	}
+	if err := validateConfigurationPolicy(m); err != nil {
+		return err
+	}
+	for _, c := range m.Components {
+		for _, dep := range c.DependsOn {
+			if !componentIDs[dep] {
+				return fmt.Errorf("component dependency not found")
+			}
+		}
+	}
+	if err := validateBackupPolicy(m); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateConfigurationPolicy(m Manifest) error {
+	if m.Configuration == nil {
+		return nil
+	}
+	if m.SchemaVersion < NetworkBindingSchemaVersion || len(m.Components) != 0 || m.Configuration.Type != "syncthing-tcp-only-v1" || !idPattern.MatchString(m.Configuration.StorageID) {
+		return fmt.Errorf("invalid structured configuration policy")
+	}
+	for _, storage := range m.Storage {
+		if storage.ID == m.Configuration.StorageID {
+			if !storage.Persistent || storage.ReadOnly || storage.ContainerPath != "/var/syncthing" {
+				return fmt.Errorf("structured configuration policy requires managed read-write Syncthing storage")
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("structured configuration policy storage not found")
+}
+
+// PresentedCredentials returns the administrator-facing credential inventory
+// authorized by the trusted manifest. It never contains secret values.
+func PresentedCredentials(m Manifest) []PresentedCredential {
+	result := make([]PresentedCredential, 0)
+	for _, item := range m.Environment {
+		if item.Credential != nil {
+			result = append(result, PresentedCredential{ID: item.Credential.ID, Label: item.Credential.Label, Username: item.Credential.Username, EnvironmentName: item.Name})
+		}
+	}
+	for _, component := range m.Components {
+		for _, item := range component.Environment {
+			if item.Credential != nil {
+				result = append(result, PresentedCredential{ID: item.Credential.ID, Label: item.Credential.Label, Username: item.Credential.Username, ComponentID: component.ID, EnvironmentName: item.Name})
+			}
+		}
+	}
+	return result
+}
+
+func FindPresentedCredential(m Manifest, id string) (PresentedCredential, bool) {
+	for _, credential := range PresentedCredentials(m) {
+		if credential.ID == id {
+			return credential, true
+		}
+	}
+	return PresentedCredential{}, false
+}
+
+func validateCredentialPresentations(m Manifest) error {
+	seen := map[string]bool{}
+	validate := func(item Env) error {
+		credential := item.Credential
+		if credential == nil {
+			return nil
+		}
+		if m.SchemaVersion < NetworkBindingSchemaVersion {
+			return fmt.Errorf("credential presentation requires schema version 8")
+		}
+		if !item.Secret || !item.Required || item.Generate != "random-hex-32" || item.Value != "" {
+			return fmt.Errorf("credential presentation requires a generated secret")
+		}
+		if !idPattern.MatchString(credential.ID) || seen[credential.ID] || !validCatalogText(credential.Label, 64) || !optionalCatalogText(credential.Username, 64) {
+			return fmt.Errorf("invalid credential presentation")
+		}
+		seen[credential.ID] = true
+		return nil
+	}
+	for _, item := range m.Environment {
+		if err := validate(item); err != nil {
+			return err
+		}
+	}
+	for _, component := range m.Components {
+		for _, item := range component.Environment {
+			if err := validate(item); err != nil {
+				return fmt.Errorf("component %s: %w", component.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+func hasCatalogMetadata(m Manifest) bool {
+	return m.Category != "" || m.Kind != "" || m.CatalogStatus != "" ||
+		m.WebsiteURL != "" || m.SourceURL != "" || m.DocumentationURL != "" ||
+		m.Logo != "" || len(m.Limitations) != 0 || m.LifecycleNotice != nil
+}
+
+func validateCatalogMetadata(m Manifest) error {
+	if !catalogCategories[m.Category] {
+		return fmt.Errorf("invalid catalog category")
+	}
+	if m.Kind != "application" && m.Kind != "network-service" {
+		return fmt.Errorf("invalid application kind")
+	}
+	if m.CatalogStatus != "standard" && m.CatalogStatus != "experimental" {
+		return fmt.Errorf("invalid catalog status")
+	}
+	for _, value := range []string{m.WebsiteURL, m.SourceURL, m.DocumentationURL} {
+		if value != "" && !validCatalogURL(value) {
+			return fmt.Errorf("invalid catalog URL")
+		}
+	}
+	if m.Logo != "" && !logoPattern.MatchString(m.Logo) {
+		return fmt.Errorf("invalid catalog logo")
+	}
+	if len(m.Limitations) > 8 {
+		return fmt.Errorf("too many catalog limitations")
+	}
+	seen := map[string]bool{}
+	for _, limitation := range m.Limitations {
+		if !validCatalogText(limitation, 280) || seen[limitation] {
+			return fmt.Errorf("invalid catalog limitation")
+		}
+		seen[limitation] = true
+	}
+	if notice := m.LifecycleNotice; notice != nil {
+		if !optionalCatalogText(notice.Install, 280) || !optionalCatalogText(notice.Stop, 280) || !optionalCatalogText(notice.Remove, 280) {
+			return fmt.Errorf("invalid lifecycle notice")
+		}
+		if notice.Install == "" && notice.Stop == "" && notice.Remove == "" {
+			return fmt.Errorf("empty lifecycle notice")
+		}
+	}
+	return nil
+}
+
+func validCatalogURL(value string) bool {
+	if len(value) > 512 || strings.ContainsAny(value, "\r\n\t") {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+}
+
+func validCatalogText(value string, limit int) bool {
+	return value != "" && value == strings.TrimSpace(value) && len(value) <= limit && !strings.ContainsAny(value, "\r\n")
+}
+
+func optionalCatalogText(value string, limit int) bool {
+	return value == "" || validCatalogText(value, limit)
+}
+
+func validateBackupPolicy(m Manifest) error {
+	if m.Backup == nil {
+		return nil
+	}
+	strategy := m.Backup.Strategy
+	if strategy != "metadata-only" && strategy != "cold-filesystem" && strategy != "cold-sqlite-filesystem" {
+		return fmt.Errorf("invalid backup strategy")
+	}
+
+	declared := map[string]Storage{}
+	for _, item := range m.Storage {
+		if item.Persistent {
+			declared["app/"+item.ID] = item
+		}
+	}
+	for _, component := range m.Components {
+		for _, item := range component.Storage {
+			if item.Persistent {
+				declared[component.ID+"/"+item.ID] = item
+			}
+		}
+	}
+	if strategy == "metadata-only" {
+		if len(declared) != 0 || len(m.Backup.Storage) != 0 {
+			return fmt.Errorf("metadata-only backup cannot declare persistent storage")
+		}
+		return nil
+	}
+	if len(declared) == 0 || len(m.Backup.Storage) != len(declared) {
+		return fmt.Errorf("backup policy must classify every persistent storage declaration")
+	}
+	seen := map[string]bool{}
+	included := 0
+	for _, item := range m.Backup.Storage {
+		if item.Component == "" || item.ID == "" || (item.Disposition != "include" && item.Disposition != "exclude-ephemeral") {
+			return fmt.Errorf("invalid backup storage policy")
+		}
+		key := item.Component + "/" + item.ID
+		if _, ok := declared[key]; !ok || seen[key] {
+			return fmt.Errorf("backup storage policy references unknown or duplicate storage")
+		}
+		seen[key] = true
+		if item.Disposition == "include" {
+			included++
+		}
+	}
+	if included == 0 {
+		return fmt.Errorf("backup policy must include authoritative storage")
+	}
+	return nil
+}
+
+func validateExternalStorage(items []ExternalStorage, managed []Storage) error {
+	if len(items) > 8 {
+		return fmt.Errorf("too many external storage slots")
+	}
+	seen := map[string]bool{}
+	targets := map[string]bool{}
+	for _, item := range managed {
+		seen[item.ID] = true
+		targets[item.ContainerPath] = true
+	}
+	for _, item := range items {
+		if !idPattern.MatchString(item.ID) || seen[item.ID] || targets[item.ContainerPath] || (item.Mode != "read-only" && item.Mode != "read-write") || !safeContainerPath(item.ContainerPath, false) || item.Purpose == "" || len(item.Purpose) > 80 || strings.ContainsAny(item.Purpose, "\r\n") {
+			return fmt.Errorf("invalid external storage declaration")
+		}
+		seen[item.ID] = true
+		targets[item.ContainerPath] = true
+	}
+	return nil
+}
+
+func safeContainerPath(path string, systemConfig bool) bool {
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "..") || path == "/" || strings.HasPrefix(path, "/proc") || strings.HasPrefix(path, "/sys") || strings.HasPrefix(path, "/dev") || containsRuntimeSocket(path) {
+		return false
+	}
+	if strings.HasPrefix(path, "/etc") {
+		return systemConfig && strings.HasPrefix(path, "/etc/") && path != "/etc/"
+	}
+	return !systemConfig
+}
+
+func validateSystemConfigStorage(storage Storage, schemaVersion int) error {
+	if !storage.SystemConfig {
+		return nil
+	}
+	if schemaVersion < NetworkBindingSchemaVersion || !storage.Persistent || storage.ReadOnly {
+		return fmt.Errorf("managed system configuration requires schema version 8 persistent read-write storage")
+	}
+	return nil
+}
+
+func validateDefaultExposure(service Service, schemaVersion int) error {
+	if service.DefaultExposure == "" {
+		return nil
+	}
+	if schemaVersion < NetworkBindingSchemaVersion || (service.DefaultExposure != "internal" && service.DefaultExposure != "loopback" && service.DefaultExposure != "lan") {
+		return fmt.Errorf("default exposure requires schema version 8 and a constrained mode")
+	}
+	if service.DefaultExposure == "lan" && service.FixedHostPort == 0 {
+		return fmt.Errorf("default LAN exposure requires a trusted fixed host port")
+	}
+	return nil
+}
+
+func validEnvironmentName(name string, schemaVersion int) bool {
+	if schemaVersion >= NetworkBindingSchemaVersion {
+		return v8EnvPattern.MatchString(name)
+	}
+	return legacyEnvPattern.MatchString(name)
+}
+
+func containsRuntimeSocket(path string) bool {
+	for _, component := range strings.Split(path, "/") {
+		if component == "docker.sock" || component == "podman.sock" || component == "containerd.sock" {
+			return true
+		}
+	}
+	return false
+}
+
+func componentsHaveExternalStorage(components []Component) bool {
+	for _, component := range components {
+		if len(component.ExternalStorage) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateHardware(items []Accelerator) error {
+	if len(items) > 4 {
+		return fmt.Errorf("too many hardware requirements")
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if !hardware.ValidClass(item.Class) || seen[item.Class] {
+			return fmt.Errorf("unknown or duplicate device class %q", item.Class)
+		}
+		if item.CPUFallback && !item.Optional {
+			return fmt.Errorf("CPU fallback requires optional acceleration")
+		}
+		seen[item.Class] = true
+	}
+	return nil
+}
+
+func componentsHaveHardware(components []Component) bool {
+	for _, component := range components {
+		if len(component.Hardware) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateComponentFields(c Component, schemaVersion int) error {
+	seen := map[string]bool{}
+	for _, s := range c.Storage {
+		if !idPattern.MatchString(s.ID) || seen[s.ID] || !safeContainerPath(s.ContainerPath, s.SystemConfig) {
+			return fmt.Errorf("invalid storage declaration")
+		}
+		if err := validateSystemConfigStorage(s, schemaVersion); err != nil {
+			return err
+		}
+		seen[s.ID] = true
+		if err := validateStorageOwnership(s); err != nil {
+			return err
+		}
+	}
+	seen = map[string]bool{}
+	for _, e := range c.Environment {
+		if !validEnvironmentName(e.Name, schemaVersion) || seen[e.Name] || (e.Required && e.Value != "") || (e.Secret && e.Value != "") {
+			return fmt.Errorf("invalid environment declaration")
+		}
+		if (e.Generate != "" && (!e.Secret || !e.Required)) || (e.Generate != "" && e.Generate != "random-hex-32") {
+			return fmt.Errorf("invalid generated secret declaration")
+		}
+		seen[e.Name] = true
+	}
+	if len(c.Command) > 16 || len(c.Services) > 8 {
+		return fmt.Errorf("component declaration too large")
+	}
+	for _, arg := range c.Command {
+		if arg == "" || len(arg) > 256 || strings.ContainsAny(arg, "\r\n") || arg == "/bin/sh" || arg == "/bin/bash" || arg == "-c" {
+			return fmt.Errorf("invalid command")
+		}
+	}
+	seen = map[string]bool{}
+	ports := map[string]bool{}
+	for _, s := range c.Services {
+		key := fmt.Sprintf("%d/%s", s.ContainerPort, s.Protocol)
+		if !idPattern.MatchString(s.ID) || s.Name == "" || len(s.Name) > 128 || seen[s.ID] || ports[key] || s.ContainerPort < 1 || s.ContainerPort > 65535 || (s.Protocol != "http" && s.Protocol != "https" && s.Protocol != "tcp" && s.Protocol != "udp") {
+			return fmt.Errorf("invalid service")
+		}
+		if s.FixedHostPort != 0 && (schemaVersion < NetworkBindingSchemaVersion || s.FixedHostPort < 1 || s.FixedHostPort > 65535) {
+			return fmt.Errorf("fixed host port requires schema version 8 and a valid port")
+		}
+		if err := validateDefaultExposure(s, schemaVersion); err != nil {
+			return err
+		}
+		if err := validateIngressReadiness(s, schemaVersion); err != nil {
+			return err
+		}
+		seen[s.ID], ports[key] = true, true
+	}
+	return nil
+}
+
+func validateIngressReadiness(service Service, schemaVersion int) error {
+	if service.Ingress == nil && service.Readiness == nil {
+		return nil
+	}
+	if schemaVersion < IngressReadinessSchemaVersion {
+		return fmt.Errorf("ingress and readiness require schema version 9")
+	}
+	if policy := service.Ingress; policy != nil {
+		if service.Protocol != "http" && service.Protocol != "https" {
+			return fmt.Errorf("ingress requires an HTTP service")
+		}
+		if len(policy.ExposureModes) == 0 || len(policy.ExposureModes) > 2 {
+			return fmt.Errorf("invalid ingress exposure policy")
+		}
+		seen := map[string]bool{}
+		for _, mode := range policy.ExposureModes {
+			if seen[mode] || (mode != "lan" && mode != "managed-https") {
+				return fmt.Errorf("invalid ingress exposure policy")
+			}
+			seen[mode] = true
+		}
+	}
+	check := service.Readiness
+	if check == nil {
+		return nil
+	}
+	if check.TimeoutSeconds < 1 || check.TimeoutSeconds > 30 {
+		return fmt.Errorf("invalid readiness timeout")
+	}
+	switch check.Type {
+	case "runtime", "docker-health", "tcp":
+		if check.Path != "" || len(check.ExpectedStatus) != 0 {
+			return fmt.Errorf("non-HTTP readiness cannot declare HTTP policy")
+		}
+	case "http":
+		if service.Protocol != "http" && service.Protocol != "https" {
+			return fmt.Errorf("HTTP readiness requires an HTTP service")
+		}
+		if check.Path == "" || len(check.Path) > 256 || !strings.HasPrefix(check.Path, "/") || strings.HasPrefix(check.Path, "//") || strings.ContainsAny(check.Path, "\\\r\n\t?#") || strings.Contains(check.Path, "..") {
+			return fmt.Errorf("invalid readiness path")
+		}
+		if len(check.ExpectedStatus) == 0 || len(check.ExpectedStatus) > 8 {
+			return fmt.Errorf("invalid readiness status policy")
+		}
+		seen := map[int]bool{}
+		for _, status := range check.ExpectedStatus {
+			if status < 100 || status > 599 || seen[status] {
+				return fmt.Errorf("invalid readiness status policy")
+			}
+			seen[status] = true
+		}
+	default:
+		return fmt.Errorf("unsupported readiness type")
+	}
+	return nil
+}
+
+func validateRuntimeIdentity(identity *RuntimeIdentity) error {
+	if identity == nil {
+		return nil
+	}
+	if identity.UID < 1 || identity.UID > 65535 || identity.GID < 1 || identity.GID > 65535 {
+		return fmt.Errorf("runtime identity outside policy")
+	}
+	return nil
+}
+
+func validateStorageOwnership(storage Storage) error {
+	if (storage.OwnerUID == 0) != (storage.OwnerGID == 0) {
+		return fmt.Errorf("managed storage owner requires uid and gid")
+	}
+	if storage.OwnerUID < 0 || storage.OwnerUID > 65535 || storage.OwnerGID < 0 || storage.OwnerGID > 65535 {
+		return fmt.Errorf("managed storage owner outside policy")
+	}
+	return nil
+}
+
+func storageHasOwnership(items []Storage) bool {
+	for _, item := range items {
+		if item.OwnerUID != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func componentsHaveRuntimeIdentity(components []Component) bool {
+	for _, component := range components {
+		if component.RunAs != nil || storageHasOwnership(component.Storage) {
+			return true
+		}
+	}
+	return false
+}
+func Resolve(m Manifest, release string, instance string, network string, dataPath string) (Plan, error) {
+	if err := Validate(m); err != nil {
+		return Plan{}, err
+	}
+	var r Release
+	for _, x := range m.Releases {
+		if x.Version == release {
+			r = x
+		}
+	}
+	if r.Version == "" {
+		return Plan{}, fmt.Errorf("release not found")
+	}
+	if !idPattern.MatchString(instance) || network == "" || strings.ContainsAny(network, "/.\\") || !strings.HasPrefix(dataPath, "/srv/kitpro/apps/") || strings.Contains(dataPath, "..") || strings.ContainsAny(dataPath, "\\\r\n") {
+		return Plan{}, fmt.Errorf("invalid instance paths")
+	}
+	p := Plan{ApplicationID: m.ID, ReleaseID: r.Version, InstanceID: instance, ImageDigest: r.Registry + "/" + r.Repository + "@" + r.Digest, NetworkName: network, DataPath: dataPath, Restart: m.Restart, Command: append([]string(nil), m.Command...), Environment: append([]Env(nil), m.Environment...), Storage: append([]Storage(nil), m.Storage...), Services: append([]Service(nil), m.Services...), Components: append([]Component(nil), m.Components...), Hardware: append([]Accelerator(nil), m.Hardware...), ExternalStorage: append([]ExternalStorage(nil), m.ExternalStorage...), RunAs: m.RunAs, Backup: cloneBackupPolicy(m.Backup), Configuration: cloneConfigurationPolicy(m.Configuration)}
+	for _, c := range m.Components {
+		var cr Release
+		for _, candidate := range m.Releases {
+			if candidate.Version == c.Release {
+				cr = candidate
+				break
+			}
+		}
+		resolved := ResolvedComponent{ID: c.ID, ImageDigest: cr.Registry + "/" + cr.Repository + "@" + cr.Digest, Command: append([]string(nil), c.Command...), Environment: append([]Env(nil), c.Environment...), Storage: append([]Storage(nil), c.Storage...), Services: append([]Service(nil), c.Services...), DependsOn: append([]string(nil), c.DependsOn...), Restart: c.Restart, Hardware: append([]Accelerator(nil), c.Hardware...), ExternalStorage: append([]ExternalStorage(nil), c.ExternalStorage...), RunAs: c.RunAs}
+		p.ResolvedComponents = append(p.ResolvedComponents, resolved)
+	}
+	return p, nil
+}
+
+func cloneConfigurationPolicy(policy *ConfigurationPolicy) *ConfigurationPolicy {
+	if policy == nil {
+		return nil
+	}
+	copy := *policy
+	return &copy
+}
+
+func cloneBackupPolicy(policy *BackupPolicy) *BackupPolicy {
+	if policy == nil {
+		return nil
+	}
+	return &BackupPolicy{Strategy: policy.Strategy, Storage: append([]BackupStorage(nil), policy.Storage...)}
+}
+func (p Plan) Hash() string {
+	b, _ := json.Marshal(p)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+func uniqueJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := walkJSON(dec); err != nil {
+		return err
+	}
+	var extra any
+	if dec.Decode(&extra) == nil {
+		return fmt.Errorf("trailing JSON")
+	}
+	return nil
+}
+func walkJSON(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch d := tok.(type) {
+	case json.Delim:
+		if d == '{' {
+			seen := map[string]bool{}
+			for dec.More() {
+				k, e := dec.Token()
+				if e != nil {
+					return e
+				}
+				key := k.(string)
+				if seen[key] {
+					return fmt.Errorf("duplicate JSON field %q", key)
+				}
+				seen[key] = true
+				if e = walkJSON(dec); e != nil {
+					return e
+				}
+			}
+			_, err = dec.Token()
+			return err
+		}
+		if d == '[' {
+			for dec.More() {
+				if err := walkJSON(dec); err != nil {
+					return err
+				}
+			}
+			_, err = dec.Token()
+			return err
+		}
+	}
+	return nil
+}

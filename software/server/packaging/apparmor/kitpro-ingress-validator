@@ -1,0 +1,23 @@
+# KITPro Server bounded nginx configuration validator.
+#include <tunables/global>
+/usr/libexec/kitpro-ingress-validator flags=(attach_disconnected) {
+  #include <abstractions/base>
+  /usr/libexec/kitpro-ingress-validator rix,
+  /usr/sbin/nginx ix,
+  /usr/bin/nginx ix,
+  capability net_bind_service,
+  /etc/group r,
+  /etc/nsswitch.conf r,
+  /etc/passwd r,
+  /proc/*/cgroup r,
+  /proc/*/mountinfo r,
+  /proc/sys/net/core/somaxconn r,
+  /run/kitpro/ingress-validator.sock rw,
+  /sys/fs/cgroup/system.slice/kitpro-ingress-validator.service/cpu.max r,
+  /var/lib/kitpro-helper/ingress/** rwk,
+  network unix stream,
+  network inet stream,
+  network inet6 stream,
+  deny /home/** r,
+  deny /root/** r,
+}

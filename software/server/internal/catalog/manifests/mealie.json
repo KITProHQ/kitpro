@@ -1,0 +1,28 @@
+{
+  "schema_version": 9,
+  "id": "mealie",
+  "name": "Mealie",
+  "description": "Organize recipes, meal plans, and shopping lists in a self-hosted kitchen hub.",
+  "category": "Food and recipes",
+  "kind": "application",
+  "catalog_status": "standard",
+  "website_url": "https://mealie.io/",
+  "source_url": "https://github.com/mealie-recipes/mealie",
+  "documentation_url": "https://docs.mealie.io/",
+  "limitations": ["Public signup is disabled by default."],
+  "releases": [{
+    "version": "3.24.0",
+    "registry": "ghcr.io",
+    "repository": "mealie-recipes/mealie",
+    "digest": "sha256:3d2384661634e954c12ec27bb5b25a0263832f9e39044f145d726d388e9f8268",
+    "platform": "linux/amd64"
+  }],
+  "storage": [{"id": "data", "container_path": "/app/data", "persistent": true, "read_only": false}],
+  "environment": [
+    {"name": "ALLOW_SIGNUP", "value": "false"},
+    {"name": "TZ", "value": "UTC"}
+  ],
+  "services": [{"id": "web", "name": "Web Interface", "protocol": "http", "container_port": 9000, "ingress": {"exposure_modes": ["lan", "managed-https"], "external_access": true}, "readiness": {"type": "http", "path": "/", "expected_status": [200, 301, 302, 303, 307, 308, 401], "timeout_seconds": 5}}],
+  "restart": "unless-stopped",
+  "backup": {"strategy": "cold-sqlite-filesystem", "storage": [{"component": "app", "id": "data", "disposition": "include"}]}
+}

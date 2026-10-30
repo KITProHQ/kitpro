@@ -1,0 +1,16 @@
+## <summary>SELinux file contexts for KITPro Server.</summary>
+
+########################################
+## <summary>
+## Read KITPro-managed container application data.
+## </summary>
+## <param name="domain" />
+interface(`kitpro_read_app_data',`
+    gen_require(`
+        type container_file_t;
+    ')
+
+    files_search_var($1)
+    read_files_pattern($1, container_file_t, container_file_t)
+    read_lnk_files_pattern($1, container_file_t, container_file_t)
+')
